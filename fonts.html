@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Font Converter — Matcha Reader Tools</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍵</text></svg>">
+</head>
+<body>
+<header>
+  <div class="inner">
+    <h1><a href="./">🍵 Matcha Reader Tools</a></h1>
+    <nav>
+      <a href="manga.html">Manga</a>
+      <a href="dictionary.html">Dictionary</a>
+      <a href="fonts.html" class="active">Fonts</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h2>🔤 Font Converter</h2>
+  <p class="lede">Converts TTF/OTF fonts into <code>.cpfont</code> files the reader loads from the
+  SD card — including kerning and ligature data extracted from the font.</p>
+
+  <div class="card">
+    <h3>1. Font files</h3>
+    <div class="row">
+      <div>
+        <label for="font-regular">Regular</label>
+        <input type="file" id="font-regular" accept=".ttf,.otf,.ttc">
+      </div>
+      <div>
+        <label for="font-bold">Bold <span class="hint">(optional)</span></label>
+        <input type="file" id="font-bold" accept=".ttf,.otf,.ttc">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="font-italic">Italic <span class="hint">(optional)</span></label>
+        <input type="file" id="font-italic" accept=".ttf,.otf,.ttc">
+      </div>
+      <div>
+        <label for="font-bolditalic">Bold Italic <span class="hint">(optional)</span></label>
+        <input type="file" id="font-bolditalic" accept=".ttf,.otf,.ttc">
+      </div>
+    </div>
+    <details>
+      <summary>Fallback font (fills in glyphs the main font lacks)</summary>
+      <label for="font-fallback">Fallback font file</label>
+      <input type="file" id="font-fallback" accept=".ttf,.otf,.ttc">
+    </details>
+  </div>
+
+  <div class="card">
+    <h3>2. Sizes and coverage</h3>
+    <label>Point sizes <span class="hint">— the reader's font sizes are 12/14/16/18</span></label>
+    <div class="checks">
+      <label><input type="checkbox" id="font-size-12" checked> 12</label>
+      <label><input type="checkbox" id="font-size-14" checked> 14</label>
+      <label><input type="checkbox" id="font-size-16" checked> 16</label>
+      <label><input type="checkbox" id="font-size-18" checked> 18</label>
+    </div>
+    <label for="font-sizes-custom">Extra sizes <span class="hint">(comma-separated, optional)</span></label>
+    <input type="text" id="font-sizes-custom" placeholder="e.g. 10, 20">
+
+    <label>Unicode coverage</label>
+    <div class="checks">
+      <label><input type="checkbox" class="font-preset" value="latin-ext" checked> Latin (extended)</label>
+      <label><input type="checkbox" class="font-preset" value="cjk"> Japanese (CJK)</label>
+      <label><input type="checkbox" class="font-preset" value="cjk-ext"> Japanese symbols (CJK extras)</label>
+      <label><input type="checkbox" class="font-preset" value="greek"> Greek</label>
+      <label><input type="checkbox" class="font-preset" value="cyrillic"> Cyrillic</label>
+      <label><input type="checkbox" class="font-preset" value="hangul"> Hangul</label>
+      <label><input type="checkbox" class="font-preset" value="symbols"> Symbols</label>
+      <label><input type="checkbox" class="font-preset" value="all"> Everything in the font</label>
+    </div>
+    <details>
+      <summary>Custom coverage</summary>
+      <label for="font-intervals-custom">Presets / hex ranges <span class="hint">— comma-separated, e.g. <code>reading,(0x2100-0x214F)</code>. Presets: ascii, latin1, latin-ext, greek, cyrillic, hebrew, georgian, armenian, ethiopic, vietnamese, punctuation, cjk, cjk-ext, hangul, cherokee, tifinagh, symbols, reading, builtin, all</span></label>
+      <input type="text" id="font-intervals-custom" placeholder="">
+    </details>
+
+    <label for="font-name">Family name <span class="hint">(used for filenames and on-device UI; default: from the font filename)</span></label>
+    <input type="text" id="font-name" placeholder="auto">
+  </div>
+
+  <button class="primary" id="font-run">Convert</button>
+
+  <div id="progress" hidden><div id="progress-bar"></div><div id="progress-text"></div></div>
+  <div id="log" hidden></div>
+
+  <div class="notice">
+    Japanese fonts with full CJK coverage rasterize ~7,000 glyphs per size and style — expect a
+    few minutes on a phone. Glyphs are rendered by your browser's font engine, so pixel edges can
+    differ very slightly from the desktop (FreeType) tool; metrics, kerning, and ligatures are
+    extracted from the font file itself and match exactly.
+  </div>
+
+  <div class="card">
+    <h3>Install on the device</h3>
+    <p>The download is a zip containing <code>.fonts/FamilyName/FamilyName_&lt;size&gt;.cpfont</code>.
+    Unzip it at the SD card root (the <code>.fonts</code> folder may be hidden in your file
+    manager — that's normal), or upload via the reader's Wi-Fi web file transfer. The font then
+    appears in the reader's font settings.</p>
+  </div>
+</main>
+<footer>
+  Output matches <code>lib/EpdFont/scripts/fontconvert_sdcard.py</code> (.cpfont v4) from the
+  <a href="https://github.com/eszter007/matcha-reader">matcha-reader</a> firmware.
+</footer>
+<script src="js/binary.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/common.js"></script>
+<script src="js/sfnt.js"></script>
+<script src="js/fonts.js"></script>
+</body>
+</html>

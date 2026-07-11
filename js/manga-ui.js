@@ -1,0 +1,470 @@
+/* Manga converter: browser pipeline and page wiring.
+ * Pure conversion logic lives in manga-core.js; this file handles file
+ * input, image decoding, Gemini OCR calls, and the output zip. */
+"use strict";
+
+const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
+
+/* Exact prompt from tools/manga_convert/convert_manga.py. */
+const PANEL_OCR_PROMPT = `This image is a single panel cropped from a Japanese manga page.
+List every piece of text/dialogue visible in this panel, in the order a
+reader would read them (top-to-bottom, right-to-left for manga). Then give
+a single natural English translation of all of it combined, in the same
+reading order, as it would read in an English localization of this manga.
+
+Return ONLY a JSON object, no other text:
+{"blocks": [{"text": "<the Japanese text, line breaks as \\n>",
+             "bbox_2d": [ymin, xmin, ymax, xmax]}, ...],
+ "translation": "<natural English translation of all the panel's text combined, in reading order>"}
+
+bbox_2d is each text region's bounding box normalized to a 0-1000 scale
+(0,0 = top-left of the panel image, 1000,1000 = bottom-right). If you
+cannot determine a precise box, omit bbox_2d for that entry.
+If there is no text in the panel, return {"blocks": [], "translation": ""}.`;
+
+/* ── Image helpers ────────────────────────────────────────────── */
+
+const EXT_MIME = {
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+  ".webp": "image/webp", ".bmp": "image/bmp",
+};
+
+async function decodeImage(bytes, ext) {
+  const blob = new Blob([bytes], { type: EXT_MIME[ext] || "" });
+  try {
+    // 'none' matches PIL, which does not apply EXIF rotation on open.
+    return await createImageBitmap(blob, { imageOrientation: "none" });
+  } catch (e) {
+    return await createImageBitmap(blob);
+  }
+}
+
+async function canvasToJpegBytes(canvas, quality) {
+  let blob;
+  if (canvas.convertToBlob) {
+    blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
+  } else {
+    blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  }
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+function bytesToBase64(bytes) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1]);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(new Blob([bytes]));
+  });
+}
+
+/* ── Gemini OCR ───────────────────────────────────────────────── */
+
+async function geminiOcrOnce(jpegBytes, apiKey, model) {
+  const imageB64 = await bytesToBase64(jpegBytes);
+  const payload = {
+    contents: [{
+      parts: [
+        { text: PANEL_OCR_PROMPT },
+        { inline_data: { mime_type: "image/jpeg", data: imageB64 } },
+      ],
+    }],
+    generationConfig: { responseMimeType: "application/json" },
+  };
+
+  let resp;
+  try {
+    resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify(payload),
+      });
+  } catch (e) {
+    return null; // network-level failure — retry
+  }
+
+  let response;
+  try {
+    response = await resp.json();
+  } catch (e) {
+    return null; // malformed response — retry
+  }
+
+  if (response.error) {
+    const status = response.error.status || "";
+    if (["UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED", "INTERNAL"].includes(status)) {
+      return null; // transient API error — retry
+    }
+    logLine(`  Warning: Gemini error: ${String(response.error.message || status).substring(0, 200)}`, "warn");
+    return { blocks: [], translation: "" }; // non-transient — give up on this panel
+  }
+
+  try {
+    const textOut = response.candidates[0].content.parts[0].text;
+    const parsed = JSON.parse(textOut);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { blocks: [], translation: "" };
+    }
+    let blocks = parsed.blocks;
+    if (!Array.isArray(blocks)) blocks = [];
+    blocks = blocks.filter((b) => b !== null && typeof b === "object" && !Array.isArray(b) && "text" in b);
+    let translation = parsed.translation;
+    if (typeof translation !== "string") translation = "";
+    return { blocks, translation };
+  } catch (e) {
+    logLine(`  Warning: could not parse Gemini response (${e.message})`, "warn");
+    return { blocks: [], translation: "" };
+  }
+}
+
+async function geminiOcrPanel(jpegBytes, apiKey, model, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const result = await geminiOcrOnce(jpegBytes, apiKey, model);
+    if (result !== null) return result;
+    if (attempt < retries - 1) await sleep(Math.pow(2, attempt) * 1000);
+  }
+  return { blocks: [], translation: "" };
+}
+
+/* ── Page collection ──────────────────────────────────────────── */
+
+/* files: FileList/array from the picker. Returns
+ * {pages: [{name, read}], meta: {title, author}, tocEntries, sourceLabel}. */
+async function collectPagesFromInput(files) {
+  if (files.length === 1 && !isImageName(files[0].name)) {
+    const ext = mangaFileExt(files[0].name);
+    const bytes = await readFileBytes(files[0]);
+    if (ext === ".cbz" || ext === ".zip") return collectFromCbz(bytes, files[0].name);
+    if (ext === ".epub") return collectFromEpub(bytes, files[0].name);
+    throw new Error(`Unsupported input: ${files[0].name} (use .cbz, .zip, .epub, or image files)`);
+  }
+  // Image list / folder selection.
+  const images = [...files].filter((f) => isImageName(f.name));
+  if (!images.length) throw new Error("No image files found in the selection");
+  const byName = new Map(images.map((f) => [f.name, f]));
+  const ordered = naturalSortPaths([...byName.keys()]);
+  return {
+    pages: ordered.map((name) => ({ name, read: () => readFileBytes(byName.get(name)) })),
+    meta: { title: "", author: "" },
+    tocEntries: [],
+    sourceLabel: `${ordered.length} image files`,
+  };
+}
+
+async function collectFromCbz(bytes, fileName) {
+  const zip = new ZipReader(bytes);
+  // Flatten by basename; later entries overwrite (matches the Python tool).
+  const byBase = new Map();
+  for (const e of zip.entries) {
+    if (e.isDir || !isImageName(e.name)) continue;
+    byBase.set(baseName(e.name), e);
+  }
+  if (!byBase.size) throw new Error("No image files found in the archive");
+  const ordered = naturalSortPaths([...byBase.keys()]);
+
+  let meta = { title: "", author: "" };
+  const infoEntry = zip.entries.find((e) => baseName(e.name).toLowerCase() === "comicinfo.xml");
+  if (infoEntry) {
+    try {
+      meta = cbzMetadataFromComicInfo(new TextDecoder().decode(await zip.readEntry(infoEntry)));
+    } catch (e) { /* best-effort, like the Python tool */ }
+  }
+
+  return {
+    pages: ordered.map((name) => ({ name, read: () => zip.readEntry(byBase.get(name)) })),
+    meta,
+    tocEntries: [],
+    sourceLabel: fileName,
+  };
+}
+
+async function collectFromEpub(bytes, fileName) {
+  const zip = new ZipReader(bytes);
+  const decoder = new TextDecoder();
+  const container = decoder.decode(await zip.readEntryByName("META-INF/container.xml"));
+  const opfPath = epubOpfPath(container);
+  if (!opfPath) throw new Error("Could not find OPF in EPUB container.xml");
+  const opfDir = pathDirname(opfPath);
+  const opf = decoder.decode(await zip.readEntryByName(opfPath));
+
+  const { manifest, spineIds } = epubParseOpf(opf);
+  const pages = [];
+  const spineMap = new Map(); // extracted basename → spine item href
+
+  for (let idx = 0; idx < spineIds.length; idx++) {
+    const href = manifest.get(spineIds[idx]);
+    if (!href) continue;
+    const fullHref = opfDir ? pathJoinNorm(opfDir, href) : pathNorm(href);
+    let srcInZip;
+    if (isImageName(fullHref)) {
+      srcInZip = fullHref;
+    } else {
+      // Spine item is an XHTML wrapper page — find the embedded image.
+      const entry = zip.findEntry(fullHref);
+      if (!entry) continue;
+      const xhtml = decoder.decode(await zip.readEntry(entry));
+      const imgM = xhtml.match(/(?:src|xlink:href)="([^"]+)"/);
+      if (!imgM) continue;
+      srcInZip = pathJoinNorm(pathDirname(fullHref), imgM[1]);
+    }
+    const imgEntry = zip.findEntry(srcInZip);
+    if (!imgEntry) {
+      logLine(`Warning: image not found in EPUB: ${srcInZip}`, "warn");
+      continue;
+    }
+    const targetBasename = `spine_${String(idx).padStart(4, "0")}_${baseName(srcInZip)}`;
+    spineMap.set(fullHref, targetBasename);
+    pages.push({ name: targetBasename, read: () => zip.readEntry(imgEntry) });
+  }
+
+  // Native EPUB table of contents → final page indices.
+  let tocEntries = [];
+  try {
+    tocEntries = await epubNativeToc(zip, opf, opfDir, spineMap, pages);
+  } catch (e) { /* fall back to no TOC */ }
+
+  return { pages, meta: epubMetadataFromOpf(opf), tocEntries, sourceLabel: fileName };
+}
+
+async function epubNativeToc(zip, opf, opfDir, spineMap, pages) {
+  const decoder = new TextDecoder();
+  let raw = []; // [(href_with_optional_anchor, title)]
+  const navHref = epubNavHref(opf);
+  if (navHref) {
+    const navPath = pathJoinNorm(opfDir, navHref);
+    const navXhtml = decoder.decode(await zip.readEntryByName(navPath));
+    raw = epubTocFromNav(navXhtml, navPath);
+  } else {
+    const ncxHref = epubNcxHref(opf);
+    if (ncxHref) {
+      const ncxPath = pathJoinNorm(opfDir, ncxHref);
+      const ncx = decoder.decode(await zip.readEntryByName(ncxPath));
+      raw = epubTocFromNcx(ncx, ncxPath);
+    }
+  }
+  if (!raw.length) return [];
+
+  const basenameToIndex = new Map(pages.map((p, i) => [p.name, i]));
+  const resolved = [];
+  for (const [href, title] of raw) {
+    const hrefNoAnchor = href.split("#", 1)[0];
+    const extractedBasename = spineMap.get(hrefNoAnchor);
+    if (extractedBasename !== undefined && basenameToIndex.has(extractedBasename)) {
+      resolved.push([basenameToIndex.get(extractedBasename), title]);
+    }
+  }
+  return resolved;
+}
+
+/* ── Conversion pipeline ──────────────────────────────────────── */
+
+const mangaState = { running: false, cancelled: false };
+
+async function runMangaConversion() {
+  const fileInput = $("manga-file");
+  const files = fileInput.files;
+  if (!files || !files.length) {
+    logLine("Choose a .cbz/.zip/.epub file or a set of page images first.", "warn");
+    return;
+  }
+
+  const noOcr = $("manga-no-ocr").checked;
+  const apiKey = $("manga-key").value.trim();
+  const model = $("manga-model").value.trim() || GEMINI_DEFAULT_MODEL;
+  if (!noOcr && !apiKey) {
+    logLine("Enter a Gemini API key, or tick \"Skip OCR\" for panels-only output.", "warn");
+    return;
+  }
+  saveSetting("gemini-key", apiKey);
+  saveSetting("gemini-model", model);
+
+  const panelMargin = parseInt($("manga-margin").value, 10);
+  const margin = Number.isInteger(panelMargin) ? panelMargin : 10;
+  const maxPagesRaw = parseInt($("manga-max-pages").value, 10);
+
+  mangaState.running = true;
+  mangaState.cancelled = false;
+  $("manga-run").disabled = true;
+  $("manga-cancel").hidden = false;
+  clearLog();
+  const wakeLock = new WakeLock();
+  await wakeLock.acquire();
+
+  try {
+    logLine("Collecting pages…");
+    const collected = await collectPagesFromInput(files);
+    let pages = collected.pages;
+
+    // Resolve TOC before any max-pages truncation (indices stay correct).
+    let tocEntries = collected.tocEntries;
+    if (tocEntries.length) logLine(`Found ${tocEntries.length} chapter(s) in the EPUB's table of contents`);
+    const tocText = $("manga-toc").value;
+    if (tocText.trim()) {
+      const parsed = parseTocText(tocText);
+      parsed.warnings.forEach((warning) => logLine("Warning: " + warning, "warn"));
+      tocEntries = parsed.entries;
+      logLine(`Using ${tocEntries.length} chapter(s) from the chapter list`);
+    }
+
+    if (Number.isInteger(maxPagesRaw) && maxPagesRaw > 0) pages = pages.slice(0, maxPagesRaw);
+    logLine(`Found ${pages.length} pages in ${collected.sourceLabel}`);
+
+    const metaTitle = $("manga-title").value.trim() || collected.meta.title;
+    const metaAuthor = $("manga-author").value.trim() || collected.meta.author;
+    const folder = sanitizeFolderName(metaTitle || "Manga");
+
+    const zip = new ZipWriter();
+    const idxRecords = [];
+    const datChunks = [];
+    let datOffset = 0;
+    let totalPanels = 0;
+    let totalTextBlocks = 0;
+    let pagesDone = 0;
+
+    for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+      if (mangaState.cancelled) {
+        logLine(`Cancelled after ${pagesDone} page(s); packaging what's done…`, "warn");
+        break;
+      }
+      const page = pages[pageIdx];
+      setProgress(pageIdx, pages.length, `Page ${pageIdx + 1} / ${pages.length}`);
+      logLine(`[${pageIdx + 1}/${pages.length}] ${page.name}`);
+
+      const srcBytes = await page.read();
+      let ext = mangaFileExt(page.name);
+      const bitmap = await decodeImage(srcBytes, ext);
+      const imgW = bitmap.width, imgH = bitmap.height;
+
+      const canvas = makeCanvas(imgW, imgH);
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(bitmap, 0, 0);
+
+      // Copy the page to a canonical, trivially-sortable filename.
+      const pageBase = `page_${String(pageIdx).padStart(4, "0")}`;
+      if ([".jpg", ".jpeg", ".png"].includes(ext)) {
+        zip.addFile(`${folder}/${pageBase}${ext}`, srcBytes);
+      } else {
+        zip.addFile(`${folder}/${pageBase}.jpg`, await canvasToJpegBytes(canvas, 0.92));
+      }
+
+      const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
+      const gray = grayFromRGBA(rgba, imgW, imgH);
+      let boxes = detectPanelsGrid(gray, imgW, imgH);
+      boxes = sortPanelsMangaOrder(boxes);
+
+      // Crop panels (fast, local) before dispatching OCR calls concurrently.
+      const panelCrops = [];  // Uint8Array | null (null = full-page panel)
+      const panelRects = [];
+      for (let panelIdx = 0; panelIdx < boxes.length; panelIdx++) {
+        const [x1, y1, x2, y2] = boxes[panelIdx];
+        const mx1 = Math.max(0, x1 - margin);
+        const my1 = Math.max(0, y1 - margin);
+        const mx2 = Math.min(imgW, x2 + margin);
+        const my2 = Math.min(imgH, y2 + margin);
+        let cropBytes = null;
+        if (!isFullPagePanel(boxes[panelIdx], imgW, imgH)) {
+          const cw = mx2 - mx1, ch = my2 - my1;
+          const cropCanvas = makeCanvas(cw, ch);
+          const cropCtx = cropCanvas.getContext("2d");
+          cropCtx.drawImage(bitmap, mx1, my1, cw, ch, 0, 0, cw, ch);
+          cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
+          zip.addFile(`${folder}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
+        }
+        panelCrops.push(cropBytes);
+        panelRects.push([mx1, my1, mx2, my2]);
+      }
+      bitmap.close();
+
+      let ocrResults;
+      if (!noOcr) {
+        ocrResults = await mapLimit(panelCrops, Math.min(8, Math.max(1, panelCrops.length)),
+          (crop) => crop ? geminiOcrPanel(crop, apiKey, model) : Promise.resolve({ blocks: [], translation: "" }));
+      } else {
+        ocrResults = panelCrops.map(() => ({ blocks: [], translation: "" }));
+      }
+
+      const panelsWithText = [];
+      for (let panelIdx = 0; panelIdx < boxes.length; panelIdx++) {
+        const [x1, y1, x2, y2] = boxes[panelIdx];
+        const [mx1, my1, mx2, my2] = panelRects[panelIdx];
+        const ocr = ocrResults[panelIdx];
+        const panelW = mx2 - mx1, panelH = my2 - my1;
+
+        const textBlocks = [];
+        for (const b of ocr.blocks || []) {
+          const text = String(b.text ?? "").trim();
+          if (!text) continue;
+          const bbox = b.bbox_2d;
+          let tb;
+          if (Array.isArray(bbox) && bbox.length === 4) {
+            const [ymin, xmin, ymax, xmax] = bbox;
+            tb = [
+              x1 + Math.trunc((xmin / 1000) * panelW),
+              y1 + Math.trunc((ymin / 1000) * panelH),
+              x1 + Math.trunc((xmax / 1000) * panelW),
+              y1 + Math.trunc((ymax / 1000) * panelH),
+            ];
+          } else {
+            tb = [x1, y1, x2, y2];
+          }
+          textBlocks.push({ box: tb, text });
+        }
+        panelsWithText.push({ box: boxes[panelIdx], textBlocks, translation: ocr.translation || "" });
+        totalPanels += 1;
+        totalTextBlocks += textBlocks.length;
+      }
+
+      const pageData = encodePage(panelsWithText);
+      idxRecords.push({ offset: datOffset, length: pageData.length, w: Math.min(imgW, 0xffff), h: Math.min(imgH, 0xffff) });
+      datChunks.push(pageData);
+      datOffset += pageData.length;
+      pagesDone++;
+    }
+
+    if (!pagesDone) throw new Error("No pages were processed");
+
+    zip.addFile(`${folder}/panels.idx`, writePanelsIdx(idxRecords));
+    const dat = new Uint8Array(datOffset);
+    let off = 0;
+    for (const chunk of datChunks) { dat.set(chunk, off); off += chunk.length; }
+    zip.addFile(`${folder}/panels.dat`, dat);
+
+    const metaBin = writeMetaBin(metaTitle, metaAuthor);
+    if (metaBin) zip.addFile(`${folder}/meta.bin`, metaBin);
+    if (tocEntries.length) zip.addFile(`${folder}/toc.idx`, writeTocIdx(tocEntries));
+
+    setProgress(pagesDone, pages.length, "Packaging…");
+    const blob = zip.toBlob();
+    logLine(`Done: ${pagesDone} pages, ${totalPanels} panels` +
+      (noOcr ? "" : `, ${totalTextBlocks} text blocks`) + ` — ${formatBytes(blob.size)}`);
+    logLine(`Unzip onto the SD card (e.g. /manga/) or upload the "${folder}" folder via the device's web file transfer.`);
+    downloadBlob(blob, `${folder}.zip`);
+    setProgress(pagesDone, pagesDone, "Complete");
+  } catch (e) {
+    logLine("Error: " + e.message, "error");
+    console.error(e);
+  } finally {
+    mangaState.running = false;
+    $("manga-run").disabled = false;
+    $("manga-cancel").hidden = true;
+    wakeLock.release();
+  }
+}
+
+/* ── Page wiring ──────────────────────────────────────────────── */
+
+if (typeof document !== "undefined" && document.getElementById("manga-run")) {
+  $("manga-key").value = loadSetting("gemini-key", "");
+  $("manga-model").value = loadSetting("gemini-model", GEMINI_DEFAULT_MODEL);
+  $("manga-run").addEventListener("click", runMangaConversion);
+  $("manga-cancel").addEventListener("click", () => { mangaState.cancelled = true; });
+  $("manga-file").addEventListener("change", () => {
+    const files = $("manga-file").files;
+    if (files.length) {
+      $("manga-file-label").textContent = files.length === 1
+        ? files[0].name : `${files.length} files selected`;
+    }
+  });
+}

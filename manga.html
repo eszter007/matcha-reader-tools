@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manga Converter — Matcha Reader Tools</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍵</text></svg>">
+</head>
+<body>
+<header>
+  <div class="inner">
+    <h1><a href="./">🍵 Matcha Reader Tools</a></h1>
+    <nav>
+      <a href="manga.html" class="active">Manga</a>
+      <a href="dictionary.html">Dictionary</a>
+      <a href="fonts.html">Fonts</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h2>📖 Manga Converter</h2>
+  <p class="lede">Converts manga into the reader's panel format: detects panel rectangles, asks
+  Gemini what text appears in each panel (plus an English translation), and packs everything into
+  the binary format the device reads natively.</p>
+
+  <div class="card">
+    <h3>1. Choose your manga</h3>
+    <label class="filebtn">
+      <span id="manga-file-label">Tap to choose a .cbz / .zip / .epub — or select page images</span>
+      <input type="file" id="manga-file" multiple
+             accept=".cbz,.zip,.epub,image/jpeg,image/png,image/webp,image/bmp">
+    </label>
+    <p class="hint" style="color:var(--muted);font-size:0.85rem;margin-bottom:0">
+      Page order follows the same natural filename sort the device uses (cover and copyright pages
+      pinned first). EPUBs use their spine order and native table of contents automatically.</p>
+  </div>
+
+  <div class="card">
+    <h3>2. Text recognition (Gemini)</h3>
+    <label for="manga-key">Gemini API key
+      <span class="hint">— free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Stored only in this browser; sent only to Google.</span>
+    </label>
+    <input type="password" id="manga-key" autocomplete="off" placeholder="AIza…">
+    <div class="checks" style="margin-top:0.6rem">
+      <label><input type="checkbox" id="manga-no-ocr"> Skip OCR (panels only — no dictionary lookup or translations)</label>
+    </div>
+    <details>
+      <summary>Advanced</summary>
+      <label for="manga-model">Gemini model</label>
+      <input type="text" id="manga-model" value="gemini-2.5-flash">
+      <label for="manga-margin">Panel crop margin (px)</label>
+      <input type="number" id="manga-margin" value="10" min="0" max="100">
+      <label for="manga-max-pages">Only convert first N pages <span class="hint">(for testing)</span></label>
+      <input type="number" id="manga-max-pages" placeholder="all pages" min="1">
+    </details>
+  </div>
+
+  <div class="card">
+    <h3>3. Book details <span class="hint" style="font-weight:400">(optional — auto-detected from EPUB/ComicInfo when present)</span></h3>
+    <div class="row">
+      <div>
+        <label for="manga-title">Title</label>
+        <input type="text" id="manga-title" placeholder="auto">
+      </div>
+      <div>
+        <label for="manga-author">Author</label>
+        <input type="text" id="manga-author" placeholder="auto">
+      </div>
+    </div>
+    <label for="manga-toc">Chapters <span class="hint">— one per line: <code>page | title</code>, 0-based final page number. Overrides the EPUB's own chapters.</span></label>
+    <textarea id="manga-toc" rows="3" placeholder="0 | Cover&#10;4 | Chapter 1&#10;36 | Chapter 2"></textarea>
+  </div>
+
+  <button class="primary" id="manga-run">Convert</button>
+  <button class="secondary" id="manga-cancel" hidden>Stop &amp; keep finished pages</button>
+
+  <div id="progress" hidden><div id="progress-bar"></div><div id="progress-text"></div></div>
+  <div id="log" hidden></div>
+
+  <div class="notice">
+    OCR sends each panel image to the Gemini API and can take a while for a full volume —
+    keep this tab open. The screen is kept awake during conversion. On the free API tier,
+    rate limits may make long volumes slow; the converter retries automatically.
+  </div>
+
+  <div class="card">
+    <h3>Install on the device</h3>
+    <p>The download is a zip with one folder (named after the title). Put that folder anywhere on
+    the SD card — <code>/manga/YourTitle/</code> is a nice convention — either with a card reader
+    or via the reader's Wi-Fi web file transfer. The device finds any folder containing
+    <code>panels.idx</code> automatically, at any depth.</p>
+  </div>
+</main>
+<footer>
+  Output matches <code>tools/manga_convert/convert_manga.py</code> from the
+  <a href="https://github.com/eszter007/matcha-reader">matcha-reader</a> firmware
+  (grid panel detection). PDF input needs the desktop Python tool.
+</footer>
+<script src="js/binary.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/common.js"></script>
+<script src="js/manga-core.js"></script>
+<script src="js/manga-ui.js"></script>
+</body>
+</html>
