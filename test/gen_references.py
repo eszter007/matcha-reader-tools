@@ -9,6 +9,8 @@ Produces under test/fixtures/:
     manga_pages/         synthetic PNG pages + raw grayscale (.gray) and RGBA (.rgba) dumps
     ref_manga/           convert_manga.py --no-ocr output
     ref_yolo/boxes.json  YOLO panel boxes (needs numpy + onnxruntime, else skipped)
+    ref_manga_pdf/       convert_manga.py --no-ocr output for the PDF fixture
+                         (needs pymupdf, else skipped)
     yomitan.zip          synthetic Yomitan dictionary
     jmdict.json          synthetic jmdict-simplified JSON
     ref_dict_yomitan/    convert_jmdict.py output + .spx
@@ -266,6 +268,42 @@ def run_yolo_reference():
         print(f"  {name}: {boxes}")
 
 
+def make_manga_pdf():
+    """Multi-page PDF of the synthetic pages with Title/Author metadata,
+    for the PDF-input end-to-end test."""
+    path = os.path.join(FIXTURES, "manga.pdf")
+    pages_dir = os.path.join(FIXTURES, "manga_pages")
+    imgs = [Image.open(os.path.join(pages_dir, n)).convert("RGB")
+            for n in sorted(os.listdir(pages_dir)) if n.endswith(".png")]
+    imgs[0].save(path, save_all=True, append_images=imgs[1:],
+                 title="Pdf Test Manga", author="Pdf Author")
+    print(f"manga pdf: {path}")
+
+
+def run_manga_pdf_reference():
+    """convert_manga.py output for the PDF fixture (grid detection).
+
+    Needs PyMuPDF, the desktop tool's own PDF dependency; skipped without it.
+    Rasterization differs slightly between PyMuPDF and PDF.js (JPEG decoders,
+    resamplers), so the JS comparison of panel boxes is tolerance-based —
+    only meta.bin (PDF Title/Author metadata) is compared byte-exactly.
+    """
+    try:
+        import fitz  # noqa: F401
+    except ImportError as e:
+        print(f"manga pdf reference: SKIPPED ({e}; pip install pymupdf)")
+        return
+    out = os.path.join(FIXTURES, "ref_manga_pdf")
+    shutil.rmtree(out, ignore_errors=True)
+    script = os.path.join(FIRMWARE, "tools", "manga_convert", "convert_manga.py")
+    subprocess.run([sys.executable, script,
+                    "--input", os.path.join(FIXTURES, "manga.pdf"),
+                    "--output-dir", out,
+                    "--no-ocr"],
+                   check=True, env=grid_only_env())
+    print(f"manga pdf reference: {out}")
+
+
 def make_yomitan_zip():
     """Synthetic Yomitan dictionary exercising structured content, redirects,
     readings, list definitions, and priority scores."""
@@ -359,6 +397,8 @@ if __name__ == "__main__":
     make_manga_cbz()
     make_manga_epub()
     run_manga_epub_reference()
+    make_manga_pdf()
+    run_manga_pdf_reference()
     make_yomitan_zip()
     make_jmdict_json()
     run_dict_references()

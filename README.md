@@ -40,8 +40,13 @@ These are ports of the firmware's conversion scripts, not reimplementations from
   Detected boxes match the Python tool's within a pixel or two (float rounding differs across
   inference backends); post-processing (confidence 0.4, sliver filter, overlap dedupe, reading
   order) is identical. Untick *AI panel detection* to force the grid heuristic, which is also
-  the automatic fallback wherever WebAssembly or the download fails. PDF input still needs the
-  desktop tool.
+  the automatic fallback wherever WebAssembly or the download fails.
+  PDF input works like the desktop tool's (which uses PyMuPDF): pages are rasterized at 2× zoom
+  in document order and Title/Author come from the PDF metadata, but rendering happens in-browser
+  via a vendored [PDF.js](https://mozilla.github.io/pdf.js/) (lazy-loaded, ~1.8 MB). PDF
+  rasterizers decode embedded images slightly differently, so PDF page pixels — and therefore
+  panel boxes — can differ from the desktop tool by a pixel or two (verified within ±2 px);
+  every other input type is pixel-exact.
 - **Dictionary** ports `tools/dict_convert/convert_jmdict.py` and `scripts/gen_dict_spx.py`
   **byte-identically** (JMdict-simplified JSON and Yomitan zip inputs; MDict `.mdx` needs the
   desktop tool).
@@ -59,6 +64,7 @@ bytes. It needs a checkout of the firmware repo next door (or set `MATCHA_READER
 ```bash
 pip install Pillow freetype-py fonttools    # for reference generation
 pip install numpy onnxruntime               # optional: YOLO panel-detection references
+pip install pymupdf                          # optional: PDF-input references
 python3 test/gen_references.py             # build fixtures + Python references
 
 npm install onnxruntime-web                # optional: YOLO detection in the Node tests

@@ -187,6 +187,45 @@ async function testMangaEpub(page, base) {
   }
 }
 
+async function testMangaPdf(page, base) {
+  console.log("manga.html end-to-end (PDF, no OCR, grid detection):");
+  const refDir = path.join(FIXTURES, "ref_manga_pdf");
+  if (!fs.existsSync(refDir)) {
+    console.log("  skip (no ref_manga_pdf fixtures — rerun gen_references.py with pymupdf installed)");
+    return;
+  }
+  await page.goto(`${base}/manga.html`);
+  await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.pdf"));
+  await page.check("#manga-no-ocr");
+  await page.uncheck("#manga-yolo");
+  const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+  const dest = path.join(OUT, "manga_pdf");
+  unzipTo(zipFile, dest);
+  const dir = path.join(dest, "Pdf Test Manga"); // title from PDF metadata
+  check("output folder named from PDF Title", fs.existsSync(dir));
+  if (!fs.existsSync(dir)) return;
+
+  // Metadata flows through byte-identically; the rasterized pixels do not
+  // (PyMuPDF and PDF.js decode the embedded JPEGs slightly differently), so
+  // panel boxes are compared with a small tolerance instead of byte-compare.
+  check("meta.bin matches Python reference",
+        filesEqual(path.join(refDir, "meta.bin"), path.join(dir, "meta.bin")));
+  const got = parsePanelBoxes(dir);
+  const ref = parsePanelBoxes(refDir);
+  check("page count", got.length === ref.length, `got ${got.length}, reference ${ref.length}`);
+  const TOL = 2;
+  for (let p = 0; p < Math.min(got.length, ref.length); p++) {
+    const ok = got[p].length === ref[p].length &&
+               got[p].every((b, i) => b.every((v, j) => Math.abs(v - ref[p][i][j]) <= TOL));
+    check(`pdf page ${p}: ${ref[p].length} panel(s) within ±${TOL}px`, ok,
+          ok ? "" : `got ${JSON.stringify(got[p])}, reference ${JSON.stringify(ref[p])}`);
+  }
+  for (let i = 0; i < got.length; i++) {
+    const name = `page_${String(i).padStart(4, "0")}.png`;
+    check(`${name} present`, fs.existsSync(path.join(dir, name)));
+  }
+}
+
 async function testDict(page, base) {
   console.log("dictionary.html end-to-end (Yomitan zip):");
   await page.goto(`${base}/dictionary.html`);
@@ -214,6 +253,7 @@ async function testDict(page, base) {
     await testManga(page, base);
     await testMangaYolo(page, base);
     await testMangaEpub(page, base);
+    await testMangaPdf(page, base);
     await testDict(page, base);
     await testFonts(page, base);
   } finally {

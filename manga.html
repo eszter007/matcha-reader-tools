@@ -27,13 +27,14 @@
   <div class="card">
     <h3>1. Choose your manga</h3>
     <label class="filebtn">
-      <span id="manga-file-label">Tap to choose a .cbz / .zip / .epub — or select page images</span>
+      <span id="manga-file-label">Tap to choose a .cbz / .zip / .epub / .pdf — or select page images</span>
       <input type="file" id="manga-file" multiple
-             accept=".cbz,.zip,.epub,image/jpeg,image/png,image/webp,image/bmp">
+             accept=".cbz,.zip,.epub,.pdf,application/pdf,image/jpeg,image/png,image/webp,image/bmp">
     </label>
     <p class="hint" style="color:var(--muted);font-size:0.85rem;margin-bottom:0">
       Page order follows the same natural filename sort the device uses (cover and copyright pages
-      pinned first). EPUBs use their spine order and native table of contents automatically.</p>
+      pinned first). EPUBs use their spine order and native table of contents automatically;
+      PDFs use document order (pages rasterized at 2× like the desktop tool).</p>
   </div>
 
   <div class="card">
@@ -105,8 +106,8 @@
 <footer>
   Output matches <code>tools/manga_convert/convert_manga.py</code> from the
   <a href="https://github.com/eszter007/matcha-reader">matcha-reader</a> firmware —
-  including its YOLO panel detector, run in-browser via ONNX Runtime.
-  PDF input needs the desktop Python tool.
+  including its YOLO panel detector (in-browser via ONNX Runtime) and PDF input
+  (in-browser via PDF.js).
 </footer>
 <script src="js/binary.js"></script>
 <script src="js/zip.js"></script>

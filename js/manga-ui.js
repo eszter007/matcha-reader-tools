@@ -49,6 +49,16 @@ async function canvasToJpegBytes(canvas, quality) {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
+async function canvasToPngBytes(canvas) {
+  let blob;
+  if (canvas.convertToBlob) {
+    blob = await canvas.convertToBlob({ type: "image/png" });
+  } else {
+    blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  }
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 function bytesToBase64(bytes) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -132,13 +142,77 @@ async function geminiOcrPanel(jpegBytes, apiKey, model, retries = 3) {
 
 /* files: FileList/array from the picker. Returns
  * {pages: [{name, read}], meta: {title, author}, tocEntries, sourceLabel}. */
+/* ── PDF input (lazy-loaded pdf.js) ───────────────────────────── */
+
+const PDFJS_DIR = "js/vendor/pdfjs/";
+let pdfjsLoadPromise = null; // resolves to the pdf.js module
+
+function loadPdfJs() {
+  if (!pdfjsLoadPromise) {
+    pdfjsLoadPromise = (async () => {
+      const base = new URL(PDFJS_DIR, location.href).href;
+      const pdfjs = await import(base + "pdf.min.mjs");
+      pdfjs.GlobalWorkerOptions.workerSrc = base + "pdf.worker.min.mjs";
+      return pdfjs;
+    })().catch((e) => { pdfjsLoadPromise = null; throw e; });
+  }
+  return pdfjsLoadPromise;
+}
+
+/* Mirror of convert_manga.py:_extract_pdf_pages: rasterize each page in
+ * document order at 2x zoom (manga PDFs usually embed pages at 72–150 DPI,
+ * so 2x lands near e-ink screen resolution) and name them pdfpage_NNNN.png.
+ * Pages render lazily, one at a time, inside read() — a whole volume is
+ * never held as pixels at once. */
+async function collectFromPdf(bytes, name) {
+  const pdfjs = await loadPdfJs();
+  const loadingTask = pdfjs.getDocument({
+    data: bytes,
+    wasmUrl: new URL(PDFJS_DIR + "wasm/", location.href).href,
+    isEvalSupported: false,
+  });
+  const doc = await loadingTask.promise;
+
+  const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    pages.push({
+      name: `pdfpage_${String(i - 1).padStart(4, "0")}.png`,
+      read: async () => {
+        const pdfPage = await doc.getPage(i);
+        const viewport = pdfPage.getViewport({ scale: 2 });
+        const canvas = makeCanvas(Math.round(viewport.width), Math.round(viewport.height));
+        await pdfPage.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+        pdfPage.cleanup();
+        return canvasToPngBytes(canvas);
+      },
+    });
+  }
+
+  // Same source as the desktop tool: the PDF's Title/Author metadata.
+  let title = "", author = "";
+  try {
+    const md = await doc.getMetadata();
+    title = ((md.info && md.info.Title) || "").trim();
+    author = ((md.info && md.info.Author) || "").trim();
+  } catch (e) { /* metadata is best-effort */ }
+
+  return {
+    pages,
+    meta: { title, author },
+    tocEntries: [],
+    sourceLabel: baseName(name),
+    cleanup: () => { loadingTask.destroy().catch(() => {}); },
+  };
+}
+
 async function collectPagesFromInput(files) {
   if (files.length === 1 && !isImageName(files[0].name)) {
     const ext = mangaFileExt(files[0].name);
     const bytes = await readFileBytes(files[0]);
     if (ext === ".cbz" || ext === ".zip") return collectFromCbz(bytes, files[0].name);
     if (ext === ".epub") return collectFromEpub(bytes, files[0].name);
-    throw new Error(`Unsupported input: ${files[0].name} (use .cbz, .zip, .epub, or image files)`);
+    if (ext === ".pdf") return collectFromPdf(bytes, files[0].name);
+    throw new Error(`Unsupported input: ${files[0].name} (use .cbz, .zip, .epub, .pdf, or image files)`);
   }
   // Image list / folder selection.
   const images = [...files].filter((f) => isImageName(f.name));
@@ -326,9 +400,10 @@ async function runMangaConversion() {
   const wakeLock = new WakeLock();
   await wakeLock.acquire();
 
+  let collected = null;
   try {
     logLine("Collecting pages…");
-    const collected = await collectPagesFromInput(files);
+    collected = await collectPagesFromInput(files);
     let pages = collected.pages;
 
     // Resolve TOC before any max-pages truncation (indices stay correct).
@@ -503,6 +578,7 @@ async function runMangaConversion() {
     logLine("Error: " + e.message, "error");
     console.error(e);
   } finally {
+    if (collected && collected.cleanup) collected.cleanup();
     mangaState.running = false;
     $("manga-run").disabled = false;
     $("manga-cancel").hidden = true;
