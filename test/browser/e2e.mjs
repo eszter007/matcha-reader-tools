@@ -82,6 +82,21 @@ async function testDictMdx(page, base) {
     const got = path.join(dest, "dict", `jmdict.${ext}`);
     check(`jmdict.${ext} matches Python reference`, fs.existsSync(got) && filesEqual(ref, got));
   }
+
+  // Registration-encrypted variant, with the passcode entered in the UI.
+  await page.goto(`${base}/dictionary.html`);
+  await page.setInputFiles("#dict-file", path.join(FIXTURES, "dict_reg.mdx"));
+  await page.evaluate(() => { document.getElementById("dict-regcode").closest("details").open = true; });
+  await page.fill("#dict-regcode", "000102030405060708090a0b0c0d0e0f");
+  await page.fill("#dict-userid", "test@example.com");
+  const zipFile2 = await downloadFromPage(page, () => page.click("#dict-run"));
+  const dest2 = path.join(OUT, "dict_mdx_reg");
+  unzipTo(zipFile2, dest2);
+  for (const ext of ["idx", "dat", "spx"]) {
+    const ref = path.join(FIXTURES, "ref_dict_mdx", `jmdict.${ext}`);
+    const got = path.join(dest2, "dict", `jmdict.${ext}`);
+    check(`encrypted .mdx with passcode: jmdict.${ext} matches`, fs.existsSync(got) && filesEqual(ref, got));
+  }
 }
 
 async function testFonts(page, base) {

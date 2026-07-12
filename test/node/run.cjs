@@ -177,6 +177,18 @@ async function testDictMdx() {
     compareFile(`${name} → jmdict.dat`, dat, path.join(refDir, "jmdict.dat"));
     compareFile(`${name} → jmdict.spx`, dict.dictGenSpx(idx), path.join(refDir, "jmdict.spx"));
   }
+
+  // Registration-encrypted (Encrypted=1): the owner passcode decrypts the
+  // keyword header (Salsa20/8); without it the readmdict-style key-block
+  // scan recovers the same content.
+  const regBytes = new Uint8Array(fs.readFileSync(path.join(FIXTURES, "dict_reg.mdx")));
+  const passcode = { regcode: Uint8Array.from({ length: 16 }, (_, i) => i), userid: "test@example.com" };
+  let reg = await mdx.convertMdictRecords(regBytes, null, { passcode });
+  check("dict_reg.mdx decrypted via passcode", reg.keysReadVia === "passcode", `got ${reg.keysReadVia}`);
+  compareFile("dict_reg.mdx (passcode) → jmdict.idx", dict.dictWriteBinary(reg.records).idx, path.join(refDir, "jmdict.idx"));
+  reg = await mdx.convertMdictRecords(regBytes);
+  check("dict_reg.mdx recovered via scan", reg.keysReadVia === "brutal", `got ${reg.keysReadVia}`);
+  compareFile("dict_reg.mdx (no passcode) → jmdict.idx", dict.dictWriteBinary(reg.records).idx, path.join(refDir, "jmdict.idx"));
 }
 
 function testDictJmdict() {

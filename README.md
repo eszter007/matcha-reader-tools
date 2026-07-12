@@ -50,9 +50,11 @@ These are ports of the firmware's conversion scripts, not reimplementations from
 - **Dictionary** ports `tools/dict_convert/convert_jmdict.py` and `scripts/gen_dict_spx.py`
   **byte-identically** — JMdict-simplified JSON, Yomitan zip, and MDict `.mdx` inputs. The MDX
   reader (`js/mdx.js`) is a port of `readmdict` (the desktop tool's MDX dependency): engine
-  versions 1.2/2.0, zlib / LZO / uncompressed blocks, and `Encrypted=2` key-index encryption
-  (ripemd128). Registration-encrypted files (`Encrypted=1`) are rejected, exactly like the
-  desktop tool without a passcode.
+  versions 1.2/2.0, zlib / LZO / uncompressed blocks, `Encrypted=2` key-index encryption
+  (ripemd128), and registration-encrypted files (`Encrypted=1`) — enter the owner's
+  registration code and the email/device ID it was issued to under *MDict registration*
+  (Salsa20/8, same scheme readmdict's passcode uses). Without a passcode the converter falls
+  back to readmdict's key-block scan, which recovers most `Encrypted=1` files anyway.
 - **Fonts** ports `lib/EpdFont/scripts/fontconvert_sdcard.py` (.cpfont v4). Everything read from
   the font file — cmap intervals, advance widths, kerning classes/matrix, ligature tables —
   matches the Python tool byte-for-byte. Glyph bitmaps are rasterized by the browser's font

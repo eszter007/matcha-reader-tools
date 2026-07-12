@@ -74,7 +74,27 @@ async function runDictConversion() {
       logLine(`Loading ${file.name} (MDict format)…`);
       setProgress(0, 1, "Parsing MDX…");
       const bytes = await readFileBytes(file);
-      const result = await convertMdictRecords(bytes, (seen) => setProgress(0, 1, `Reading entries: ${seen.toLocaleString()}…`));
+
+      // Optional registration passcode for Encrypted=1 dictionaries.
+      let options;
+      const regcodeHex = $("dict-regcode").value.replace(/[\s:-]/g, "");
+      const userid = $("dict-userid").value.trim();
+      if (regcodeHex || userid) {
+        if (!/^[0-9a-fA-F]{32}$/.test(regcodeHex)) {
+          throw new Error("The MDict registration code must be 32 hex characters");
+        }
+        if (!userid) throw new Error("Enter the email or device ID the registration code belongs to");
+        const regcode = new Uint8Array(16);
+        for (let i = 0; i < 16; i++) regcode[i] = parseInt(regcodeHex.substring(i * 2, i * 2 + 2), 16);
+        options = { passcode: { regcode, userid } };
+      }
+
+      const result = await convertMdictRecords(bytes, (seen) => setProgress(0, 1, `Reading entries: ${seen.toLocaleString()}…`), options);
+      if (result.keysReadVia === "brutal") {
+        logLine(options
+          ? "Registration code didn't match — recovered by scanning for key blocks instead."
+          : "Encrypted key index — recovered by scanning for key blocks (fill in the registration fields if this fails).", "warn");
+      }
       logLine(`Processed ${result.entryCount} MDict entries (${result.skipped} skipped) → ${result.records.length} index records`);
       records = result.records;
 

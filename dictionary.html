@@ -33,7 +33,14 @@
     <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0">
       Recommended sources: <a href="https://github.com/stephenmk/Jitendex/releases" target="_blank" rel="noopener">Jitendex</a>
       (vocabulary, Yomitan format), JMnedict in Yomitan format (names), or a grammar reference in
-      Yomitan format. MDict .mdx also works (registration-encrypted files are not supported).</p>
+      Yomitan format. MDict .mdx also works.</p>
+    <details>
+      <summary>MDict registration (encrypted .mdx only)</summary>
+      <label for="dict-regcode">Registration code <span class="hint">— 32 hex characters, from the dictionary's owner</span></label>
+      <input type="text" id="dict-regcode" autocomplete="off" placeholder="A1B2C3…">
+      <label for="dict-userid">Email or device ID <span class="hint">— whichever the code was registered to</span></label>
+      <input type="text" id="dict-userid" autocomplete="off">
+    </details>
   </div>
 
   <div class="card">

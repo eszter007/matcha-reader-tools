@@ -4,8 +4,9 @@
  *
  * Supported like the Python stack: engine versions 1.2 and 2.0, zlib / LZO /
  * uncompressed blocks, "Encrypted=2" key-info encryption (ripemd128 +
- * fast_decrypt). "Encrypted=1" (registration-code record encryption) is
- * rejected with a clear error, matching readmdict's passcode requirement.
+ * fast_decrypt), and "Encrypted=1" registration encryption given the owner's
+ * passcode (regcode + email/device id, Salsa20/8) — with readmdict's
+ * brute-force key-block scan as the no-passcode fallback.
  * One deviation: invalid bytes in the declared encoding decode to U+FFFD
  * (TextDecoder) instead of being dropped (Python errors='ignore').
  *
@@ -148,6 +149,73 @@ function mdxDecryptKeyInfo(compBlock) {
   return out;
 }
 
+/* ── Salsa20/8 (for Encrypted=1 keyword-header decryption) ────── */
+
+/* Port of readmdict's pureSalsa20 usage: 16-byte key ("expand 16-byte k"
+ * constants, key repeated), 8 rounds, zero IV, XOR keystream. */
+function salsa20Xor(key16, data) {
+  const rotl = (x, n) => ((x << n) | (x >>> (32 - n))) >>> 0;
+  const kdv = new DataView(key16.buffer, key16.byteOffset, 16);
+  const TAU = [0x61707865, 0x3120646e, 0x79622d36, 0x6b206574]; // "expand 16-byte k"
+  const ctx = new Uint32Array(16);
+  ctx[0] = TAU[0]; ctx[5] = TAU[1]; ctx[10] = TAU[2]; ctx[15] = TAU[3];
+  for (let i = 0; i < 4; i++) {
+    ctx[1 + i] = kdv.getUint32(i * 4, true);
+    ctx[11 + i] = kdv.getUint32(i * 4, true);
+  }
+  // ctx[6..7] = IV (zero), ctx[8..9] = block counter.
+
+  const out = new Uint8Array(data.length);
+  const x = new Uint32Array(16);
+  const block = new Uint8Array(64);
+  const bdv = new DataView(block.buffer);
+  for (let off = 0; off < data.length; off += 64) {
+    x.set(ctx);
+    for (let r = 0; r < 8; r += 2) {
+      // column round
+      x[4] ^= rotl((x[0] + x[12]) >>> 0, 7);  x[8] ^= rotl((x[4] + x[0]) >>> 0, 9);
+      x[12] ^= rotl((x[8] + x[4]) >>> 0, 13); x[0] ^= rotl((x[12] + x[8]) >>> 0, 18);
+      x[9] ^= rotl((x[5] + x[1]) >>> 0, 7);   x[13] ^= rotl((x[9] + x[5]) >>> 0, 9);
+      x[1] ^= rotl((x[13] + x[9]) >>> 0, 13); x[5] ^= rotl((x[1] + x[13]) >>> 0, 18);
+      x[14] ^= rotl((x[10] + x[6]) >>> 0, 7); x[2] ^= rotl((x[14] + x[10]) >>> 0, 9);
+      x[6] ^= rotl((x[2] + x[14]) >>> 0, 13); x[10] ^= rotl((x[6] + x[2]) >>> 0, 18);
+      x[3] ^= rotl((x[15] + x[11]) >>> 0, 7); x[7] ^= rotl((x[3] + x[15]) >>> 0, 9);
+      x[11] ^= rotl((x[7] + x[3]) >>> 0, 13); x[15] ^= rotl((x[11] + x[7]) >>> 0, 18);
+      // row round
+      x[1] ^= rotl((x[0] + x[3]) >>> 0, 7);   x[2] ^= rotl((x[1] + x[0]) >>> 0, 9);
+      x[3] ^= rotl((x[2] + x[1]) >>> 0, 13);  x[0] ^= rotl((x[3] + x[2]) >>> 0, 18);
+      x[6] ^= rotl((x[5] + x[4]) >>> 0, 7);   x[7] ^= rotl((x[6] + x[5]) >>> 0, 9);
+      x[4] ^= rotl((x[7] + x[6]) >>> 0, 13);  x[5] ^= rotl((x[4] + x[7]) >>> 0, 18);
+      x[11] ^= rotl((x[10] + x[9]) >>> 0, 7); x[8] ^= rotl((x[11] + x[10]) >>> 0, 9);
+      x[9] ^= rotl((x[8] + x[11]) >>> 0, 13); x[10] ^= rotl((x[9] + x[8]) >>> 0, 18);
+      x[12] ^= rotl((x[15] + x[14]) >>> 0, 7); x[13] ^= rotl((x[12] + x[15]) >>> 0, 9);
+      x[14] ^= rotl((x[13] + x[12]) >>> 0, 13); x[15] ^= rotl((x[14] + x[13]) >>> 0, 18);
+    }
+    for (let i = 0; i < 16; i++) bdv.setUint32(i * 4, (x[i] + ctx[i]) >>> 0, true);
+    ctx[8] = (ctx[8] + 1) >>> 0;
+    if (ctx[8] === 0) ctx[9] = (ctx[9] + 1) >>> 0;
+    for (let j = 0; j < Math.min(64, data.length - off); j++) out[off + j] = data[off + j] ^ block[j];
+  }
+  return out;
+}
+
+/* readmdict._decrypt_regcode_by_email / _by_deviceid: the 16-byte block key
+ * is the regcode Salsa20-decrypted with ripemd128 of the user id. */
+function mdxRegcodeKey(regcode, userid, byEmail) {
+  let idBytes;
+  if (byEmail) {
+    idBytes = new Uint8Array(userid.length * 2); // utf-16-le, no BOM
+    for (let i = 0; i < userid.length; i++) {
+      const c = userid.charCodeAt(i);
+      idBytes[i * 2] = c & 0xff;
+      idBytes[i * 2 + 1] = c >> 8;
+    }
+  } else {
+    idBytes = new TextEncoder().encode(userid);
+  }
+  return salsa20Xor(ripemd128(idBytes), regcode);
+}
+
 /* ── LZO1X decompression (block type 1, used by pre-2.0 files) ── */
 
 /* Structured to mirror minilzo's lzo1x_decompress control flow: LZO has two
@@ -272,10 +340,59 @@ function mdxTextDecoderLabel(encoding) {
   return e.toLowerCase();
 }
 
+/* Decode the (decompressed, decrypted) key-block-info list into
+ * [compressedSize, decompressedSize] pairs; head/tail key texts skipped. */
+function mdxDecodeKeyInfoList(keyInfo, W, version, utf16) {
+  const kdv = new DataView(keyInfo.buffer, keyInfo.byteOffset, keyInfo.byteLength);
+  const knum = (p) => (W === 8 ? Number(kdv.getBigUint64(p)) : kdv.getUint32(p));
+  const textWidth = version >= 2 ? 2 : 1;
+  const textTerm = version >= 2 ? 1 : 0;
+  const textLen = (p) => (textWidth === 2 ? kdv.getUint16(p) : kdv.getUint8(p));
+  const blockSizes = [];
+  let i = 0;
+  while (i < keyInfo.byteLength) {
+    i += W; // entry count in this block
+    let n = textLen(i); i += textWidth;
+    i += utf16 ? (n + textTerm) * 2 : n + textTerm;
+    n = textLen(i); i += textWidth;
+    i += utf16 ? (n + textTerm) * 2 : n + textTerm;
+    blockSizes.push([knum(i), knum(i + W)]);
+    i += W * 2;
+  }
+  return blockSizes;
+}
+
+/* Decompress key blocks → [recordOffset, keyText] list. */
+async function mdxDecodeKeyBlocks(bytes, pos, blockSizes, W, utf16, decoder) {
+  const keyList = [];
+  const delimWidth = utf16 ? 2 : 1;
+  for (const [compSize, decompSize] of blockSizes) {
+    const block = await mdxDecompressBlock(bytes.subarray(pos, pos + compSize), decompSize, "key");
+    pos += compSize;
+    const bdv = new DataView(block.buffer, block.byteOffset, block.byteLength);
+    let i = 0;
+    while (i < block.byteLength) {
+      const id = W === 8 ? Number(bdv.getBigUint64(i)) : bdv.getUint32(i);
+      let end = i + W;
+      while (end < block.byteLength) {
+        if (delimWidth === 1 ? block[end] === 0 : (block[end] === 0 && block[end + 1] === 0)) break;
+        end += delimWidth;
+      }
+      keyList.push([id, decoder.decode(block.subarray(i + W, end)).trim()]);
+      i = end + delimWidth;
+    }
+  }
+  return { keyList, pos };
+}
+
 /* Parse the whole .mdx and stream entries to onEntry(keyText, valueText).
  * Mirrors readmdict.MDX: keys/values decoded with the header's Encoding,
- * keys stripped, values stripped of NULs. Returns the parsed header attrs. */
-async function mdxParse(bytes, onEntry) {
+ * keys stripped, values stripped of NULs. Returns the parsed header attrs
+ * (with _keysReadVia set to "plain" | "passcode" | "brutal").
+ *
+ * options.passcode — {regcode: Uint8Array(16), userid: string} for
+ * registration-encrypted (Encrypted=1) files, like readmdict's passcode. */
+async function mdxParse(bytes, onEntry, options) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const num = (pos, width) =>
     width === 8 ? Number(dv.getBigUint64(pos)) : dv.getUint32(pos);
@@ -296,68 +413,83 @@ async function mdxParse(bytes, onEntry) {
 
   const enc = attrs.Encrypted;
   const encrypt = !enc || enc === "No" ? 0 : enc === "Yes" ? 1 : parseInt(enc, 10);
-  if (encrypt & 1) {
-    throw new Error("This MDX is registration-encrypted (Encrypted=1) and needs its owner passcode — not supported");
-  }
   const decoder = new TextDecoder(mdxTextDecoderLabel(attrs.Encoding));
   const utf16 = (attrs.Encoding || "").toUpperCase() === "UTF-16";
+  const numBytes = version >= 2 ? 8 * 5 : 4 * 4;
+  const sectionStart = 4 + headerSize + 4;
 
-  // ── Keyword section ──
-  let pos = 4 + headerSize + 4;
-  const numKeyBlocks = num(pos, W);
-  pos += W * 2; // skip num_entries
-  if (version >= 2) pos += W; // key_block_info_decomp_size
-  const keyInfoSize = num(pos, W); pos += W;
-  const keyBlocksSize = num(pos, W); pos += W;
-  if (version >= 2) pos += 4; // adler of the 5 numbers
-
-  let keyInfo = bytes.subarray(pos, pos + keyInfoSize);
-  pos += keyInfoSize;
-  if (version >= 2) {
-    if (encrypt & 2) keyInfo = mdxDecryptKeyInfo(keyInfo);
-    keyInfo = await mdxDecompressBlock(keyInfo, 0, "key info").catch(() => {
-      throw new Error("Failed to read key index (corrupt or unsupported encryption)");
-    });
-  }
-
-  // Key-block sizes from the info list (head/tail key texts are skipped).
-  const kdv = new DataView(keyInfo.buffer, keyInfo.byteOffset, keyInfo.byteLength);
-  const knum = (p) => (W === 8 ? Number(kdv.getBigUint64(p)) : kdv.getUint32(p));
-  const blockSizes = [];
-  {
-    let i = 0;
-    const textWidth = version >= 2 ? 2 : 1;
-    const textTerm = version >= 2 ? 1 : 0;
-    const textLen = (p) => (textWidth === 2 ? kdv.getUint16(p) : kdv.getUint8(p));
-    while (i < keyInfo.byteLength) {
-      i += W; // entry count in this block
-      let n = textLen(i); i += textWidth;
-      i += utf16 ? (n + textTerm) * 2 : n + textTerm;
-      n = textLen(i); i += textWidth;
-      i += utf16 ? (n + textTerm) * 2 : n + textTerm;
-      blockSizes.push([knum(i), knum(i + W)]);
-      i += W * 2;
-    }
-  }
-  if (blockSizes.length !== numKeyBlocks) throw new Error("Key index is inconsistent");
-
-  // Decompress key blocks → [recordOffset, keyText] list.
-  const keyList = [];
-  const delimWidth = utf16 ? 2 : 1;
-  for (const [compSize, decompSize] of blockSizes) {
-    const block = await mdxDecompressBlock(bytes.subarray(pos, pos + compSize), decompSize, "key");
-    pos += compSize;
-    const bdv = new DataView(block.buffer, block.byteOffset, block.byteLength);
-    let i = 0;
-    while (i < block.byteLength) {
-      const id = W === 8 ? Number(bdv.getBigUint64(i)) : bdv.getUint32(i);
-      let end = i + W;
-      while (end < block.byteLength) {
-        if (delimWidth === 1 ? block[end] === 0 : (block[end] === 0 && block[end + 1] === 0)) break;
-        end += delimWidth;
+  // ── Keyword section, normal path (readmdict._read_keys) ──
+  const readKeys = async () => {
+    let block = bytes.subarray(sectionStart, sectionStart + numBytes);
+    if (encrypt & 1) {
+      if (!options || !options.passcode) {
+        throw new Error("registration-encrypted, no passcode");
       }
-      keyList.push([id, decoder.decode(block.subarray(i + W, end)).trim()]);
-      i = end + delimWidth;
+      const { regcode, userid } = options.passcode;
+      block = salsa20Xor(mdxRegcodeKey(regcode, userid, attrs.RegisterBy === "EMail"), block);
+    }
+    const bv = new DataView(block.buffer, block.byteOffset, block.byteLength);
+    const bnum = (p) => (W === 8 ? Number(bv.getBigUint64(p)) : bv.getUint32(p));
+    let p = 0;
+    const numKeyBlocks = bnum(p); p += W * 2; // skip num_entries
+    if (version >= 2) p += W; // key_block_info_decomp_size
+    const keyInfoSize = bnum(p); p += W;
+    p += W; // key_blocks_size
+    let pos = sectionStart + numBytes;
+    if (version >= 2) {
+      // adler of the (decrypted) numbers block — a wrong passcode fails here
+      if (dv.getUint32(pos) !== mdxAdler32(block)) throw new Error("keyword header checksum mismatch");
+      pos += 4;
+    }
+
+    let keyInfo = bytes.subarray(pos, pos + keyInfoSize);
+    pos += keyInfoSize;
+    if (version >= 2) {
+      if (encrypt & 2) keyInfo = mdxDecryptKeyInfo(keyInfo);
+      keyInfo = await mdxDecompressBlock(keyInfo, 0, "key info");
+    }
+    const blockSizes = mdxDecodeKeyInfoList(keyInfo, W, version, utf16);
+    if (blockSizes.length !== numKeyBlocks) throw new Error("Key index is inconsistent");
+    return mdxDecodeKeyBlocks(bytes, pos, blockSizes, W, utf16, decoder);
+  };
+
+  // ── Brutal fallback (readmdict._read_keys_brutal): ignore the possibly
+  // encrypted numbers and find the first key block by its type marker. ──
+  const readKeysBrutal = async () => {
+    let infoStart = sectionStart + numBytes + (version >= 2 ? 4 : 0);
+    if (version >= 2 && !(bytes[infoStart] === 2 && bytes[infoStart + 1] === 0 &&
+                          bytes[infoStart + 2] === 0 && bytes[infoStart + 3] === 0)) {
+      throw new Error("key index marker not found");
+    }
+    const marker = version >= 2 ? 2 : 1; // zlib for 2.0 files, lzo for 1.2
+    let scan = infoStart + 8;
+    for (;;) {
+      if (scan + 4 > bytes.length) throw new Error("key block marker not found");
+      if (bytes[scan] === marker && bytes[scan + 1] === 0 && bytes[scan + 2] === 0 && bytes[scan + 3] === 0) break;
+      scan++;
+    }
+    let keyInfo = bytes.subarray(infoStart, scan);
+    if (version >= 2) {
+      if (encrypt & 2) keyInfo = mdxDecryptKeyInfo(keyInfo);
+      keyInfo = await mdxDecompressBlock(keyInfo, 0, "key info");
+    }
+    const blockSizes = mdxDecodeKeyInfoList(keyInfo, W, version, utf16);
+    return mdxDecodeKeyBlocks(bytes, scan, blockSizes, W, utf16, decoder);
+  };
+
+  let keyList, pos;
+  try {
+    ({ keyList, pos } = await readKeys());
+    attrs._keysReadVia = encrypt & 1 ? "passcode" : "plain";
+  } catch (e) {
+    // Same recovery readmdict applies (wrong/missing passcode, odd files).
+    try {
+      ({ keyList, pos } = await readKeysBrutal());
+      attrs._keysReadVia = "brutal";
+    } catch (e2) {
+      throw encrypt & 1
+        ? new Error("This MDX is registration-encrypted — check the registration code and email/device ID (" + e.message + ")")
+        : e;
     }
   }
 
@@ -404,13 +536,14 @@ function mdxStripHtml(html) {
   return text.split("\n").map(pyStrip).filter((line) => line).join("\n");
 }
 
-/* convert_mdict: parse + filter into dictWriteBinary records. */
-async function convertMdictRecords(bytes, onProgress) {
+/* convert_mdict: parse + filter into dictWriteBinary records.
+ * options.passcode (optional) — see mdxParse. */
+async function convertMdictRecords(bytes, onProgress, options) {
   const MDX_HEADWORD_SIZE = 32; // dict.js HEADWORD_SIZE
   const enc = new TextEncoder();
   const records = [];
   let entryCount = 0, skipped = 0, seen = 0;
-  await mdxParse(bytes, (keyText, valText) => {
+  const attrs = await mdxParse(bytes, (keyText, valText) => {
     seen++;
     if (onProgress && seen % 20000 === 0) onProgress(seen);
     const headword = pyStrip(keyText);
@@ -423,13 +556,14 @@ async function convertMdictRecords(bytes, onProgress) {
     if (hw.length >= MDX_HEADWORD_SIZE) { skipped++; return; }
     records.push({ hw, def: enc.encode(definition), priority: 100 });
     entryCount++;
-  });
-  return { records, entryCount, skipped };
+  }, options);
+  return { records, entryCount, skipped, keysReadVia: attrs._keysReadVia };
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
     mdxAdler32, ripemd128, mdxFastDecrypt, lzo1xDecompress,
+    salsa20Xor, mdxRegcodeKey,
     mdxParse, mdxStripHtml, convertMdictRecords, pyStrip, stripNulls,
   };
 }

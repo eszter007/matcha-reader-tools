@@ -379,7 +379,9 @@ def make_jmdict_json():
 def make_mdx_fixtures():
     """Synthetic MDict .mdx fixtures written by a minimal engine-2.0 writer:
     dict.mdx (zlib + one uncompressed record block), dict_enc.mdx
-    (Encrypted=2 key index), dict_lzo.mdx (LZO blocks). Entries exercise
+    (Encrypted=2 key index), dict_lzo.mdx (LZO blocks), dict_reg.mdx
+    (Encrypted=1, regcode 000102…0f registered to test@example.com).
+    Entries exercise
     HTML stripping, entities, <br>, @@@LINK redirects, whitespace-only
     definitions, and over-32-byte headwords. Readable by readmdict, so the
     reference conversion exercises an implementation independent of js/mdx.js.
@@ -391,6 +393,7 @@ def make_mdx_fixtures():
     try:
         import lzo
         from readmdict.ripemd128 import ripemd128
+        from readmdict.pureSalsa20 import Salsa20
     except ImportError as e:
         print(f"mdx fixtures: SKIPPED ({e}; pip install readmdict python-lzo)")
         return False
@@ -425,7 +428,7 @@ def make_mdx_fixtures():
             prev = b[i]
         return bytes(b)
 
-    def build(path, comp, encrypted):
+    def build(path, comp, encrypted, regcode=None, userid=None):
         recs = [(k.encode(), v.encode() + b"\x00") for k, v in entries]
         offsets, off = [], 0
         for _, v in recs:
@@ -454,7 +457,12 @@ def make_mdx_fixtures():
 
         kw = pack(">QQQQQ", len(groups), len(recs), len(key_info),
                   len(key_info_block), sum(len(b) for b in key_blocks))
-        kw += pack(">I", z.adler32(kw) & 0xffffffff)
+        kw_adler = pack(">I", z.adler32(kw) & 0xffffffff)  # of the plaintext numbers
+        if encrypted & 1:
+            digest = ripemd128(userid.encode("utf-16-le"))  # RegisterBy=EMail
+            encrypt_key = Salsa20(key=digest, IV=b"\x00" * 8, rounds=8).encryptBytes(regcode)
+            kw = Salsa20(key=encrypt_key, IV=b"\x00" * 8, rounds=8).encryptBytes(kw)
+        kw += kw_adler
 
         # dict.mdx keeps its second record block uncompressed for type-0 coverage.
         rec_data = [b"".join(recs[i][1] for i in g) for g in groups]
@@ -464,8 +472,9 @@ def make_mdx_fixtures():
                        sum(len(b) for b in rec_blocks))
         rec_info = b"".join(pack(">QQ", len(cb), len(d)) for cb, d in zip(rec_blocks, rec_data))
 
+        register = ' RegisterBy="EMail"' if encrypted & 1 else ""
         attrs = (f'<Dictionary GeneratedByEngineVersion="2.0" RequiredEngineVersion="2.0" '
-                 f'Format="Html" KeyCaseSensitive="No" Encrypted="{encrypted}" '
+                 f'Format="Html" KeyCaseSensitive="No" Encrypted="{encrypted}"{register} '
                  f'Encoding="UTF-8" Title="Test MDX &amp; fixture" CreationDate="2026-01-01"/>')
         hb = attrs.encode("utf-16") + b"\x00\x00"
         blob = pack(">I", len(hb)) + hb + pack("<I", z.adler32(hb) & 0xffffffff)
@@ -478,6 +487,9 @@ def make_mdx_fixtures():
     build(os.path.join(FIXTURES, "dict.mdx"), comp=2, encrypted=0)
     build(os.path.join(FIXTURES, "dict_enc.mdx"), comp=2, encrypted=2)
     build(os.path.join(FIXTURES, "dict_lzo.mdx"), comp=1, encrypted=0)
+    # Registration-encrypted variant; passcode shared with the JS tests.
+    build(os.path.join(FIXTURES, "dict_reg.mdx"), comp=2, encrypted=1,
+          regcode=bytes(range(16)), userid="test@example.com")
     return True
 
 
