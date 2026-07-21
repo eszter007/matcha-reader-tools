@@ -17,6 +17,7 @@ global.bytesEqual = binary.bytesEqual;
 const zip = require("../../js/zip.js");
 const dict = require("../../js/dict.js");
 const manga = require("../../js/manga-core.js");
+const epub = require("../../js/manga-epub.js");
 
 let failures = 0;
 
@@ -166,6 +167,94 @@ function testMangaMono() {
   check("encodeMonoBmpFromRGBA matches manual path", binary.bytesEqual(viaRgba, viaGray));
 }
 
+/* ── Manga: portable EPUB export ──────────────────────────────── */
+
+/* Build a small EPUB the way manga-ui.js does (mimetype first + STORE), then
+ * read it back with our own ZipReader and check the structure. */
+async function testMangaEpub() {
+  console.log("manga EPUB export:");
+
+  // Two pages: page 0 = full page + a wide panel (rotated → portrait) + a tall
+  // panel; page 1 = full page only. Chapter list points at both pages.
+  const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]); // stand-in image bytes
+  const epubPages = [
+    { pageIdx: 0, images: [
+      { bytes: jpg, mime: "image/jpeg", w: 800, h: 1200 }, // full page
+      { bytes: jpg, mime: "image/jpeg", w: 900, h: 500 },  // wide panel (rotated dims already swapped by UI)
+      { bytes: jpg, mime: "image/jpeg", w: 400, h: 700 },  // tall panel
+    ] },
+    { pageIdx: 1, images: [{ bytes: jpg, mime: "image/jpeg", w: 800, h: 1200 }] },
+  ];
+  const totalImages = epubPages.reduce((n, p) => n + p.images.length, 0); // 4
+  const tocEntries = [[1, "Chapter 2"], [0, "Chapter 1"]]; // deliberately unsorted
+
+  // Mirror manga-ui.js buildMangaEpub assembly (kept in the test so the pure
+  // module can be exercised without a browser).
+  const spine = [];
+  const pageFirstHref = new Map();
+  for (const pg of epubPages) {
+    pg.images.forEach((im, ii) => {
+      const base = `p${String(pg.pageIdx).padStart(4, "0")}_${ii}`;
+      const xhtmlHref = `text/${base}.xhtml`;
+      if (ii === 0) pageFirstHref.set(pg.pageIdx, xhtmlHref);
+      spine.push({
+        xhtmlId: `x_${base}`, xhtmlHref,
+        imgId: `img_${base}`, imgHref: `images/${base}.${epub.epubImageExt(im.mime)}`,
+        mime: im.mime, w: im.w, h: im.h, isCover: spine.length === 0, bytes: im.bytes,
+      });
+    });
+  }
+  const chapters = tocEntries.slice().sort((a, b) => a[0] - b[0])
+    .map(([pi, t]) => ({ href: pageFirstHref.get(pi), title: t })).filter((c) => c.href);
+  const identifier = epub.epubIdentifier("Test Manga", "Test Author", spine.length);
+  const files = epub.buildEpubTextFiles({ identifier, title: "Test Manga", author: "Test Author", language: "ja", spine, chapters });
+
+  const zw = new zip.ZipWriter();
+  const enc = new TextEncoder();
+  zw.addFile("mimetype", enc.encode(epub.EPUB_MIMETYPE));
+  for (const f of files) zw.addFile(f.path, enc.encode(f.text));
+  for (const s of spine) zw.addFile("OEBPS/" + s.imgHref, s.bytes);
+  const bytes = new Uint8Array(await zw.toBlob().arrayBuffer());
+
+  // OCF magic: "mimetype" at byte 30, its STORE content at byte 38.
+  check("mimetype at offset 30", new TextDecoder().decode(bytes.subarray(30, 38)) === "mimetype");
+  check("epub mimetype content at offset 38",
+    new TextDecoder().decode(bytes.subarray(38, 38 + epub.EPUB_MIMETYPE.length)) === epub.EPUB_MIMETYPE);
+
+  const zr = new zip.ZipReader(bytes);
+  check("mimetype is the first entry, STORE", zr.entries[0].name === "mimetype" && zr.entries[0].method === 0);
+
+  const dec = new TextDecoder();
+  const container = dec.decode(await zr.readEntryByName("META-INF/container.xml"));
+  check("container points at content.opf", container.includes(`full-path="OEBPS/content.opf"`));
+
+  const opf = dec.decode(await zr.readEntryByName("OEBPS/content.opf"));
+  check("opf fixed-layout", opf.includes("pre-paginated"));
+  check("opf right-to-left spine", opf.includes(`page-progression-direction="rtl"`));
+  check("opf cover-image on first image", opf.includes(`id="img_p0000_0"`) && /id="img_p0000_0"[^>]*properties="cover-image"/.test(opf));
+  check("opf itemref count == images", (opf.match(/<itemref\b/g) || []).length === totalImages, `${(opf.match(/<itemref\b/g) || []).length} != ${totalImages}`);
+  check("opf image items == images", (opf.match(/media-type="image\/jpeg"/g) || []).length === totalImages);
+
+  const nav = dec.decode(await zr.readEntryByName("OEBPS/nav.xhtml"));
+  check("nav lists both chapters in page order",
+    nav.indexOf("Chapter 1") >= 0 && nav.indexOf("Chapter 1") < nav.indexOf("Chapter 2"));
+  check("nav links resolve to page xhtml", nav.includes(`href="text/p0000_0.xhtml"`) && nav.includes(`href="text/p0001_0.xhtml"`));
+
+  const ncx = dec.decode(await zr.readEntryByName("OEBPS/toc.ncx"));
+  check("ncx has both navPoints", (ncx.match(/<navPoint\b/g) || []).length === 2);
+
+  // Every spine page renders one image at its declared viewport size.
+  const wide = dec.decode(await zr.readEntryByName("OEBPS/text/p0000_1.xhtml"));
+  check("page viewport matches image dims", wide.includes(`content="width=900, height=500"`));
+  check("page references its image one dir up", wide.includes(`src="../images/p0000_1.jpg"`));
+  check("all page xhtml present", files.filter((f) => f.path.startsWith("OEBPS/text/")).length === totalImages);
+
+  // Identifier is deterministic and content-derived.
+  check("identifier deterministic",
+    epub.epubIdentifier("Test Manga", "Test Author", spine.length) === identifier && /^urn:matcha-reader:[0-9a-f]{16}$/.test(identifier));
+  check("identifier varies with title", epub.epubIdentifier("Other", "Test Author", spine.length) !== identifier);
+}
+
 /* ── Manga: YOLO panel detection vs Python reference ──────────── */
 
 async function testMangaYolo() {
@@ -297,6 +386,7 @@ async function testZipRoundTrip() {
 (async () => {
   testManga();
   testMangaMono();
+  await testMangaEpub();
   await testMangaYolo();
   await testDictYomitan();
   testDictJmdict();
