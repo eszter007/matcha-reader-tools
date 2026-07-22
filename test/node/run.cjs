@@ -180,7 +180,7 @@ async function testMangaEpub() {
   const epubPages = [
     { pageIdx: 0, images: [
       { bytes: jpg, mime: "image/jpeg", w: 800, h: 1200 }, // full page
-      { bytes: jpg, mime: "image/jpeg", w: 900, h: 500 },  // wide panel (rotated dims already swapped by UI)
+      { bytes: jpg, mime: "image/jpeg", w: 500, h: 900 },  // wide panel, already rotated to portrait by the UI (w/h swapped)
       { bytes: jpg, mime: "image/jpeg", w: 400, h: 700 },  // tall panel
     ] },
     { pageIdx: 1, images: [{ bytes: jpg, mime: "image/jpeg", w: 800, h: 1200 }] },
@@ -245,7 +245,7 @@ async function testMangaEpub() {
 
   // Every spine page renders one image at its declared viewport size.
   const wide = dec.decode(await zr.readEntryByName("OEBPS/text/p0000_1.xhtml"));
-  check("page viewport matches image dims", wide.includes(`content="width=900, height=500"`));
+  check("page viewport matches image dims", wide.includes(`content="width=500, height=900"`));
   check("page references its image one dir up", wide.includes(`src="../images/p0000_1.jpg"`));
   check("all page xhtml present", files.filter((f) => f.path.startsWith("OEBPS/text/")).length === totalImages);
 

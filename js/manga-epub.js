@@ -40,11 +40,13 @@ function epubContainerXml() {
 
 function epubStyleCss() {
   // Fill the fixed-layout viewport; black matte behind any letterboxing.
+  // object-fit:contain keeps the aspect ratio even on readers that don't size
+  // the viewport to the image exactly (or fall back to a reflowable render).
   return `@page { margin: 0; }
 html, body { margin: 0; padding: 0; height: 100%; }
 body { background: #000; }
 .page { margin: 0; padding: 0; text-align: center; }
-.page img { display: block; width: 100%; height: 100%; }
+.page img { display: block; width: 100%; height: 100%; object-fit: contain; }
 `;
 }
 
