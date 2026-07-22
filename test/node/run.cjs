@@ -365,6 +365,50 @@ function testDictJmdict() {
 
 /* ── Zip writer round-trip via our own reader ─────────────────── */
 
+function testDictPos() {
+  console.log("dictionary POS flags (vs convert_jmdict.py pos_flags_*):");
+  const V1 = 0x01, V5 = 0x02, VS = 0x04, VK = 0x08, ADJ_I = 0x10, OTHER = 0x20, READING = 0x40;
+  const ANY_VERB = V1 | V5 | VS | VK;
+
+  // pos_flags_from_tags: verb classes prefix-match; vt/vi/aux/exp ignored;
+  // unknown verb subtype fails open; everything else → OTHER.
+  const cases = [
+    [["v1"], V1], [["v1-s"], V1],
+    [["v5k-s"], V5], [["v5aru"], V5], [["v4r"], V5], [["iv"], V5],
+    [["vs-i"], VS], [["vs"], VS],
+    [["vk"], VK],
+    [["adj-i"], ADJ_I], [["adj-ix"], ADJ_I],
+    [["vt", "vi", "aux", "aux-adj", "exp"], 0], // all ignored → no flags
+    [["n"], OTHER], [["adj-na"], OTHER],
+    [["v-unspec"], ANY_VERB], [["aux-v"], ANY_VERB], // unknown verb / aux-v fail open
+    [["v1", "n"], V1 | OTHER],
+    [[""], 0], [[], 0],
+  ];
+  for (const [tags, want] of cases) {
+    const got = dict.posFlagsFromTags(tags);
+    check(`posFlagsFromTags(${JSON.stringify(tags)})=0x${want.toString(16)}`, got === want, `got 0x${got.toString(16)}`);
+  }
+
+  // pos_flags_jmdict aggregates partOfSpeech across all senses.
+  check("posFlagsJmdict aggregates senses",
+    dict.posFlagsJmdict({ sense: [{ partOfSpeech: ["v5r"] }, { partOfSpeech: ["n"] }] }) === (V5 | OTHER));
+
+  // POS_READING: kana record of a kanji entry is flagged; a kana-only lemma is not.
+  const data = { words: [
+    { kanji: [{ text: "食べる" }], kana: [{ text: "たべる" }], sense: [{ partOfSpeech: ["v1"] }] },
+    { kanji: [], kana: [{ text: "ちょっと" }], sense: [{ partOfSpeech: ["adv"] }] },
+  ] };
+  const idx = dict.dictWriteBinary(dict.convertJmdictRecords(data)).idx;
+  const posByName = {};
+  for (let i = 0; i < idx.length / 40; i++) {
+    const name = new TextDecoder().decode(idx.subarray(i * 40, i * 40 + 32)).replace(/\0+$/, "");
+    posByName[name] = idx[i * 40 + 39];
+  }
+  check("kanji headword → V1, no READING", posByName["食べる"] === V1);
+  check("kana reading of kanji entry → V1|READING", posByName["たべる"] === (V1 | READING));
+  check("kana-only lemma → OTHER, no READING", posByName["ちょっと"] === OTHER);
+}
+
 async function testZipRoundTrip() {
   console.log("zip writer round-trip:");
   const zw = new zip.ZipWriter();
@@ -391,6 +435,7 @@ async function testZipRoundTrip() {
   await testDictYomitan();
   testDictJmdict();
   await testDictMdx();
+  testDictPos();
   await testZipRoundTrip();
   if (failures) {
     console.error(`\n${failures} failure(s)`);
