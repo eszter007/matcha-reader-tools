@@ -325,9 +325,9 @@ async function testDictYomitan() {
   }
   const { records } = dict.convertYomitanRecords(banks);
   const { idx, dat } = dict.dictWriteBinary(records);
-  compareFile("jmdict.idx", idx, path.join(refDir, "jmdict.idx"));
-  compareFile("jmdict.dat", dat, path.join(refDir, "jmdict.dat"));
-  compareFile("jmdict.spx", dict.dictGenSpx(idx), path.join(refDir, "jmdict.spx"));
+  compareFile("vocab.idx", idx, path.join(refDir, "vocab.idx"));
+  compareFile("vocab.dat", dat, path.join(refDir, "vocab.dat"));
+  compareFile("vocab.spx", dict.dictGenSpx(idx), path.join(refDir, "vocab.spx"));
 }
 
 async function testDictMdx() {
@@ -345,9 +345,9 @@ async function testDictMdx() {
     const bytes = new Uint8Array(fs.readFileSync(path.join(FIXTURES, name)));
     const { records } = await mdx.convertMdictRecords(bytes);
     const { idx, dat } = dict.dictWriteBinary(records);
-    compareFile(`${name} → jmdict.idx`, idx, path.join(refDir, "jmdict.idx"));
-    compareFile(`${name} → jmdict.dat`, dat, path.join(refDir, "jmdict.dat"));
-    compareFile(`${name} → jmdict.spx`, dict.dictGenSpx(idx), path.join(refDir, "jmdict.spx"));
+    compareFile(`${name} → vocab.idx`, idx, path.join(refDir, "vocab.idx"));
+    compareFile(`${name} → vocab.dat`, dat, path.join(refDir, "vocab.dat"));
+    compareFile(`${name} → vocab.spx`, dict.dictGenSpx(idx), path.join(refDir, "vocab.spx"));
   }
 
   // Registration-encrypted (Encrypted=1): the owner passcode decrypts the
@@ -357,10 +357,10 @@ async function testDictMdx() {
   const passcode = { regcode: Uint8Array.from({ length: 16 }, (_, i) => i), userid: "test@example.com" };
   let reg = await mdx.convertMdictRecords(regBytes, null, { passcode });
   check("dict_reg.mdx decrypted via passcode", reg.keysReadVia === "passcode", `got ${reg.keysReadVia}`);
-  compareFile("dict_reg.mdx (passcode) → jmdict.idx", dict.dictWriteBinary(reg.records).idx, path.join(refDir, "jmdict.idx"));
+  compareFile("dict_reg.mdx (passcode) → vocab.idx", dict.dictWriteBinary(reg.records).idx, path.join(refDir, "vocab.idx"));
   reg = await mdx.convertMdictRecords(regBytes);
   check("dict_reg.mdx recovered via scan", reg.keysReadVia === "brutal", `got ${reg.keysReadVia}`);
-  compareFile("dict_reg.mdx (no passcode) → jmdict.idx", dict.dictWriteBinary(reg.records).idx, path.join(refDir, "jmdict.idx"));
+  compareFile("dict_reg.mdx (no passcode) → vocab.idx", dict.dictWriteBinary(reg.records).idx, path.join(refDir, "vocab.idx"));
 }
 
 function testDictJmdict() {
@@ -369,9 +369,9 @@ function testDictJmdict() {
   const data = JSON.parse(fs.readFileSync(path.join(FIXTURES, "jmdict.json"), "utf-8"));
   const records = dict.convertJmdictRecords(data);
   const { idx, dat } = dict.dictWriteBinary(records);
-  compareFile("jmdict.idx", idx, path.join(refDir, "jmdict.idx"));
-  compareFile("jmdict.dat", dat, path.join(refDir, "jmdict.dat"));
-  compareFile("jmdict.spx", dict.dictGenSpx(idx), path.join(refDir, "jmdict.spx"));
+  compareFile("vocab.idx", idx, path.join(refDir, "vocab.idx"));
+  compareFile("vocab.dat", dat, path.join(refDir, "vocab.dat"));
+  compareFile("vocab.spx", dict.dictGenSpx(idx), path.join(refDir, "vocab.spx"));
 }
 
 /* ── Zip writer round-trip via our own reader ─────────────────── */

@@ -8,7 +8,7 @@ async function runDictConversion() {
     return;
   }
   const file = fileInput.files[0];
-  const outName = $("dict-name").value; // jmdict | jmnedict | grammar
+  const outName = $("dict-name").value; // vocab | names | grammar (device also accepts legacy jmdict/jmnedict)
 
   $("dict-run").disabled = true;
   clearLog();
