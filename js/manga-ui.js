@@ -560,18 +560,9 @@ async function runMangaConversion() {
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (wasResized) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, imgW, imgH); }
       ctx.drawImage(bitmap, 0, 0, origW, origH, 0, 0, imgW, imgH);
-
-      // Full-resolution page kept for the panel crops. A panel is shown zoomed to
-      // fill the screen, so cropping it from the already-downscaled page magnifies
-      // a fraction of an already-reduced image (softness and dither dots and all).
-      // Cropping at full resolution and fitting each panel to the screen afterwards
-      // gives every panel the whole pixel budget, dithered at the size it's shown
-      // at. Transparent sources composite onto white (the device's alpha handling).
-      const sourceCanvas = makeCanvas(origW, origH);
-      const sctx = sourceCanvas.getContext("2d");
-      sctx.fillStyle = "#ffffff"; sctx.fillRect(0, 0, origW, origH);
-      sctx.drawImage(bitmap, 0, 0);
-      bitmap.close();
+      // The source bitmap stays open until after detection: the full-resolution
+      // panel-crop canvas is only built for pages that actually have a panel to
+      // crop (see below), so a cover / full-page spread never allocates it.
 
       // Panel boxes stay in resized page space (panels.idx records the page at that
       // size); only the crop comes from the original, so map the rect back across.
@@ -623,6 +614,22 @@ async function runMangaConversion() {
         boxes = detectPanelsGrid(gray, imgW, imgH);
       }
       boxes = sortPanelsMangaOrder(boxes);
+
+      // Full-resolution page for the panel crops. A panel is shown zoomed to fill
+      // the screen, so cropping it from the already-downscaled page magnifies a
+      // fraction of an already-reduced image (softness and dither dots and all);
+      // cropping at full res and fitting each panel afterwards gives it the whole
+      // pixel budget. Allocate this second full-res canvas only when the page
+      // actually has a panel to crop — covers / full-page spreads skip it.
+      // Transparent sources composite onto white (the device's alpha handling).
+      let sourceCanvas = null;
+      if (boxes.some((b) => !isFullPagePanel(b, imgW, imgH))) {
+        sourceCanvas = makeCanvas(origW, origH);
+        const sctx = sourceCanvas.getContext("2d");
+        sctx.fillStyle = "#ffffff"; sctx.fillRect(0, 0, origW, origH);
+        sctx.drawImage(bitmap, 0, 0);
+      }
+      bitmap.close();
 
       // Crop panels (fast, local) before dispatching OCR calls concurrently.
       const panelCrops = [];  // Uint8Array | null (null = full-page panel)
