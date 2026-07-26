@@ -546,18 +546,27 @@ async function runMangaConversion() {
       // Downscale FIRST, before panel detection, so every downstream coordinate
       // (panel boxes, crop rects, OCR text boxes, the page dims in panels.idx)
       // lives in the resized space and matches the files actually written. When
-      // no device is selected fit.resized is false and this is a 1:1 draw — the
-      // default output is unchanged. Fill white first so transparent sources
-      // composite onto white (like the device's alpha handling), not black.
-      const fit = fitToDeviceSize(bitmap.width, bitmap.height, deviceTarget);
+      // no device is selected fit.resized is false and this is a 1:1 draw, so the
+      // default output is unchanged. (White-fill for transparent sources differs
+      // per canvas — see the detection/page and full-res source canvases below.)
+      const origW = bitmap.width, origH = bitmap.height;
+      const fit = fitToDeviceSize(origW, origH, deviceTarget);
       const imgW = fit.w, imgH = fit.h;
       const wasResized = fit.resized;
 
+      // Detection + page canvas (downscaled). White-fill only when actually
+      // resizing, so panels.idx and the default (Original) output are unchanged.
       const canvas = makeCanvas(imgW, imgH);
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (wasResized) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, imgW, imgH); }
-      ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, imgW, imgH);
-      bitmap.close();  // all further pixels come from the (possibly resized) canvas
+      ctx.drawImage(bitmap, 0, 0, origW, origH, 0, 0, imgW, imgH);
+      // The source bitmap stays open until after detection: the full-resolution
+      // panel-crop canvas is only built for pages that actually have a panel to
+      // crop (see below), so a cover / full-page spread never allocates it.
+
+      // Panel boxes stay in resized page space (panels.idx records the page at that
+      // size); only the crop comes from the original, so map the rect back across.
+      const panelScaleX = origW / imgW, panelScaleY = origH / imgH;
 
       const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
 
@@ -606,6 +615,22 @@ async function runMangaConversion() {
       }
       boxes = sortPanelsMangaOrder(boxes);
 
+      // Full-resolution page for the panel crops. A panel is shown zoomed to fill
+      // the screen, so cropping it from the already-downscaled page magnifies a
+      // fraction of an already-reduced image (softness and dither dots and all);
+      // cropping at full res and fitting each panel afterwards gives it the whole
+      // pixel budget. Allocate this second full-res canvas only when the page
+      // actually has a panel to crop — covers / full-page spreads skip it.
+      // Transparent sources composite onto white (the device's alpha handling).
+      let sourceCanvas = null;
+      if (boxes.some((b) => !isFullPagePanel(b, imgW, imgH))) {
+        sourceCanvas = makeCanvas(origW, origH);
+        const sctx = sourceCanvas.getContext("2d");
+        sctx.fillStyle = "#ffffff"; sctx.fillRect(0, 0, origW, origH);
+        sctx.drawImage(bitmap, 0, 0);
+      }
+      bitmap.close();
+
       // Crop panels (fast, local) before dispatching OCR calls concurrently.
       const panelCrops = [];  // Uint8Array | null (null = full-page panel)
       const panelRects = [];
@@ -617,15 +642,26 @@ async function runMangaConversion() {
         const my2 = Math.min(imgH, y2 + margin);
         let cropBytes = null;  // full-colour JPEG crop for OCR (null = no crop / no OCR)
         if (!isFullPagePanel(boxes[panelIdx], imgW, imgH)) {
-          const cw = mx2 - mx1, ch = my2 - my1;
-          const cropCanvas = makeCanvas(cw, ch);
-          const cropCtx = cropCanvas.getContext("2d");
-          // Crop from the (possibly downscaled) page canvas, not the source
-          // bitmap, so crops live in the same space as the detected boxes.
-          cropCtx.drawImage(canvas, mx1, my1, cw, ch, 0, 0, cw, ch);
+          // Map the detected rect into full-resolution page coordinates, then draw
+          // that region straight into a device-fitted panel canvas (one drawImage
+          // crops + scales). fitToDeviceSize fits a landscape panel against the
+          // rotated box — the size the firmware zooms it to, and dithers it at.
+          const fx1 = Math.max(0, Math.round(mx1 * panelScaleX));
+          const fy1 = Math.max(0, Math.round(my1 * panelScaleY));
+          const fx2 = Math.min(origW, Math.round(mx2 * panelScaleX));
+          const fy2 = Math.min(origH, Math.round(my2 * panelScaleY));
+          // Clamp to at least 1×1: real panels are tens of px, but guard a
+          // degenerate rounding/tiny-box case so fitToDeviceSize can't divide by
+          // zero and makeCanvas/drawImage can't throw on a 0-size crop.
+          const fw = Math.max(1, fx2 - fx1), fh = Math.max(1, fy2 - fy1);
+          const pf = fitToDeviceSize(fw, fh, deviceTarget);
+          const pw = pf.w, ph = pf.h;
+          const cropCanvas = makeCanvas(pw, ph);
+          const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
+          cropCtx.drawImage(sourceCanvas, fx1, fy1, fw, fh, 0, 0, pw, ph);
           if (mono) {
-            const cropRgba = cropCtx.getImageData(0, 0, cw, ch).data;
-            zip.addFile(`${folder}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, cw, ch));
+            const cropRgba = cropCtx.getImageData(0, 0, pw, ph).data;
+            zip.addFile(`${folder}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph));
             // OCR still reads a full-colour JPEG crop: the dithered BMP would
             // only hurt text recognition (the --mono guidance to pair with
             // --no-ocr still applies, but OCR stays usable when both are on).
@@ -638,9 +674,9 @@ async function runMangaConversion() {
             // Rotate wide (landscape) panels to portrait so they display as
             // large as possible on the usual portrait reading screen; the
             // fixed-layout reader then scales each to fullscreen.
-            let panelCanvas = cropCanvas, pw = cw, ph = ch;
-            if (cw > ch) { panelCanvas = rotateCanvas90CW(cropCanvas); pw = ch; ph = cw; }
-            epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: pw, h: ph });
+            let panelCanvas = cropCanvas, epw = pw, eph = ph;
+            if (pw > ph) { panelCanvas = rotateCanvas90CW(cropCanvas); epw = ph; eph = pw; }
+            epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: epw, h: eph });
           }
         }
         panelCrops.push(cropBytes);
