@@ -285,13 +285,24 @@ async function collectFromEpub(bytes, fileName) {
     if (isImageName(fullHref)) {
       srcInZip = fullHref;
     } else {
-      // Spine item is an XHTML wrapper page — find the embedded image.
+      // Spine item is an XHTML wrapper page — find the embedded image. Take the
+      // first src-like attribute that is an IMAGE and resolves to a real ZIP
+      // member: Kobo-processed EPUBs inject <script src=".../kobo.js"> (and style
+      // links) BEFORE the <img>, so grabbing the first src outright would pick
+      // kobo.js and the conversion would die on an unidentifiable image. hrefs
+      // may also carry a #fragment/?query that must be stripped before the check.
       const entry = zip.findEntry(fullHref);
       if (!entry) continue;
       const xhtml = decoder.decode(await zip.readEntry(entry));
-      const imgM = xhtml.match(/(?:src|xlink:href)="([^"]+)"/);
-      if (!imgM) continue;
-      srcInZip = pathJoinNorm(pathDirname(fullHref), imgM[1]);
+      const xhtmlDir = pathDirname(fullHref);
+      srcInZip = null;
+      for (const m of xhtml.matchAll(/(?:src|xlink:href)="([^"]+)"/g)) {
+        const candidate = m[1].split("#", 1)[0].split("?", 1)[0];
+        if (!candidate || !isImageName(candidate)) continue;
+        const resolved = pathJoinNorm(xhtmlDir, candidate);
+        if (zip.findEntry(resolved)) { srcInZip = resolved; break; }
+      }
+      if (!srcInZip) continue;
     }
     const imgEntry = zip.findEntry(srcInZip);
     if (!imgEntry) {
