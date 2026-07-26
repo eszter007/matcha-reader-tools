@@ -650,7 +650,10 @@ async function runMangaConversion() {
           const fy1 = Math.max(0, Math.round(my1 * panelScaleY));
           const fx2 = Math.min(origW, Math.round(mx2 * panelScaleX));
           const fy2 = Math.min(origH, Math.round(my2 * panelScaleY));
-          const fw = fx2 - fx1, fh = fy2 - fy1;
+          // Clamp to at least 1×1: real panels are tens of px, but guard a
+          // degenerate rounding/tiny-box case so fitToDeviceSize can't divide by
+          // zero and makeCanvas/drawImage can't throw on a 0-size crop.
+          const fw = Math.max(1, fx2 - fx1), fh = Math.max(1, fy2 - fy1);
           const pf = fitToDeviceSize(fw, fh, deviceTarget);
           const pw = pf.w, ph = pf.h;
           const cropCanvas = makeCanvas(pw, ph);
