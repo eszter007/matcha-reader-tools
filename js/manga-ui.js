@@ -546,9 +546,9 @@ async function runMangaConversion() {
       // Downscale FIRST, before panel detection, so every downstream coordinate
       // (panel boxes, crop rects, OCR text boxes, the page dims in panels.idx)
       // lives in the resized space and matches the files actually written. When
-      // no device is selected fit.resized is false and this is a 1:1 draw — the
-      // default output is unchanged. Fill white first so transparent sources
-      // composite onto white (like the device's alpha handling), not black.
+      // no device is selected fit.resized is false and this is a 1:1 draw, so the
+      // default output is unchanged. (White-fill for transparent sources differs
+      // per canvas — see the detection/page and full-res source canvases below.)
       const origW = bitmap.width, origH = bitmap.height;
       const fit = fitToDeviceSize(origW, origH, deviceTarget);
       const imgW = fit.w, imgH = fit.h;
