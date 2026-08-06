@@ -3,7 +3,7 @@
  * input, image decoding, Gemini OCR calls, and the output zip. */
 "use strict";
 
-const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
+const GEMINI_DEFAULT_MODEL = "gemini-3.6-flash";
 
 /* Exact prompt from tools/manga_convert/convert_manga.py. */
 const PANEL_OCR_PROMPT = `This image is a single panel cropped from a Japanese manga page.
