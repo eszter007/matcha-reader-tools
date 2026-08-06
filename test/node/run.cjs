@@ -77,6 +77,28 @@ function testManga() {
   compareFile("panels.dat", dat, path.join(refDir, "panels.dat"));
   compareFile("meta.bin", manga.writeMetaBin("Test Manga", "Test Author"), path.join(refDir, "meta.bin"));
 
+  // meta.bin's optional language trailer. The EPUB fixture declares
+  // <dc:language>ja</dc:language>, so convert_manga.py's reference for it carries the
+  // trailer while the reference above (no declared language) must not -- the two
+  // comparisons together pin both halves of the format.
+  const epubRefMeta = path.join(FIXTURES, "ref_manga_epub", "meta.bin");
+  if (fs.existsSync(epubRefMeta)) {
+    compareFile("meta.bin language trailer",
+      manga.writeMetaBin("Epub Test Manga", "Epub Author", "ja"), epubRefMeta);
+  } else {
+    console.log("  skip (no ref_manga_epub fixture — rerun gen_references.py)");
+  }
+
+  // Language normalisation, mirroring convert_manga.py:normalize_language.
+  const langCases = [["jp", "ja"], ["JP", "ja"], ["cn", "zh"], ["kr", "ko"], ["ja", "ja"],
+                     ["ja-JP", "ja-JP"], ["ja_JP", "ja-JP"], ["zh-Hant", "zh-Hant"], ["", ""]];
+  for (const [input, want] of langCases) {
+    const got = manga.normalizeLanguage(input);
+    check(`normalizeLanguage(${JSON.stringify(input)}) == ${JSON.stringify(want)}`, got === want, `got ${JSON.stringify(got)}`);
+  }
+  check("no language writes no trailer",
+    manga.writeMetaBin("T", "A", "").length === 8 + 1 + 1);
+
   // The reference run should have produced renamed page copies too.
   for (let i = 0; i < names.length; i++) {
     const pageName = `page_${String(i).padStart(4, "0")}.png`;
@@ -459,8 +481,104 @@ async function testZipRoundTrip() {
   check("payload B", binary.bytesEqual(b, payloadB));
 }
 
+
+/* ── XTC / XTCH page format ──────────────────────────────────── */
+
+/* No Python reference exists (convert_manga.py has no XTC export), so instead of a byte diff
+ * these decode the encoder's output exactly the way the firmware's reader does
+ * (src/activities/reader/XtcReaderActivity.cpp) and compare against the source pixels. */
+function testXtc() {
+  console.log("XTC / XTCH page format (vs the firmware's decode):");
+  const w = 24, h = 16;
+  const gray = new Uint8Array(w*h);
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++) gray[y*w+x] = (x*10 + y*13) % 256;
+
+  // --- XTG: decode exactly as XtcReaderActivity.cpp:609-619 (MSB first, 0 = black)
+  const xtg = manga.encodeXtgPage(gray, w, h, 128);
+  {
+    const rowBytes = (w+7)>>3;
+    const bmp = xtg.subarray(22);
+    check('XTG size', xtg.length === 22 + rowBytes*h, `${xtg.length}`);
+    check('XTG magic', new DataView(xtg.buffer, xtg.byteOffset).getUint32(0, true) === 0x00475458);
+    let bad = 0;
+    for (let y=0;y<h;y++) for (let x=0;x<w;x++) {
+      const isBlack = !((bmp[y*rowBytes + (x>>3)] >> (7-(x&7))) & 1);
+      if (isBlack !== (gray[y*w+x] < 128)) bad++;
+    }
+    check('XTG pixels round-trip', bad === 0, `${bad} wrong`);
+  }
+
+  // --- XTH: decode exactly as XtcReaderActivity.cpp:513-527
+  const xth = manga.encodeXthPage(gray, w, h);
+  {
+    const planeSize = (w*h+7)>>3, colBytes = (h+7)>>3;
+    const data = xth.subarray(22);
+    const p1 = data.subarray(0, planeSize), p2 = data.subarray(planeSize);
+    check('XTH size', xth.length === 22 + planeSize*2, `${xth.length}`);
+    check('XTH magic', new DataView(xth.buffer, xth.byteOffset).getUint32(0, true) === 0x00485458);
+    let bad = 0;
+    for (let y=0;y<h;y++) for (let x=0;x<w;x++) {
+      const colIndex = w-1-x, off = colIndex*colBytes + (y>>3), bit = 7-(y&7);
+      const v = (((p1[off]>>bit)&1) << 1) | ((p2[off]>>bit)&1);
+      if (v !== 3 - (gray[y*w+x] >> 6)) bad++;
+    }
+    check('XTH pixels round-trip', bad === 0, `${bad} wrong`);
+  }
+  check('XTH rejects height % 8', (()=>{ try { manga.encodeXthPage(new Uint8Array(w*9), w, 9); return false; } catch(e){ return /multiple of 8/.test(e.message); } })());
+
+  // --- container: read back the way XtcParser::readHeader/readTitle/readAuthor/loadChapters do
+  {
+    const toc = [{ title: "Chapter 1", page: 0 }, { title: "Chapter 2", page: 1 }];
+    const file = manga.buildXtcFile([{bytes: xtg, w, h}, {bytes: xtg, w, h}],
+      { isHq: false, title: "Test Manga", author: "Test Author", language: "ja", toc });
+    const dv = new DataView(file.buffer, file.byteOffset);
+    const str = (off, len) => new TextDecoder().decode(file.subarray(off, off + len)).replace(/\0.*$/, "");
+
+    check("XTC magic", dv.getUint32(0, true) === 0x00435458);
+    check("version 1.0", file[4] === 1 && file[5] === 0);
+    check("pageCount", dv.getUint16(6, true) === 2);
+    check("hasMetadata flag", file[9] === 1);
+    check("hasChapters flag", file[11] === 1);
+    check("currentPage 1-based", dv.getUint32(12, true) === 1);
+
+    // The reader hardcodes these two offsets.
+    check("title at 0x38", str(0x38, 128) === "Test Manga", str(0x38, 128));
+    check("author at 0xB8", str(0xb8, 64) === "Test Author", str(0xb8, 64));
+
+    const chapterOffset = Number(dv.getBigUint64(0x30, true));
+    const indexOffset = Number(dv.getBigUint64(0x18, true));
+    const dataOffset = Number(dv.getBigUint64(0x20, true));
+    check("metadataOffset == 56", Number(dv.getBigUint64(0x10, true)) === 56);
+    check("chapters follow metadata", chapterOffset === 56 + 256);
+    check("index follows chapters", indexOffset === chapterOffset + toc.length * 96);
+    check("data follows index", dataOffset === indexOffset + 2 * 16);
+    // chapterCount is derived from the gap, so the gap must be exactly N*96.
+    check("chapter count derivable", (indexOffset - chapterOffset) / 96 === toc.length);
+    check("chapter 0 name", str(chapterOffset, 80) === "Chapter 1");
+    check("chapter 0 startPage", dv.getUint16(chapterOffset + 0x50, true) === 0);
+
+    check("entry0 offset", Number(dv.getBigUint64(indexOffset, true)) === dataOffset);
+    check("entry0 size", dv.getUint32(indexOffset + 8, true) === xtg.length);
+    check("entry0 dims", dv.getUint16(indexOffset + 12, true) === w && dv.getUint16(indexOffset + 14, true) === h);
+    check("entry1 offset", Number(dv.getBigUint64(indexOffset + 16, true)) === dataOffset + xtg.length);
+    check("total size", file.length === dataOffset + xtg.length * 2, `${file.length}`);
+    // Byte-identical on a re-run: nothing time- or environment-dependent leaks into the file.
+    const again = manga.buildXtcFile([{bytes: xtg, w, h}, {bytes: xtg, w, h}],
+      { isHq: false, title: "Test Manga", author: "Test Author", language: "ja", toc });
+    check("deterministic output", binary.bytesEqual(file, again));
+
+    // XTCH must announce itself in the CONTAINER magic -- the device takes bit depth from there.
+    const hq = manga.buildXtcFile([{bytes: xth, w, h}], { isHq: true, title: "T", author: "A" });
+    check("XTCH magic", new DataView(hq.buffer, hq.byteOffset).getUint32(0, true) === 0x48435458,
+      "0x" + new DataView(hq.buffer, hq.byteOffset).getUint32(0, true).toString(16));
+    check("XTCH without chapters has chapterOffset 0",
+      Number(new DataView(hq.buffer, hq.byteOffset).getBigUint64(0x30, true)) === 0);
+  }
+}
+
 (async () => {
   testManga();
+  testXtc();
   testMangaMono();
   testMangaFit();
   await testMangaEpub();

@@ -20,9 +20,8 @@
 </header>
 <main>
   <h2>📖 Manga Converter</h2>
-  <p class="lede">Converts manga into the reader's panel format: detects panel rectangles, asks
-  Gemini what text appears in each panel (plus an English translation), and packs everything into
-  the binary format the device reads natively.</p>
+  <p class="lede">AI panel detection for manga, in your browser. Finds the panels, optionally reads
+  and translates their text with Gemini, and exports for the Matcha Reader, as EPUB, or as XTC.</p>
 
   <div class="card">
     <h3>1. Choose your manga</h3>
@@ -38,24 +37,35 @@
   </div>
 
   <div class="card">
-    <h3>2. Panel detection</h3>
-    <div class="checks">
-      <label><input type="checkbox" id="manga-yolo" checked> AI panel detection
-        <span class="hint">— the same YOLO26 model as the desktop Python tool, running in your
-        browser (~21&nbsp;MB one-time download, then cached). Untick to use the white-gutter grid
-        heuristic instead.</span></label>
-      <label><input type="checkbox" id="manga-mono"> 1-bit BMP (Floyd–Steinberg dithering)
-        <span class="hint">— write pages and panel crops as black-and-white dithered BMP instead of
-        JPEG. The device paints these with a single fast refresh (no 4-level gray pass), so pages and
-        panels turn noticeably quicker. Best for pure line art; screentone gradients become dither
-        patterns. Pairs naturally with “Skip OCR”.</span></label>
-      <label><input type="checkbox" id="manga-epub"> Also export a portable EPUB
-        <span class="hint">— an extra <code>.epub</code> in the download for other e-readers/apps that
-        don't have Matcha's panel navigation. Each page is followed by its panels as full-screen
-        pages (wide panels rotated to show as large as possible), and the chapter list is kept as the
-        EPUB table of contents. Panels are JPEG and pages keep their JPEG/PNG format — both standard
-        EPUB image types, so the BMP option doesn't affect it. Adds memory and time for big
-        volumes.</span></label>
+    <h3>2. Export format</h3>
+    <div class="checks stacked" id="manga-format">
+      <label><input type="checkbox" class="fmt" value="matcha" checked> <span class="opt">Matcha Reader format</span>
+        <span class="hint">Panel-by-panel navigation with offline dictionary lookup and
+        translations.</span></label>
+      <label><input type="checkbox" class="fmt" value="epub"> <span class="opt">EPUB</span>
+        <span class="hint">Portable fixed-layout <code>.epub</code> — reads panel by panel on any
+        e-reader or app, without dictionary, translations or panel zoom.</span></label>
+      <label><input type="checkbox" class="fmt" value="xtc"> <span class="opt">XTC</span>
+        <span class="hint">Xteink's native page format for the stock firmware, black-and-white.
+        Pages are pre-rendered — pick a target resolution below.</span></label>
+      <label><input type="checkbox" class="fmt" value="xtch"> <span class="opt">XTCH</span>
+        <span class="hint">Same, in 4-level grayscale. Twice the size.</span></label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>3. Panel detection</h3>
+    <div class="checks stacked">
+      <label><input type="checkbox" id="manga-yolo" checked> <span class="opt">AI panel detection</span>
+        <span class="hint">Runs the YOLO26 model in your browser (~21&nbsp;MB once, then cached).
+        Untick for the faster white-gutter heuristic.</span></label>
+      <label><input type="checkbox" id="manga-panels-only"> <span class="opt">Panels only (no full pages)</span>
+        <span class="hint">Panel crops only — much smaller, opens straight into panel reading.
+        Nothing is lost: the cover, and any page whose panels miss part of the artwork, keep their
+        full page.</span></label>
+      <label id="manga-mono-row"><input type="checkbox" id="manga-mono"> <span class="opt">1-bit BMP (Floyd–Steinberg dithering)</span>
+        <span class="hint">Black-and-white pages that turn noticeably faster on the device. Best
+        for line art; screentone becomes dither patterns.</span></label>
     </div>
     <label for="manga-res" style="margin-top:0.6rem">Target resolution</label>
     <select id="manga-res">
@@ -64,20 +74,19 @@
       <option value="x3">Xteink X3 — 528×792</option>
     </select>
     <p class="hint" style="color:var(--muted);font-size:0.85rem;margin:0.3rem 0 0">
-      Downscales pages and panels to fit the chosen device screen (landscape images fit the rotated
-      box), so the download is smaller and the device decodes far fewer pixels per page — no visible
-      quality loss. Never upscales. Applies to every format (JPEG/PNG/BMP) and the EPUB. Leave on
-      <em>Original</em> to keep full resolution.</p>
+      Downscales to the device screen: smaller download, faster page turns, no visible quality loss.
+      Never upscales.</p>
   </div>
 
-  <div class="card">
-    <h3>3. Text recognition (Gemini)</h3>
+  <div class="card" id="card-ocr">
+    <h3>4. Text recognition (Gemini)</h3>
     <label for="manga-key">Gemini API key
       <span class="hint">— free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Stored only in this browser; sent only to Google.</span>
     </label>
     <input type="password" id="manga-key" autocomplete="off" placeholder="AIza…">
-    <div class="checks" style="margin-top:0.6rem">
-      <label><input type="checkbox" id="manga-no-ocr"> Skip OCR (panels only — no dictionary lookup or translations)</label>
+    <div class="checks stacked" style="margin-top:0.6rem">
+      <label><input type="checkbox" id="manga-no-ocr"> <span class="opt">Skip OCR</span>
+        <span class="hint">Detect panels but don't call Gemini — no text, no translations.</span></label>
     </div>
     <details>
       <summary>Advanced</summary>
@@ -90,8 +99,8 @@
     </details>
   </div>
 
-  <div class="card">
-    <h3>4. Book details <span class="hint" style="font-weight:400">(optional — auto-detected from EPUB/ComicInfo when present)</span></h3>
+  <div class="card" id="card-book">
+    <h3>5. Book details <span class="hint" style="font-weight:400">(optional — auto-detected from EPUB/ComicInfo when present)</span></h3>
     <div class="row">
       <div>
         <label for="manga-title">Title</label>
@@ -101,7 +110,45 @@
         <label for="manga-author">Author</label>
         <input type="text" id="manga-author" placeholder="auto">
       </div>
+      <div>
+        <label for="manga-language">Language</label>
+        <input type="text" id="manga-language" placeholder="e.g. ja" list="manga-language-options" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <!-- Suggestions only: the field stays free-text, so any ISO 639-1 tag not listed here
+             still works. Japanese/English/Chinese/Korean lead as the most common for this
+             reader; the rest are alphabetical by name. -->
+        <datalist id="manga-language-options">
+          <option value="ja">Japanese</option>
+          <option value="en">English</option>
+          <option value="zh">Chinese</option>
+          <option value="ko">Korean</option>
+          <option value="ar">Arabic</option>
+          <option value="cs">Czech</option>
+          <option value="da">Danish</option>
+          <option value="nl">Dutch</option>
+          <option value="fi">Finnish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="el">Greek</option>
+          <option value="he">Hebrew</option>
+          <option value="hi">Hindi</option>
+          <option value="hu">Hungarian</option>
+          <option value="id">Indonesian</option>
+          <option value="it">Italian</option>
+          <option value="no">Norwegian</option>
+          <option value="pl">Polish</option>
+          <option value="pt">Portuguese</option>
+          <option value="ro">Romanian</option>
+          <option value="ru">Russian</option>
+          <option value="es">Spanish</option>
+          <option value="sv">Swedish</option>
+          <option value="th">Thai</option>
+          <option value="tr">Turkish</option>
+          <option value="uk">Ukrainian</option>
+          <option value="vi">Vietnamese</option>
+        </datalist>
+      </div>
     </div>
+    <p class="hint">Set the language so the reader can split your reading stats by language. Only EPUBs and CBZs with a <code>ComicInfo.xml</code> declare one, so for anything else it stays empty unless you fill it in here. Read at conversion time — a book converted without it counts as "unknown" until you convert it again.</p>
     <label for="manga-toc">Chapters <span class="hint">— one per line: <code>page | title</code>, 0-based final page number. Overrides the EPUB's own chapters.</span></label>
     <textarea id="manga-toc" rows="3" placeholder="0 | Cover&#10;4 | Chapter 1&#10;36 | Chapter 2"></textarea>
   </div>
@@ -112,13 +159,13 @@
   <div id="progress" hidden><div id="progress-bar"></div><div id="progress-text"></div></div>
   <div id="log" hidden></div>
 
-  <div class="notice">
+  <div class="notice" id="notice-ocr">
     OCR sends each panel image to the Gemini API and can take a while for a full volume —
     keep this tab open. The screen is kept awake during conversion. On the free API tier,
     rate limits may make long volumes slow; the converter retries automatically.
   </div>
 
-  <div class="card">
+  <div class="card" id="card-install">
     <h3>Install on the device</h3>
     <p>The download is a zip with one folder (named after the title). Put that folder anywhere on
     the SD card — <code>/manga/YourTitle/</code> is a nice convention — either with a card reader

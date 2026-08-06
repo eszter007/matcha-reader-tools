@@ -120,6 +120,24 @@ textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
 .checks { display: flex; gap: 0.4rem 1.1rem; flex-wrap: wrap; margin-top: 0.3rem; }
 .checks label { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 400; margin: 0; font-size: 0.95rem; }
 
+/* Stacked variant, for options that carry an explanation: the description sits UNDER the option
+   name rather than running on beside it, aligned to that name instead of the checkbox. Plain
+   .checks stays inline for compact groups (e.g. the font-size row). */
+.checks.stacked { flex-direction: column; gap: 0.75rem; }
+.checks.stacked label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+  row-gap: 0.15rem;
+  align-items: start;
+  font-weight: 600;
+}
+.checks.stacked label input[type="checkbox"] { grid-column: 1; grid-row: 1; margin: 0.15rem 0 0; }
+.checks.stacked label .opt { grid-column: 2; grid-row: 1; }
+.checks.stacked label .hint { grid-column: 2; grid-row: 2; font-size: 0.85rem; line-height: 1.45; }
+/* display:grid/flex would otherwise beat the hidden attribute. */
+.checks label[hidden], [hidden] { display: none !important; }
+
 button.primary {
   background: var(--matcha);
   border: none;

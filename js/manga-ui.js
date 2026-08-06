@@ -207,8 +207,9 @@ async function collectFromPdf(bytes, name) {
   } catch (e) { /* metadata is best-effort */ }
 
   return {
+    // A PDF carries no language field, so it stays empty here -- set it in the form.
     pages,
-    meta: { title, author },
+    meta: { title, author, language: "" },
     tocEntries: [],
     sourceLabel: baseName(name),
     cleanup: () => { loadingTask.destroy().catch(() => {}); },
@@ -231,7 +232,7 @@ async function collectPagesFromInput(files) {
   const ordered = naturalSortPaths([...byName.keys()]);
   return {
     pages: ordered.map((name) => ({ name, read: () => readFileBytes(byName.get(name)) })),
-    meta: { title: "", author: "" },
+    meta: { title: "", author: "", language: "" },
     tocEntries: [],
     sourceLabel: `${ordered.length} image files`,
   };
@@ -248,7 +249,7 @@ async function collectFromCbz(bytes, fileName) {
   if (!byBase.size) throw new Error("No image files found in the archive");
   const ordered = naturalSortPaths([...byBase.keys()]);
 
-  let meta = { title: "", author: "" };
+  let meta = { title: "", author: "", language: "" };
   const infoEntry = zip.entries.find((e) => baseName(e.name).toLowerCase() === "comicinfo.xml");
   if (infoEntry) {
     try {
@@ -439,34 +440,167 @@ async function buildMangaEpub({ title, author, epubPages, tocEntries }) {
   return new Uint8Array(await zw.toBlob().arrayBuffer());
 }
 
+/* Encode one image as an XTC (1-bit) and/or XTCH (2-bit) page, laid out for the device screen.
+ *
+ * Every page in a book is rendered onto the SAME canvas size, because the reader allocates one
+ * page buffer for the whole session and cannot grow it -- a later, larger page just fails to load
+ * ("Buffer too small: need N, have M"). Panels are all different shapes, so each is scaled to fit
+ * and centred on white, and a landscape one is rotated to portrait first so it fills the screen
+ * rather than sitting in a thin band (the same thing the EPUB export does).
+ *
+ * The 1-bit page is dithered (Floyd-Steinberg) rather than hard-thresholded: a plain threshold
+ * turns screentone into flat black. XTH additionally needs a height that is a multiple of 8, which
+ * every device target already satisfies (800 and 792 both divide by 8). */
+function encodeXtcVariants(src, wantXtc, wantXtch, target) {
+  const [w, h] = target;
+  const page = makeCanvas(w, h);
+  const ctx = page.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, w, h);
+
+  let img = src;
+  if (src.width > src.height && w < h) img = rotateCanvas90CW(src);
+  const scale = Math.min(w / img.width, h / img.height);
+  const dw = Math.max(1, Math.round(img.width * scale));
+  const dh = Math.max(1, Math.round(img.height * scale));
+  ctx.drawImage(img, Math.round((w - dw) / 2), Math.round((h - dh) / 2), dw, dh);
+
+  const gray = grayFromRGBA(ctx.getImageData(0, 0, w, h).data, w, h);
+  const out = {};
+  if (wantXtc) {
+    const dithered = floydSteinbergMono(gray, w, h);   // 0/1 per pixel, 1 = white
+    const bw = new Uint8Array(w * h);
+    for (let i = 0; i < bw.length; i++) bw[i] = dithered[i] ? 255 : 0;
+    out.xtc = { bytes: encodeXtgPage(bw, w, h), w, h };
+  }
+  if (wantXtch) out.xtch = { bytes: encodeXthPage(gray, w, h), w, h };
+  return out;
+}
+
+/* ── Format selection & conditional UI ────────────────────────── */
+
+function formatBoxes() { return [...document.querySelectorAll("#manga-format .fmt")]; }
+
+/* Nothing is preselected -- the user picks what they want, and an empty selection is rejected at
+ * Convert rather than guessed at. */
+function selectedFormats() {
+  return new Set(formatBoxes().filter((cb) => cb.checked).map((cb) => cb.value));
+}
+
+/* Hide what the chosen formats can't use, so the page only asks for what it will act on.
+ *  - OCR text and translations are stored in panels.dat, which only the device folder has.
+ *  - Title/author/chapters are embedded in meta.bin AND in the EPUB, so they stay for both;
+ *    XTC/XTCH carry them in their own metadata block, written from the same fields.
+ *  - 1-bit BMP only affects the pages written into the device folder; the EPUB needs a core
+ *    media type and XTC/XTCH have their own bit depths. */
+function applyFormatVisibility() {
+  const f = selectedFormats();
+  // Before anything is picked, show everything: the steps only start disappearing once the user
+  // has said what they want, so an untouched page never looks like it is missing parts.
+  const nothingPicked = f.size === 0;
+  const matcha = nothingPicked || f.has("matcha");
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.hidden = !on; };
+  show("card-ocr", matcha);
+  show("notice-ocr", matcha);
+  show("card-install", matcha);
+  show("card-book", matcha || nothingPicked || f.has("epub") || f.has("xtc") || f.has("xtch"));
+  show("manga-mono-row", matcha);
+  renumberSteps();
+}
+
+/* The step headings are numbered in the markup; hiding a card would leave a gap ("1, 2, 3, 5"),
+ * so the visible ones are renumbered in place. The original text minus its number is kept on the
+ * element the first time round. */
+function renumberSteps() {
+  let n = 0;
+  for (const card of document.querySelectorAll("main .card")) {
+    const h = card.querySelector("h3");
+    if (!h) continue;
+    if (h.dataset.base === undefined) {
+      const m = h.innerHTML.match(/^\s*\d+\.\s*([\s\S]*)$/);
+      if (!m) continue;               // unnumbered card (e.g. "Install on the device")
+      h.dataset.base = m[1];
+    }
+    if (card.hidden) continue;
+    h.innerHTML = `${++n}. ${h.dataset.base}`;
+  }
+}
+
+/* Validation warnings ("pick a format", "choose a file") describe a state the user can fix right
+ * there, so they are tagged and cleared as soon as the input they complain about changes --
+ * a stale complaint next to a now-valid form reads as a failure that already happened. */
+function logValidation(text) {
+  logLine(text, "warn validation");
+}
+
+function clearValidationWarnings() {
+  const log = $("log");
+  if (!log) return;
+  for (const el of log.querySelectorAll(".validation")) el.remove();
+  if (!log.children.length) log.hidden = true;
+}
+
 async function runMangaConversion() {
   const fileInput = $("manga-file");
   const files = fileInput.files;
   if (!files || !files.length) {
-    logLine("Choose a .cbz/.zip/.epub file or a set of page images first.", "warn");
+    logValidation("Choose a .cbz/.zip/.epub file or a set of page images first.");
     return;
   }
 
-  const noOcr = $("manga-no-ocr").checked;
+  // Any combination of the device folder, a portable EPUB, and Xteink's XTC/XTCH. Nothing is
+  // preselected, so an empty pick is a user error rather than a default to guess at.
+  const formats = selectedFormats();
+  if (!formats.size) {
+    logValidation("Pick at least one export format.");
+    return;
+  }
+
+  // OCR text and translations are only ever stored in panels.dat, so without the device folder
+  // there is nowhere for them to go -- skip OCR implicitly rather than demanding an API key for
+  // output that would be discarded. (The OCR section is hidden in that case too.)
+  const noOcr = $("manga-no-ocr").checked || !formats.has("matcha");
   const mono = $("manga-mono").checked;
-  const epub = $("manga-epub").checked;
+  const epub = formats.has("epub");
+  const matchaFolder = formats.has("matcha");
+  const wantXtc = formats.has("xtc");
+  const wantXtch = formats.has("xtch");
+  const anyXtc = wantXtc || wantXtch;
+  const panelsOnly = $("manga-panels-only").checked;
+  // How much of a page's ink must sit inside its panels before the full page may be dropped.
+  // Not 100%: a stray speck in the gutter or a page number outside every panel is not content
+  // worth keeping a whole page image for.
+  const PANELS_ONLY_MIN_INK_COVERAGE = 0.98;
+  let pagesKeptForCoverage = 0;
+  // XTC/XTCH pages are accumulated as encoded bitmaps (one per page/panel image, same reading
+  // order as the EPUB) and assembled once at the end, since the page table needs every size.
+  const xtcPages = [], xtchPages = [];
+  const xtcPageMap = new Map();   // source page index -> position in the exported XTC sequence
   // Target device resolution: "" (original), "x3", or "x4". Downscales pages and
   // panels before detection so the device decodes fewer pixels; never upscales.
   // Validate against own keys so a stray persisted value (e.g. "__proto__")
   // can't yield Object.prototype and NaN sizes downstream.
   const resChoice = validResChoice($("manga-res").value);
   const deviceTarget = resChoice ? MANGA_DEVICE_TARGETS[resChoice] : null;
+  // XTC/XTCH are pre-rendered: every page is written at one fixed size, because the reader
+  // allocates a single page buffer for the book. "Original" leaves panels at their own (varying,
+  // full-resolution) sizes, which has no sensible answer here -- so a device target is required.
+  if (anyXtc && !deviceTarget) {
+    logValidation("Pick a target resolution (X3 or X4) for XTC/XTCH — those formats need a fixed page size.");
+    return;
+  }
   const apiKey = $("manga-key").value.trim();
   const model = $("manga-model").value.trim() || GEMINI_DEFAULT_MODEL;
   if (!noOcr && !apiKey) {
-    logLine("Enter a Gemini API key, or tick \"Skip OCR\" for panels-only output.", "warn");
+    logValidation("Enter a Gemini API key, or tick \"Skip OCR\" for panels-only output.");
     return;
   }
   saveSetting("gemini-key", apiKey);
   saveSetting("gemini-model", model);
   saveSetting("manga-yolo", $("manga-yolo").checked ? "1" : "0");
   saveSetting("manga-mono", mono ? "1" : "0");
-  saveSetting("manga-epub", epub ? "1" : "0");
+  saveSetting("manga-panels-only", panelsOnly ? "1" : "0");
+  saveSetting("manga-format", [...formats].join(","));
   saveSetting("manga-res", resChoice);
 
   const panelMargin = parseInt($("manga-margin").value, 10);
@@ -516,6 +650,7 @@ async function runMangaConversion() {
 
     const metaTitle = $("manga-title").value.trim() || collected.meta.title;
     const metaAuthor = $("manga-author").value.trim() || collected.meta.author;
+    const metaLanguage = $("manga-language").value.trim() || collected.meta.language;
     const folder = sanitizeFolderName(metaTitle || "Manga");
 
     const zip = new ZipWriter();
@@ -570,13 +705,53 @@ async function runMangaConversion() {
 
       const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
 
+      let boxes = null;
+      if (yolo) {
+        try {
+          boxes = await detectPanelsYolo(yolo.session, yolo.ort, rgba, imgW, imgH);
+        } catch (e) {
+          logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
+        }
+      }
+      if (!boxes) {
+        const gray = grayFromRGBA(rgba, imgW, imgH);
+        boxes = detectPanelsGrid(gray, imgW, imgH);
+      }
+      boxes = sortPanelsMangaOrder(boxes);
+
+      // Panels-only must not lose anything the detector missed: with no full page behind them,
+      // uncovered artwork would simply be unreachable. Measure how much of this page's ink falls
+      // inside the panels (expanded by the same crop margin that will be applied) and keep the
+      // full page whenever that falls short. The device already handles such mixed books -- a
+      // page with no crop shows as a full page -- so the result is panels where detection is
+      // good and pages where it is not, rather than silent gaps.
+      let keepPageImage = true;
+      if (panelsOnly && pageIdx !== 0) {
+        const marginedRects = boxes.map(([x1, y1, x2, y2]) =>
+          [Math.max(0, x1 - margin), Math.max(0, y1 - margin), Math.min(imgW, x2 + margin), Math.min(imgH, y2 + margin)]);
+        const coverage = panelInkCoverage(grayFromRGBA(rgba, imgW, imgH), imgW, imgH, marginedRects);
+        keepPageImage = coverage < PANELS_ONLY_MIN_INK_COVERAGE;
+        if (keepPageImage) {
+          pagesKeptForCoverage++;
+          logLine(`Page ${pageIdx + 1}: panels cover ${(coverage * 100).toFixed(1)}% of the artwork — keeping the full page so nothing is lost.`, "warn");
+        }
+      }
+
       // Copy the page to a canonical, trivially-sortable filename. In mono mode
       // it becomes a 1-bit Floyd-Steinberg-dithered BMP the device paints with a
       // single fast black-and-white refresh (no 4-level gray pass). A resized
       // JPEG/PNG page is re-encoded (source bytes no longer match); otherwise the
       // source is copied byte-for-byte.
       const pageBase = `page_${String(pageIdx).padStart(4, "0")}`;
-      if (mono) {
+      // Panels-only drops the page image -- the device sees a page with no image and goes
+      // straight to its panels -- but only where the panels actually cover the page's content
+      // (see keepPageImage above). Page 0 is always kept: findCoverImage() picks it up as the
+      // Library/Home cover, and without it the book has none. Missing pages do not shift the
+      // rest: the device maps page index -> image by position, so index 0 resolves to the cover
+      // and any index past the ones present resolves to "" (no image).
+      if (!matchaFolder || !keepPageImage) {
+        // nothing written for this page
+      } else if (mono) {
         zip.addFile(`${folder}/${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH));
       } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized) {
         zip.addFile(`${folder}/${pageBase}${ext}`, srcBytes);
@@ -592,7 +767,9 @@ async function runMangaConversion() {
       // when they're already JPEG/PNG and unresized, otherwise re-encode from the
       // (possibly downscaled) canvas.
       const epubImages = [];
-      if (epub) {
+      // Panels-only leaves the full pages out of the EPUB too, so the option means the same thing
+      // in both formats -- including keeping the page wherever its panels miss content.
+      if (epub && keepPageImage) {
         let pageBytes, pageMime;
         if (!wasResized && (ext === ".jpg" || ext === ".jpeg")) { pageBytes = srcBytes; pageMime = "image/jpeg"; }
         else if (!wasResized && ext === ".png") { pageBytes = srcBytes; pageMime = "image/png"; }
@@ -600,20 +777,12 @@ async function runMangaConversion() {
         else { pageBytes = await canvasToJpegBytes(canvas, 0.92); pageMime = "image/jpeg"; }
         epubImages.push({ bytes: pageBytes, mime: pageMime, w: imgW, h: imgH });
       }
-
-      let boxes = null;
-      if (yolo) {
-        try {
-          boxes = await detectPanelsYolo(yolo.session, yolo.ort, rgba, imgW, imgH);
-        } catch (e) {
-          logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
-        }
+      if (anyXtc) xtcPageMap.set(pageIdx, wantXtc ? xtcPages.length : xtchPages.length);
+      if (anyXtc && keepPageImage) {
+        const v = encodeXtcVariants(canvas, wantXtc, wantXtch, deviceTarget);
+        if (v.xtc) xtcPages.push(v.xtc);
+        if (v.xtch) xtchPages.push(v.xtch);
       }
-      if (!boxes) {
-        const gray = grayFromRGBA(rgba, imgW, imgH);
-        boxes = detectPanelsGrid(gray, imgW, imgH);
-      }
-      boxes = sortPanelsMangaOrder(boxes);
 
       // Full-resolution page for the panel crops. A panel is shown zoomed to fill
       // the screen, so cropping it from the already-downscaled page magnifies a
@@ -641,7 +810,11 @@ async function runMangaConversion() {
         const mx2 = Math.min(imgW, x2 + margin);
         const my2 = Math.min(imgH, y2 + margin);
         let cropBytes = null;  // full-colour JPEG crop for OCR (null = no crop / no OCR)
-        if (!isFullPagePanel(boxes[panelIdx], imgW, imgH)) {
+        // A full-page panel normally gets no crop: the page image is already the best
+        // presentation of it. Panels-only books have no page image to fall back on, so the crop
+        // must be written anyway or that page would export nothing at all.
+        const fullPagePanel = isFullPagePanel(boxes[panelIdx], imgW, imgH);
+        if (!fullPagePanel || panelsOnly) {
           // Map the detected rect into full-resolution page coordinates, then draw
           // that region straight into a device-fitted panel canvas (one drawImage
           // crops + scales). fitToDeviceSize fits a landscape panel against the
@@ -661,16 +834,18 @@ async function runMangaConversion() {
           cropCtx.drawImage(sourceCanvas, fx1, fy1, fw, fh, 0, 0, pw, ph);
           if (mono) {
             const cropRgba = cropCtx.getImageData(0, 0, pw, ph).data;
-            zip.addFile(`${folder}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph));
+            if (matchaFolder) {
+              zip.addFile(`${folder}/${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph));
+            }
             // OCR still reads a full-colour JPEG crop: the dithered BMP would
             // only hurt text recognition (the --mono guidance to pair with
             // --no-ocr still applies, but OCR stays usable when both are on).
             if (!noOcr) cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
           } else {
             cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
-            zip.addFile(`${folder}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
+            if (matchaFolder) zip.addFile(`${folder}/${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
           }
-          if (epub) {
+          if (epub && !fullPagePanel) {
             // Rotate wide (landscape) panels to portrait so they display as
             // large as possible on the usual portrait reading screen; the
             // fixed-layout reader then scales each to fullscreen.
@@ -678,8 +853,16 @@ async function runMangaConversion() {
             if (pw > ph) { panelCanvas = rotateCanvas90CW(cropCanvas); epw = ph; eph = pw; }
             epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: epw, h: eph });
           }
+          if (anyXtc && !fullPagePanel) {
+            const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget);
+            if (v.xtc) xtcPages.push(v.xtc);
+            if (v.xtch) xtchPages.push(v.xtch);
+          }
         }
-        panelCrops.push(cropBytes);
+        // OCR semantics stay as the Python tool's: a full-page panel gets an empty result even
+        // when panels-only forced its crop to be written, so enabling the option cannot silently
+        // multiply Gemini calls.
+        panelCrops.push(fullPagePanel ? null : cropBytes);
         panelRects.push([mx1, my1, mx2, my2]);
       }
 
@@ -737,30 +920,70 @@ async function runMangaConversion() {
     const dat = new Uint8Array(datOffset);
     let off = 0;
     for (const chunk of datChunks) { dat.set(chunk, off); off += chunk.length; }
-    zip.addFile(`${folder}/panels.dat`, dat);
+    if (matchaFolder) {
+      zip.addFile(`${folder}/panels.dat`, dat);
+      const metaBin = writeMetaBin(metaTitle, metaAuthor, metaLanguage);
+      if (metaBin) zip.addFile(`${folder}/meta.bin`, metaBin);
+      if (tocEntries.length) zip.addFile(`${folder}/toc.idx`, writeTocIdx(tocEntries));
+    }
 
-    const metaBin = writeMetaBin(metaTitle, metaAuthor);
-    if (metaBin) zip.addFile(`${folder}/meta.bin`, metaBin);
-    if (tocEntries.length) zip.addFile(`${folder}/toc.idx`, writeTocIdx(tocEntries));
-
-    // Optional portable EPUB alongside the native panel folder.
+    // Extra single-file outputs (EPUB / XTC / XTCH). They ride inside the zip when the device
+    // folder is also being exported, otherwise they are the download themselves.
+    const extras = [];
     if (epub && epubPages.length) {
       setProgress(pagesDone, pages.length, "Building EPUB…");
       const epubBytes = await buildMangaEpub({ title: metaTitle, author: metaAuthor, epubPages, tocEntries });
-      zip.addFile(`${folder}.epub`, epubBytes);
-      logLine(`Built ${folder}.epub (${epubPages.reduce((n, p) => n + p.images.length, 0)} images) — a portable copy for other readers.`);
+      extras.push({ name: `${folder}.epub`, bytes: epubBytes, type: "application/epub+zip" });
+      logLine(`Built ${folder}.epub (${epubPages.reduce((n, p) => n + p.images.length, 0)} images).`);
+    }
+    // The chapter list indexes the EXPORTED page sequence (each page followed by its panels),
+    // not the source page numbers, so a chapter starting at source page N lands on that page's
+    // entry in xtcPageMap.
+    const xtcToc = tocEntries
+      .map(([pageIndex, chapterTitle]) => ({ title: chapterTitle, page: xtcPageMap.get(pageIndex) }))
+      .filter((c) => c.page !== undefined)
+      .sort((a, b) => a.page - b.page);
+    const xtcMeta = { title: metaTitle, author: metaAuthor, language: metaLanguage, toc: xtcToc };
+    if (wantXtc && xtcPages.length) {
+      extras.push({ name: `${folder}.xtc`, bytes: buildXtcFile(xtcPages, { ...xtcMeta, isHq: false }), type: "application/octet-stream" });
+      logLine(`Built ${folder}.xtc (${xtcPages.length} pages, 1-bit).`);
+    }
+    if (wantXtch && xtchPages.length) {
+      extras.push({ name: `${folder}.xtch`, bytes: buildXtcFile(xtchPages, { ...xtcMeta, isHq: true }), type: "application/octet-stream" });
+      logLine(`Built ${folder}.xtch (${xtchPages.length} pages, 2-bit grayscale).`);
     }
 
     setProgress(pagesDone, pages.length, "Packaging…");
-    const blob = zip.toBlob();
-    logLine(`Done: ${pagesDone} pages, ${totalPanels} panels` +
+    const summary = `Done: ${pagesDone} pages, ${totalPanels} panels` +
       (noOcr ? "" : `, ${totalTextBlocks} text blocks`) +
       (deviceTarget ? `, ${resChoice.toUpperCase()} resolution` : "") +
-      (mono ? ", 1-bit dithered BMP" : "") +
-      (epub ? ", + portable EPUB" : "") + ` — ${formatBytes(blob.size)}`);
-    logLine(`Unzip onto the SD card (e.g. /manga/) or upload the "${folder}" folder via the device's web file transfer.` +
-      (epub ? ` The "${folder}.epub" inside the zip is a standalone copy for other e-readers/apps.` : ""));
-    downloadBlob(blob, `${folder}.zip`);
+      (mono && matchaFolder ? ", 1-bit dithered BMP" : "") +
+      (pagesKeptForCoverage ? `, ${pagesKeptForCoverage} full page(s) kept where panels missed content` : "");
+
+    if (matchaFolder) {
+      for (const e of extras) zip.addFile(e.name, e.bytes);
+      const blob = zip.toBlob();
+      logLine(`${summary}${extras.length ? `, + ${extras.map((e) => e.name.split(".").pop().toUpperCase()).join(" + ")}` : ""} — ${formatBytes(blob.size)}`);
+      logLine(`Unzip onto the SD card (e.g. /manga/) or upload the "${folder}" folder via the device's web file transfer.` +
+        (extras.length ? ` The ${extras.map((e) => `"${e.name}"`).join(" and ")} inside the zip ${extras.length > 1 ? "are" : "is"} for other readers.` : ""));
+      downloadBlob(blob, `${folder}.zip`);
+    } else if (extras.length === 1) {
+      // A single file needs no zip wrapper -- nothing to unpack.
+      const only = extras[0];
+      const blob = new Blob([only.bytes], { type: only.type });
+      logLine(`${summary} — ${formatBytes(blob.size)}`);
+      logLine(`Copy "${only.name}" to your reader.`);
+      downloadBlob(blob, only.name);
+    } else if (extras.length) {
+      const outZip = new ZipWriter();
+      for (const e of extras) outZip.addFile(e.name, e.bytes);
+      const blob = outZip.toBlob();
+      logLine(`${summary} — ${formatBytes(blob.size)}`);
+      logLine(`Unzip and copy ${extras.map((e) => `"${e.name}"`).join(" / ")} to your reader.`);
+      downloadBlob(blob, `${folder}.zip`);
+    } else {
+      throw new Error("Nothing to export: no pages were produced");
+    }
     setProgress(pagesDone, pagesDone, "Complete");
   } catch (e) {
     logLine("Error: " + e.message, "error");
@@ -781,7 +1004,16 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-model").value = loadSetting("gemini-model", GEMINI_DEFAULT_MODEL);
   $("manga-yolo").checked = loadSetting("manga-yolo", "1") === "1";
   $("manga-mono").checked = loadSetting("manga-mono", "0") === "1";
-  $("manga-epub").checked = loadSetting("manga-epub", "0") === "1";
+  $("manga-panels-only").checked = loadSetting("manga-panels-only", "0") === "1";
+  {
+    const saved = new Set(loadSetting("manga-format", "").split(",").filter(Boolean));
+    for (const cb of formatBoxes()) cb.checked = saved.has(cb.value);
+    for (const cb of formatBoxes()) {
+      cb.addEventListener("change", applyFormatVisibility);
+      cb.addEventListener("change", clearValidationWarnings);
+    }
+    applyFormatVisibility();
+  }
   $("manga-res").value = validResChoice(loadSetting("manga-res", ""));
   $("manga-run").addEventListener("click", runMangaConversion);
   $("manga-cancel").addEventListener("click", () => { mangaState.cancelled = true; });
@@ -790,6 +1022,11 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     if (files.length) {
       $("manga-file-label").textContent = files.length === 1
         ? files[0].name : `${files.length} files selected`;
+      clearValidationWarnings();
     }
   });
+  // The API-key warning is fixed by either supplying a key or ticking Skip OCR.
+  $("manga-key").addEventListener("input", clearValidationWarnings);
+  $("manga-no-ocr").addEventListener("change", clearValidationWarnings);
+  $("manga-res").addEventListener("change", clearValidationWarnings);
 }

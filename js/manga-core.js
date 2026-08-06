@@ -11,6 +11,11 @@
 const MANGA_FORMAT_VERSION = 2;   // v2 adds a per-panel translation string
 const TOC_FORMAT_VERSION = 1;
 const META_FORMAT_VERSION = 1;
+/* Panel crops live in their own subfolder so the book folder holds only page images: the device
+ * walks every entry of the book folder when opening a book, and a crop per panel dominated that
+ * scan (measured 6499ms for 2396 entries, of which 219 were pages and 974 were crops). Matches
+ * convert_manga.py:PANEL_CROP_SUBDIR. The device still reads the older flat layout. */
+const PANEL_CROP_SUBDIR = "panels";
 
 const MANGA_IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp"]);
 
@@ -78,6 +83,173 @@ function naturalSortPaths(paths) {
 /* ── Panel detection: white-gutter grid heuristic ─────────────── */
 
 /* PIL Image.convert("L") luminance (ITU-R 601-2), bit-exact. */
+/* ── XTC / XTCH (Xteink native page format) ───────────────────
+ *
+ * Ported from the firmware's reader, not from a Python tool -- convert_manga.py has no XTC
+ * export, so there is no reference output to diff against. Layout per lib/Xtc/Xtc/XtcTypes.h
+ * and src/activities/reader/XtcReaderActivity.cpp:
+ *
+ *   file:  56-byte header, then a 16-byte page-table entry per page, then the page data
+ *   page:  22-byte XTG/XTH header, then the bitmap
+ *   XTG (1-bit):  row-major, 8 px/byte, MSB = leftmost, and 0 = BLACK (inverted vs the usual)
+ *   XTH (2-bit):  two bit planes; columns right-to-left, 8 vertical px/byte, MSB = topmost;
+ *                 value = (bit1 << 1) | bit2, 0=white 1=dark grey 2=light grey 3=black
+ */
+const XTC_MAGIC = 0x00435458;  // "XTC\0"
+const XTG_MAGIC = 0x00475458;  // "XTG\0" -- 1-bit page
+const XTH_MAGIC = 0x00485458;  // "XTH\0" -- 2-bit page
+const XTC_HEADER_SIZE = 56;
+const XTC_PAGE_ENTRY_SIZE = 16;
+const XTG_PAGE_HEADER_SIZE = 22;
+
+/* 1-bit page. `gray` is one byte per pixel; anything below `threshold` becomes black.
+ * Dither first (floydSteinbergMono) for photographic art -- this is a hard threshold. */
+function encodeXtgPage(gray, w, h, threshold = 128) {
+  const rowBytes = (w + 7) >> 3;
+  const out = new ByteWriter(XTG_PAGE_HEADER_SIZE + rowBytes * h);
+  out.u32(XTG_MAGIC); out.u16(w); out.u16(h);
+  out.u8(0); out.u8(0);                 // colorMode = monochrome, compression = none
+  out.u32(rowBytes * h);
+  out.u32(0); out.u32(0);               // md5 (optional) left zero
+  const bmp = new Uint8Array(rowBytes * h).fill(0xff);  // 1 = white
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (gray[y * w + x] < threshold) bmp[y * rowBytes + (x >> 3)] &= ~(1 << (7 - (x & 7)));
+    }
+  }
+  out.bytes(bmp);
+  return out.toUint8Array();
+}
+
+/* 2-bit page. Height MUST be a multiple of 8: the firmware sizes the buffer as
+ * ((w*h+7)/8)*2 but indexes it as ((h+7)/8)*w per plane, and those agree only then --
+ * otherwise it reads past what it allocated. Callers pad the image instead. */
+function encodeXthPage(gray, w, h) {
+  if (h % 8 !== 0) throw new Error(`XTH height must be a multiple of 8 (got ${h})`);
+  const colBytes = h >> 3;
+  const planeSize = (w * h + 7) >> 3;
+  const out = new ByteWriter(XTG_PAGE_HEADER_SIZE + planeSize * 2);
+  out.u32(XTH_MAGIC); out.u16(w); out.u16(h);
+  out.u8(0); out.u8(0);
+  out.u32(planeSize * 2);
+  out.u32(0); out.u32(0);
+  const plane1 = new Uint8Array(planeSize), plane2 = new Uint8Array(planeSize);
+  for (let x = 0; x < w; x++) {
+    const colIndex = w - 1 - x;
+    for (let y = 0; y < h; y++) {
+      // 4 levels, matching the reader's 0=white .. 3=black ordering.
+      const v = 3 - (gray[y * w + x] >> 6);
+      if (!v) continue;
+      const off = colIndex * colBytes + (y >> 3);
+      const bit = 7 - (y & 7);
+      if (v & 2) plane1[off] |= 1 << bit;
+      if (v & 1) plane2[off] |= 1 << bit;
+    }
+  }
+  out.bytes(plane1); out.bytes(plane2);
+  return out.toUint8Array();
+}
+
+/* Assemble the container.
+ *
+ * pages: [{bytes, w, h}] already encoded by encodeXtgPage/encodeXthPage, in reading order.
+ * opts:  {isHq, title, author, language, toc:[{title, page}]}
+ *
+ * Layout matches both the firmware's reader and bigbag/epub-to-xtc-converter:
+ *   header(56) | metadata(256) | chapters(96 each) | page index(16 each) | page data
+ *
+ * The container magic -- not the page magic -- is what tells the device the bit depth, so a
+ * 2-bit book MUST say "XTCH" or its XTH pages get decoded as 1-bit. The reader also takes the
+ * title from a fixed 0x38 and the author from 0xB8, which is the metadata block at offset 56,
+ * and derives the chapter count from (pageTableOffset - chapterOffset) / 96 -- so the chapters
+ * have to sit between the metadata and the index, not anywhere else. */
+function buildXtcFile(pages, opts = {}) {
+  const { isHq = false, title = "", author = "", language = "", toc = [] } = opts;
+  const enc = new TextEncoder();
+  const fit = (str, max) => enc.encode(str).subarray(0, max - 1);  // room for the NUL
+
+  const HEADER = XTC_HEADER_SIZE, METADATA = 256, CHAPTER = 96;
+  const chapterOffset = HEADER + METADATA;
+  const indexOffset = chapterOffset + toc.length * CHAPTER;
+  const dataOffset = indexOffset + pages.length * XTC_PAGE_ENTRY_SIZE;
+  const total = dataOffset + pages.reduce((n, p) => n + p.bytes.length, 0);
+
+  const buf = new Uint8Array(total);
+  const view = new DataView(buf.buffer);
+  buf.set(enc.encode(isHq ? "XTCH" : "XTC\0"), 0);
+  buf[4] = 1; buf[5] = 0;                       // version 1.0
+  view.setUint16(6, pages.length, true);
+  buf[8] = 0;                                   // readDirection (0 = L->R, as the reference writes)
+  buf[9] = 1;                                   // hasMetadata
+  buf[10] = 0;                                  // hasThumbnails
+  buf[11] = toc.length ? 1 : 0;
+  view.setUint32(12, 1, true);                  // currentPage, 1-based
+  view.setBigUint64(0x10, BigInt(HEADER), true);        // metadataOffset
+  view.setBigUint64(0x18, BigInt(indexOffset), true);   // pageTableOffset
+  view.setBigUint64(0x20, BigInt(dataOffset), true);
+  view.setBigUint64(0x28, 0n, true);                    // thumbOffset
+  // Written as 64-bit: the header struct declares uint32 + padding here, but the reader seeks to
+  // 0x30 and reads 8 bytes, so the two agree only if the padding is part of the value.
+  view.setBigUint64(0x30, BigInt(toc.length ? chapterOffset : 0), true);
+
+  buf.set(fit(title, 128), HEADER);
+  buf.set(fit(author, 64), HEADER + 128);
+  buf.set(fit(language, 16), HEADER + 224);
+  // createTime deliberately left 0 rather than Date.now(): identical input should produce an
+  // identical file, which a timestamp would break (and the reader never reads it).
+  view.setUint16(HEADER + 244, 0, true);              // coverPage
+  view.setUint16(HEADER + 246, toc.length, true);     // chapterCount
+
+  toc.forEach((ch, i) => {
+    const at = chapterOffset + i * CHAPTER;
+    buf.set(fit(ch.title || `Chapter ${i + 1}`, 80), at);
+    view.setUint16(at + 0x50, ch.page || 0, true);
+    view.setUint16(at + 0x52, (toc[i + 1] ? toc[i + 1].page - 1 : pages.length - 1), true);
+  });
+
+  let off = dataOffset;
+  pages.forEach((p, i) => {
+    const at = indexOffset + i * XTC_PAGE_ENTRY_SIZE;
+    view.setBigUint64(at, BigInt(off), true);
+    view.setUint32(at + 8, p.bytes.length, true);
+    view.setUint16(at + 12, p.w, true);
+    view.setUint16(at + 14, p.h, true);
+    buf.set(p.bytes, off);
+    off += p.bytes.length;
+  });
+  return buf;
+}
+
+/* Fraction of a page's ink that falls inside the given panel rects (0..1).
+ *
+ * Panels-only books have no full page to fall back on, so anything the detector missed would be
+ * unreachable. Measuring INK rather than area is what makes this useful: panels never tile a page
+ * -- gutters, margins and the space around a splash are blank, so an area test would fail every
+ * page. What matters is whether the drawn content is inside a panel.
+ *
+ * "Ink" is a pixel darker than `inkThreshold`, which assumes dark-on-light artwork (true for
+ * manga); an inverted page reads as almost all ink and simply keeps its full page, which is the
+ * safe direction to be wrong in. Returns 1 for a blank page (nothing to miss).
+ *
+ * rects are [x1, y1, x2, y2] in the same pixel space as gray/w/h. */
+function panelInkCoverage(gray, w, h, rects, inkThreshold = 200) {
+  const covered = new Uint8Array(w * h);
+  for (const [x1, y1, x2, y2] of rects) {
+    const rx1 = Math.max(0, Math.min(w, Math.round(x1)));
+    const ry1 = Math.max(0, Math.min(h, Math.round(y1)));
+    const rx2 = Math.max(0, Math.min(w, Math.round(x2)));
+    const ry2 = Math.max(0, Math.min(h, Math.round(y2)));
+    for (let y = ry1; y < ry2; y++) covered.fill(1, y * w + rx1, y * w + rx2);
+  }
+  let ink = 0, inkInside = 0;
+  for (let i = 0; i < gray.length; i++) {
+    if (gray[i] >= inkThreshold) continue;
+    ink++;
+    if (covered[i]) inkInside++;
+  }
+  return ink === 0 ? 1 : inkInside / ink;
+}
+
 function grayFromRGBA(rgba, w, h) {
   const gray = new Uint8Array(w * h);
   for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
@@ -415,18 +587,52 @@ function writePanelsIdx(idxRecords) {
   return out.toUint8Array();
 }
 
-function writeMetaBin(title, author) {
-  if (!title && !author) return null;
+/* Country codes commonly typed in place of the language code. Left uncorrected,
+ * each would open a second reading-stats bucket for a language that already has
+ * one. Mirror of convert_manga.py:LANGUAGE_ALIASES. */
+const LANGUAGE_ALIASES = { jp: "ja", cn: "zh", kr: "ko" };
+
+/* Lowercase the language subtag and correct those aliases. Region/script subtags
+ * keep their case ("zh-Hant" stays intact): the device reduces to the primary
+ * subtag on its own, so there is no reason to discard the detail on disk.
+ * Mirror of convert_manga.py:normalize_language. */
+function normalizeLanguage(language) {
+  const tag = String(language || "").trim();
+  if (!tag) return "";
+  let sep = tag.indexOf("-");
+  if (sep < 0) sep = tag.indexOf("_");
+  const primary = (sep >= 0 ? tag.slice(0, sep) : tag).toLowerCase();
+  const rest = sep >= 0 ? tag.slice(sep + 1) : "";
+  const corrected = LANGUAGE_ALIASES[primary] || primary;
+  return rest ? corrected + "-" + rest : corrected;
+}
+
+/* language is written as an OPTIONAL TRAILER after the author bytes, and the
+ * format version deliberately stays 1: firmware predating the field reads
+ * exactly the header, title and author and never looks further, so it ignores
+ * the extra bytes instead of rejecting the file. Newer firmware detects the
+ * trailer by checking whether any bytes remain. Any future field must follow
+ * the same rule -- append only, never reorder or resize what comes before. */
+function writeMetaBin(title, author, language) {
+  const lang = normalizeLanguage(language);
+  if (!title && !author && !lang) return null;
   let titleBytes = mangaEncoder.encode(title || "");
   let authorBytes = mangaEncoder.encode(author || "");
+  let languageBytes = mangaEncoder.encode(lang);
   if (titleBytes.length > 0xffff) titleBytes = titleBytes.subarray(0, 0xffff);
   if (authorBytes.length > 0xffff) authorBytes = authorBytes.subarray(0, 0xffff);
-  const out = new ByteWriter(8 + titleBytes.length + authorBytes.length);
+  if (languageBytes.length > 0xffff) languageBytes = languageBytes.subarray(0, 0xffff);
+  const trailerLen = languageBytes.length ? 2 + languageBytes.length : 0;
+  const out = new ByteWriter(8 + titleBytes.length + authorBytes.length + trailerLen);
   out.u32(META_FORMAT_VERSION);
   out.u16(titleBytes.length);
   out.u16(authorBytes.length);
   out.bytes(titleBytes);
   out.bytes(authorBytes);
+  if (languageBytes.length) {
+    out.u16(languageBytes.length);
+    out.bytes(languageBytes);
+  }
   return out.toUint8Array();
 }
 
@@ -495,21 +701,25 @@ function epubParseOpf(opf) {
 }
 
 function epubMetadataFromOpf(opf) {
-  let title = "", author = "";
+  let title = "", author = "", language = "";
   const t = opf.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/);
   if (t) title = t[1].trim();
   const a = opf.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/);
   if (a) author = a[1].trim();
-  return { title, author };
+  const l = opf.match(/<dc:language[^>]*>([^<]+)<\/dc:language>/);
+  if (l) language = l[1].trim();
+  return { title, author, language };
 }
 
 function cbzMetadataFromComicInfo(xml) {
-  let title = "", author = "";
+  let title = "", author = "", language = "";
   const t = xml.match(/<Title>([^<]+)<\/Title>/);
   if (t) title = t[1].trim();
   const a = xml.match(/<Writer>([^<]+)<\/Writer>/);
   if (a) author = a[1].trim();
-  return { title, author };
+  const l = xml.match(/<LanguageISO>([^<]+)<\/LanguageISO>/);
+  if (l) language = l[1].trim();
+  return { title, author, language };
 }
 
 /* Extract [(href, title)] entries from an EPUB3 nav document's toc nav. */
@@ -589,11 +799,12 @@ if (typeof module !== "undefined") {
   module.exports = {
     MANGA_FORMAT_VERSION, isImageName, baseName, mangaFileExt,
     naturalSortKey, compareNaturalKeys, naturalSortPaths,
-    grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel,
+    grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
     floydSteinbergMono, encodeBmp1bit, encodeMonoBmpFromRGBA,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
     yOverlapFrac, sortPanelsMangaOrder,
-    encodePage, writePanelsIdx, writeMetaBin, writeTocIdx,
+    encodePage, writePanelsIdx, writeMetaBin, writeTocIdx, normalizeLanguage, PANEL_CROP_SUBDIR,
+    encodeXtgPage, encodeXthPage, buildXtcFile,
     pathDirname, pathNorm, pathJoinNorm,
     epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo,
     epubTocFromNav, epubTocFromNcx, epubNavHref, epubNcxHref, parseTocText,

@@ -10,7 +10,7 @@ for OCR.
 
 | Tool | Input | Output |
 |---|---|---|
-| 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + English translations), `meta.bin`, `toc.idx` — plus an optional portable `.epub` for other readers |
+| 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + English translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.xtc` or `.xtch` |
 | 📚 **Dictionary Converter** | Yomitan `.zip` (Jitendex, JMnedict, grammar) or jmdict-simplified `.json`/`.json.tgz` | `dict/<name>.idx` + `.dat` + `.spx` lookup accelerator |
 | 🔤 **Font Converter** | TTF / OTF (up to 4 styles + fallback font) | `.fonts/<Family>/<Family>_<size>.cpfont` (v4, with kerning + ligatures) |
 
@@ -41,18 +41,56 @@ These are ports of the firmware's conversion scripts, not reimplementations from
   inference backends); post-processing (confidence 0.4, sliver filter, overlap dedupe, reading
   order) is identical. Untick *AI panel detection* to force the grid heuristic, which is also
   the automatic fallback wherever WebAssembly or the download fails.
+  Tick *Panels only (no full pages)* to leave the full-page images out of the download and ship
+  just the panel crops. The device sees pages with no image and goes straight to panel-by-panel
+  reading, and the book takes far less space on the card. Nothing is lost to a missed panel: each
+  page's ink is measured against its panel rects, and any page whose panels don't cover the artwork
+  keeps its full page (the device already handles such mixed books — a page with no crop shows as a
+  full page). Page 0 is always kept as well, since the Library takes the cover from it; missing
+  pages don't shift the rest, as the device maps page index to image by position. A full-page panel
+  normally gets no crop (the page image is already the best view of it), so in this mode its crop is
+  written anyway — otherwise such a page would export nothing at all. This is Matcha-tools-only —
+  the desktop Python tool has no equivalent flag.
+  Panel crops are written to a `panels/` subfolder (matching the Python tool) so the book folder
+  holds only page images. The device walks every entry of the book folder when opening a book, and
+  a crop per panel dominated that scan — measured at 6499 ms for 2396 entries, of which 219 were
+  pages and 974 were crops. The flat layout older conversions used is still supported; re-convert
+  to get the faster open.
   Tick *1-bit BMP (Floyd–Steinberg dithering)* to write pages and panel crops as black-and-white
   dithered BMP instead of JPEG (the desktop tool's `--mono`). The device paints 1-bit BMP with a
   single fast refresh (no 4-level gray pass), so pages and panels turn noticeably quicker; it's
   best for pure line art (screentone gradients become dither patterns) and pairs naturally with
   *Skip OCR*.
-  Tick *Also export a portable EPUB* to drop an extra `.epub` into the download for other
-  e-readers/apps that don't have Matcha's panel navigation. It's a fixed-layout EPUB 3 (one image
-  per screen, right-to-left): each manga page is followed by its panels as full-screen pages, wide
-  panels rotated to portrait so they display as large as possible, and the source chapter list is
-  carried over as the EPUB table of contents. Panel images are JPEG and pages keep their original
-  JPEG/PNG — both core EPUB media types, so the 1-bit BMP option doesn't affect the EPUB. This is
-  Matcha-tools-only — the desktop Python tool has no EPUB export.
+  The *Language* field (the desktop tool's `--language`) tags the book so the reader can split
+  reading stats by language. It is written into `meta.bin` as an optional trailer after the author,
+  without a format-version bump — firmware predating the field reads exactly the header, title and
+  author and never looks further, so it ignores the extra bytes instead of rejecting the file.
+  EPUBs (`<dc:language>`) and CBZs carrying a `ComicInfo.xml` (`<LanguageISO>`) fill it in
+  automatically; PDFs and loose image files declare nothing, so set it by hand. The tag is read at
+  conversion time, so a book converted without one counts as "unknown" until it is converted again.
+  Common country-code slips are corrected (`jp` → `ja`, `cn` → `zh`, `kr` → `ko`) so one language
+  can't end up split across two buckets; region and script subtags are preserved (`zh-Hant`).
+  *Export format* is a set of checkboxes — any combination of **Matcha Reader format** (the native
+  panel folder), **EPUB**, **XTC** and **XTCH**. Nothing is preselected; converting without a pick
+  is refused rather than guessed at. Selecting one non-folder format downloads that file directly;
+  several are zipped together, and when the device folder is included the others ride inside its
+  zip. The steps below adapt to the pick: the Gemini step and the install notes only apply to the
+  device folder (OCR text lives in `panels.dat`, so it is skipped implicitly otherwise), book
+  details stay for the EPUB too since it embeds title/author/chapters, and the 1-bit BMP option
+  only affects pages written into the device folder.
+  **EPUB** is a fixed-layout EPUB 3 (one image per screen, right-to-left): each manga page is
+  followed by its panels as full-screen pages, wide panels rotated to portrait so they display as
+  large as possible, and the source chapter list is carried over as the EPUB table of contents.
+  Panel images are JPEG and pages keep their original JPEG/PNG — both core EPUB media types, so the
+  1-bit BMP option doesn't affect the EPUB.
+  **XTC / XTCH** is Xteink's own page format, for the stock firmware: pages are pre-rendered
+  bitmaps, so choose a target resolution to match the screen. XTC is 1-bit (Floyd–Steinberg
+  dithered) and XTCH is 2-bit, four-level grayscale at twice the size. Both carry the same page
+  sequence as the EPUB — each page followed by its panels. Ported from the firmware's own reader
+  (`lib/Xtc/`), and since the desktop tool has no XTC export there is no reference output to diff
+  against; the tests instead decode what the encoder writes exactly the way the device does. XTCH
+  pads page height to a multiple of 8, which its plane layout requires.
+  EPUB and XTC/XTCH are Matcha-tools-only — the desktop Python tool has neither.
   The *Target resolution* dropdown (the desktop tool's `--x3`/`--x4`) downscales pages and panels to
   a device screen — **X4** (480×800) or **X3** (528×792) — before panel detection, so the download
   is smaller and the device decodes far fewer pixels per page; landscape images fit the rotated box,
