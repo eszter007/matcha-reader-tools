@@ -4,9 +4,10 @@
  * Layout is one image per spine page (pre-paginated / fixed-layout, so each
  * image is scaled to fill the screen with its aspect ratio preserved). Per
  * manga page the spine holds the full page first, then each detected panel —
- * wide panels are rotated to portrait by the caller so they display as large
- * as possible. The source chapter list is carried over into the EPUB's nav +
- * ncx table of contents, and the spine reads right-to-left like manga.
+ * wide panels are rotated to portrait by the caller (unless panel rotation is
+ * turned off) so they display as large as possible. The source chapter list is
+ * carried over into the EPUB's nav + ncx table of contents, and the spine reads
+ * right-to-left like manga.
  *
  * This file is pure string logic (no DOM/canvas), so the Node tests can build
  * and inspect an EPUB directly; the browser pipeline (image decode, panel

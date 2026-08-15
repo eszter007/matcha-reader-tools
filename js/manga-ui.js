@@ -446,12 +446,13 @@ async function buildMangaEpub({ title, author, epubPages, tocEntries }) {
  * page buffer for the whole session and cannot grow it -- a later, larger page just fails to load
  * ("Buffer too small: need N, have M"). Panels are all different shapes, so each is scaled to fit
  * and centred on white, and a landscape one is rotated to portrait first so it fills the screen
- * rather than sitting in a thin band (the same thing the EPUB export does).
+ * rather than sitting in a thin band (the same thing the EPUB export does). rotateLandscape=false
+ * keeps the image as drawn, letterboxed into the page.
  *
  * The 1-bit page is dithered (Floyd-Steinberg) rather than hard-thresholded: a plain threshold
  * turns screentone into flat black. XTH additionally needs a height that is a multiple of 8, which
  * every device target already satisfies (800 and 792 both divide by 8). */
-function encodeXtcVariants(src, wantXtc, wantXtch, target) {
+function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = true) {
   const [w, h] = target;
   const page = makeCanvas(w, h);
   const ctx = page.getContext("2d", { willReadFrequently: true });
@@ -459,7 +460,7 @@ function encodeXtcVariants(src, wantXtc, wantXtch, target) {
   ctx.fillRect(0, 0, w, h);
 
   let img = src;
-  if (src.width > src.height && w < h) img = rotateCanvas90CW(src);
+  if (rotateLandscape && src.width > src.height && w < h) img = rotateCanvas90CW(src);
   const scale = Math.min(w / img.width, h / img.height);
   const dw = Math.max(1, Math.round(img.width * scale));
   const dh = Math.max(1, Math.round(img.height * scale));
@@ -505,6 +506,9 @@ function applyFormatVisibility() {
   show("card-install", matcha);
   show("card-book", matcha || nothingPicked || f.has("epub") || f.has("xtc") || f.has("xtch"));
   show("manga-mono-row", matcha);
+  // Panel rotation only exists in the pre-rendered exports; the device folder's crops are rotated
+  // by the firmware at display time, so the option would mean nothing there.
+  show("manga-rotate-row", nothingPicked || f.has("epub") || f.has("xtc") || f.has("xtch"));
   renumberSteps();
 }
 
@@ -567,6 +571,11 @@ async function runMangaConversion() {
   const wantXtch = formats.has("xtch");
   const anyXtc = wantXtc || wantXtch;
   const panelsOnly = $("manga-panels-only").checked;
+  // A wide panel is turned upright so it fills a portrait screen instead of sitting in a thin
+  // band. Only EPUB/XTC/XTCH are affected -- they embed a pre-rendered image, so the orientation
+  // is baked in at conversion time; the device folder's crops keep their own shape and the
+  // firmware rotates them when it zooms one to the screen.
+  const rotatePanels = $("manga-rotate-panels").checked;
   // How much of a page's ink must sit inside its panels before the full page may be dropped.
   // Not 100%: a stray speck in the gutter or a page number outside every panel is not content
   // worth keeping a whole page image for.
@@ -600,6 +609,7 @@ async function runMangaConversion() {
   saveSetting("manga-yolo", $("manga-yolo").checked ? "1" : "0");
   saveSetting("manga-mono", mono ? "1" : "0");
   saveSetting("manga-panels-only", panelsOnly ? "1" : "0");
+  saveSetting("manga-rotate-panels", rotatePanels ? "1" : "0");
   saveSetting("manga-format", [...formats].join(","));
   saveSetting("manga-res", resChoice);
 
@@ -848,13 +858,14 @@ async function runMangaConversion() {
           if (epub && !fullPagePanel) {
             // Rotate wide (landscape) panels to portrait so they display as
             // large as possible on the usual portrait reading screen; the
-            // fixed-layout reader then scales each to fullscreen.
+            // fixed-layout reader then scales each to fullscreen. Off, the
+            // panel goes in as drawn and the reader letterboxes it.
             let panelCanvas = cropCanvas, epw = pw, eph = ph;
-            if (pw > ph) { panelCanvas = rotateCanvas90CW(cropCanvas); epw = ph; eph = pw; }
+            if (rotatePanels && pw > ph) { panelCanvas = rotateCanvas90CW(cropCanvas); epw = ph; eph = pw; }
             epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: epw, h: eph });
           }
           if (anyXtc && !fullPagePanel) {
-            const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget);
+            const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget, rotatePanels);
             if (v.xtc) xtcPages.push(v.xtc);
             if (v.xtch) xtchPages.push(v.xtch);
           }
@@ -1005,6 +1016,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-yolo").checked = loadSetting("manga-yolo", "1") === "1";
   $("manga-mono").checked = loadSetting("manga-mono", "0") === "1";
   $("manga-panels-only").checked = loadSetting("manga-panels-only", "0") === "1";
+  $("manga-rotate-panels").checked = loadSetting("manga-rotate-panels", "1") === "1";
   {
     const saved = new Set(loadSetting("manga-format", "").split(",").filter(Boolean));
     for (const cb of formatBoxes()) cb.checked = saved.has(cb.value);
