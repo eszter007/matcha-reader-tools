@@ -56,6 +56,15 @@ These are ports of the firmware's conversion scripts, not reimplementations from
   a crop per panel dominated that scan — measured at 6499 ms for 2396 entries, of which 219 were
   pages and 974 were crops. The flat layout older conversions used is still supported; re-convert
   to get the faster open.
+  *Rotate wide panels to portrait* (on by default) controls what the **EPUB** and **XTC/XTCH**
+  exports do with a landscape panel: those formats embed a pre-rendered image, so the orientation is
+  baked in at conversion time, and a wide panel is turned upright to fill a portrait screen rather
+  than sit in a thin band. Untick it to keep every panel exactly as it was drawn — for a device or
+  app that is read in landscape, or when the rotation is more annoying than the extra size is worth.
+  The Matcha Reader format is unaffected either way: its panel crops are stored at their own shape
+  and the firmware rotates one when it zooms it to the screen, so the option is hidden unless EPUB,
+  XTC or XTCH is picked. Full pages are unaffected too — the EPUB never rotates them, and XTC/XTCH
+  still turn a landscape spread upright so it fills the fixed page size.
   Tick *1-bit BMP (Floyd–Steinberg dithering)* to write pages and panel crops as black-and-white
   dithered BMP instead of JPEG (the desktop tool's `--mono`). The device paints 1-bit BMP with a
   single fast refresh (no 4-level gray pass), so pages and panels turn noticeably quicker; it's
@@ -80,7 +89,8 @@ These are ports of the firmware's conversion scripts, not reimplementations from
   only affects pages written into the device folder.
   **EPUB** is a fixed-layout EPUB 3 (one image per screen, right-to-left): each manga page is
   followed by its panels as full-screen pages, wide panels rotated to portrait so they display as
-  large as possible, and the source chapter list is carried over as the EPUB table of contents.
+  large as possible (see *Rotate wide panels to portrait* above), and the source chapter list is
+  carried over as the EPUB table of contents.
   Panel images are JPEG and pages keep their original JPEG/PNG — both core EPUB media types, so the
   1-bit BMP option doesn't affect the EPUB.
   **XTC / XTCH** is Xteink's own page format, for the stock firmware: pages are pre-rendered
