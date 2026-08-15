@@ -73,11 +73,12 @@
     </div>
     <label for="manga-res" style="margin-top:0.6rem">Target resolution</label>
     <select id="manga-res">
-      <option value="">Original (default — keep full resolution)</option>
+      <option value=""></option>
+      <option value="full">Full resolution — High file size</option>
       <option value="x4">Xteink X4 — 480×800</option>
       <option value="x3">Xteink X3 — 528×792</option>
     </select>
-    <p class="hint" style="color:var(--muted);font-size:0.85rem;margin:0.3rem 0 0">
+    <p class="hint res-hint" id="manga-res-hint">
       Downscales to the device screen: smaller download, faster page turns, no visible quality loss.
       Never upscales.</p>
   </div>

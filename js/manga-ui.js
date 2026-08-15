@@ -389,12 +389,31 @@ function loadYoloDetector() {
 
 /* ── Conversion pipeline ──────────────────────────────────────── */
 
-/* Clamp a resolution choice to a real MANGA_DEVICE_TARGETS key (own-property
- * only, so "__proto__" etc. can't slip through) or "" for original. Guards both
- * the persisted <select> value and the conversion path against junk in
- * localStorage. */
+/* Full resolution is a real choice with a real cost (files the Xteink firmware struggles with),
+ * so the dropdown starts empty and the user picks one rather than falling into a default. */
+const RES_FULL = "full";
+
+/* Clamp a resolution choice to RES_FULL or a real MANGA_DEVICE_TARGETS key (own-property only, so
+ * "__proto__" etc. can't slip through), or "" for "nothing picked". Guards both the persisted
+ * <select> value and the conversion path against junk in localStorage. */
 function validResChoice(v) {
+  if (v === RES_FULL) return v;
   return Object.prototype.hasOwnProperty.call(MANGA_DEVICE_TARGETS, v) ? v : "";
+}
+
+/* The hint under the dropdown describes the current choice: downscaling is the recommendation,
+ * full resolution is the one that needs a warning rather than a description. */
+const RES_HINT_DEFAULT = "Downscales to the device screen: smaller download, faster page turns, " +
+  "no visible quality loss. Never upscales.";
+const RES_HINT_FULL = "Warning: high file size — don't use this if you want to read the book on " +
+  "an Xteink device.";
+
+function applyResHint() {
+  const el = $("manga-res-hint");
+  if (!el) return;
+  const full = validResChoice($("manga-res").value) === RES_FULL;
+  el.textContent = full ? RES_HINT_FULL : RES_HINT_DEFAULT;
+  el.classList.toggle("warn", full);
 }
 
 const mangaState = { running: false, cancelled: false };
@@ -585,15 +604,19 @@ async function runMangaConversion() {
   // order as the EPUB) and assembled once at the end, since the page table needs every size.
   const xtcPages = [], xtchPages = [];
   const xtcPageMap = new Map();   // source page index -> position in the exported XTC sequence
-  // Target device resolution: "" (original), "x3", or "x4". Downscales pages and
-  // panels before detection so the device decodes fewer pixels; never upscales.
-  // Validate against own keys so a stray persisted value (e.g. "__proto__")
-  // can't yield Object.prototype and NaN sizes downstream.
+  // Target device resolution: RES_FULL (keep the source pixels), "x3", or "x4". A device choice
+  // downscales pages and panels before detection so the device decodes fewer pixels; it never
+  // upscales. Nothing is preselected, so an unanswered dropdown is a user error rather than a
+  // default to guess at.
   const resChoice = validResChoice($("manga-res").value);
-  const deviceTarget = resChoice ? MANGA_DEVICE_TARGETS[resChoice] : null;
+  if (!resChoice) {
+    logValidation("Pick a target resolution — the device you'll read on, or full resolution.");
+    return;
+  }
+  const deviceTarget = resChoice === RES_FULL ? null : MANGA_DEVICE_TARGETS[resChoice];
   // XTC/XTCH are pre-rendered: every page is written at one fixed size, because the reader
-  // allocates a single page buffer for the book. "Original" leaves panels at their own (varying,
-  // full-resolution) sizes, which has no sensible answer here -- so a device target is required.
+  // allocates a single page buffer for the book. Full resolution leaves panels at their own
+  // (varying, full-size) dimensions, which has no sensible answer here -- so a device is required.
   if (anyXtc && !deviceTarget) {
     logValidation("Pick a target resolution (X3 or X4) for XTC/XTCH — those formats need a fixed page size.");
     return;
@@ -1027,6 +1050,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     applyFormatVisibility();
   }
   $("manga-res").value = validResChoice(loadSetting("manga-res", ""));
+  applyResHint();
   $("manga-run").addEventListener("click", runMangaConversion);
   $("manga-cancel").addEventListener("click", () => { mangaState.cancelled = true; });
   $("manga-file").addEventListener("change", () => {
@@ -1041,4 +1065,5 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-key").addEventListener("input", clearValidationWarnings);
   $("manga-no-ocr").addEventListener("change", clearValidationWarnings);
   $("manga-res").addEventListener("change", clearValidationWarnings);
+  $("manga-res").addEventListener("change", applyResHint);
 }

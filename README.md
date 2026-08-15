@@ -104,10 +104,13 @@ These are ports of the firmware's conversion scripts, not reimplementations from
   The *Target resolution* dropdown (the desktop tool's `--x3`/`--x4`) downscales pages and panels to
   a device screen — **X4** (480×800) or **X3** (528×792) — before panel detection, so the download
   is smaller and the device decodes far fewer pixels per page; landscape images fit the rotated box,
-  and it never upscales. *Original* (the default) keeps full resolution and is byte-identical to the
-  Python tool; when a device is selected the browser's image resampling differs slightly from
-  Pillow's, so — like PDF input — the downscaled pixels (and therefore panel boxes) can differ from
-  the desktop tool by a pixel or two.
+  and it never upscales. *Full resolution — High file size* keeps the source pixels and is
+  byte-identical to the Python tool, at a size the Xteink firmware struggles with, so the hint under
+  the dropdown turns into a warning when it is picked. Nothing is preselected — like the export
+  format, converting without a pick is refused rather than guessed at, since the choice is a real
+  trade-off rather than a detail to fall into. When a device is selected the browser's image
+  resampling differs slightly from Pillow's, so — like PDF input — the downscaled pixels (and
+  therefore panel boxes) can differ from the desktop tool by a pixel or two.
   PDF input works like the desktop tool's (which uses PyMuPDF): pages are rasterized at 2× zoom
   in document order and Title/Author come from the PDF metadata, but rendering happens in-browser
   via a vendored [PDF.js](https://mozilla.github.io/pdf.js/) (lazy-loaded, ~1.8 MB). PDF
