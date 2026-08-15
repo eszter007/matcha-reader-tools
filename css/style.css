@@ -247,6 +247,8 @@ footer {
 
 footer a { color: var(--matcha-dark); }
 
+footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border); font-size: 0.78rem; }
+
 .notice {
   background: var(--matcha-light);
   border-radius: 8px;
