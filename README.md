@@ -104,7 +104,13 @@ These are ports of the firmware's conversion scripts, not reimplementations from
   The *Target resolution* dropdown (the desktop tool's `--x3`/`--x4`) downscales pages and panels to
   a device screen — **X4** (480×800) or **X3** (528×792) — before panel detection, so the download
   is smaller and the device decodes far fewer pixels per page; landscape images fit the rotated box,
-  and it never upscales. *Full resolution — High file size* keeps the source pixels and is
+  and it never upscales. *Custom* reveals a width and height pair for a screen that isn't one of
+  the presets; it behaves exactly like a preset (fit to the box, landscape against the swapped one,
+  never upscale) and is remembered between sessions. A typed size is checked rather than corrected:
+  each dimension must be 1–4096 px, and because XTCH's bit-planes are indexed in 8-row groups, that
+  format additionally needs a height divisible by 8 — the conversion says which nearby height works
+  instead of silently exporting a size nobody asked for.
+  *Full resolution — High file size* keeps the source pixels and is
   byte-identical to the Python tool, at a size the Xteink firmware struggles with, so the hint under
   the dropdown turns into a warning when it is picked. Nothing is preselected — like the export
   format, converting without a pick is refused rather than guessed at, since the choice is a real

@@ -91,6 +91,11 @@ label .hint { font-weight: 400; color: var(--muted); }
 .res-hint { color: var(--muted); font-size: 0.85rem; margin: 0.3rem 0 0; }
 .res-hint.warn { color: var(--warn); }
 
+/* Width/height pair revealed by the "Custom" resolution choice: two equal
+ * columns on a wide card, stacking on a narrow one. */
+.res-custom { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.res-custom label { flex: 1 1 8rem; }
+
 input[type="text"], input[type="password"], input[type="number"], select, textarea {
   width: 100%;
   padding: 0.5rem 0.6rem;

@@ -77,7 +77,14 @@
       <option value="full">Full resolution — High file size</option>
       <option value="x4">Xteink X4 — 480×800</option>
       <option value="x3">Xteink X3 — 528×792</option>
+      <option value="custom">Custom — enter your own size</option>
     </select>
+    <div class="res-custom" id="manga-res-custom" hidden>
+      <label for="manga-res-w">Width (px)
+        <input type="number" id="manga-res-w" min="1" max="4096" step="1" placeholder="480"></label>
+      <label for="manga-res-h">Height (px)
+        <input type="number" id="manga-res-h" min="1" max="4096" step="1" placeholder="800"></label>
+    </div>
     <p class="hint res-hint" id="manga-res-hint">
       Downscales to the device screen: smaller download, faster page turns, no visible quality loss.
       Never upscales.</p>

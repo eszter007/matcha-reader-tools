@@ -392,13 +392,28 @@ function loadYoloDetector() {
 /* Full resolution is a real choice with a real cost (files the Xteink firmware struggles with),
  * so the dropdown starts empty and the user picks one rather than falling into a default. */
 const RES_FULL = "full";
+/* A screen that isn't one of the presets: the width/height pair is typed in instead. */
+const RES_CUSTOM = "custom";
+/* Sanity bound on a typed size. The page header stores each dimension as a u16, and a target
+ * larger than any e-ink screen only makes files the reader cannot use. */
+const RES_CUSTOM_MAX = 4096;
 
-/* Clamp a resolution choice to RES_FULL or a real MANGA_DEVICE_TARGETS key (own-property only, so
- * "__proto__" etc. can't slip through), or "" for "nothing picked". Guards both the persisted
- * <select> value and the conversion path against junk in localStorage. */
+/* Clamp a resolution choice to RES_FULL, RES_CUSTOM or a real MANGA_DEVICE_TARGETS key
+ * (own-property only, so "__proto__" etc. can't slip through), or "" for "nothing picked". Guards
+ * both the persisted <select> value and the conversion path against junk in localStorage. */
 function validResChoice(v) {
-  if (v === RES_FULL) return v;
+  if (v === RES_FULL || v === RES_CUSTOM) return v;
   return Object.prototype.hasOwnProperty.call(MANGA_DEVICE_TARGETS, v) ? v : "";
+}
+
+/* The typed custom size as a [w, h] target, or null when either field is missing or out of range
+ * -- the conversion refuses rather than falling back to a size the user did not ask for. */
+function customResTarget() {
+  const w = parseInt($("manga-res-w").value, 10);
+  const h = parseInt($("manga-res-h").value, 10);
+  if (!Number.isInteger(w) || !Number.isInteger(h)) return null;
+  if (w < 1 || h < 1 || w > RES_CUSTOM_MAX || h > RES_CUSTOM_MAX) return null;
+  return [w, h];
 }
 
 /* The hint under the dropdown describes the current choice: downscaling is the recommendation,
@@ -407,13 +422,19 @@ const RES_HINT_DEFAULT = "Downscales to the device screen: smaller download, fas
   "no visible quality loss. Never upscales.";
 const RES_HINT_FULL = "Warning: high file size — don't use this if you want to read the book on " +
   "an Xteink device.";
+const RES_HINT_CUSTOM = "Downscales to the size you enter, for a screen that isn't listed above. " +
+  "Never upscales. XTCH also needs a height that is a multiple of 8.";
 
-function applyResHint() {
+/* Keep the hint and the custom width/height fields in step with the dropdown: the fields only
+ * exist for the choice that uses them. */
+function applyResChoiceUi() {
   const el = $("manga-res-hint");
   if (!el) return;
-  const full = validResChoice($("manga-res").value) === RES_FULL;
-  el.textContent = full ? RES_HINT_FULL : RES_HINT_DEFAULT;
+  const choice = validResChoice($("manga-res").value);
+  const full = choice === RES_FULL;
+  el.textContent = full ? RES_HINT_FULL : choice === RES_CUSTOM ? RES_HINT_CUSTOM : RES_HINT_DEFAULT;
   el.classList.toggle("warn", full);
+  $("manga-res-custom").hidden = choice !== RES_CUSTOM;
 }
 
 const mangaState = { running: false, cancelled: false };
@@ -604,21 +625,38 @@ async function runMangaConversion() {
   // order as the EPUB) and assembled once at the end, since the page table needs every size.
   const xtcPages = [], xtchPages = [];
   const xtcPageMap = new Map();   // source page index -> position in the exported XTC sequence
-  // Target device resolution: RES_FULL (keep the source pixels), "x3", or "x4". A device choice
-  // downscales pages and panels before detection so the device decodes fewer pixels; it never
-  // upscales. Nothing is preselected, so an unanswered dropdown is a user error rather than a
-  // default to guess at.
+  // Target resolution: RES_FULL (keep the source pixels), a device preset ("x3"/"x4"), or
+  // RES_CUSTOM with a typed width/height. Anything but full resolution downscales pages and panels
+  // before detection so the device decodes fewer pixels; it never upscales. Nothing is
+  // preselected, so an unanswered dropdown is a user error rather than a default to guess at.
   const resChoice = validResChoice($("manga-res").value);
   if (!resChoice) {
-    logValidation("Pick a target resolution — the device you'll read on, or full resolution.");
+    logValidation("Pick a target resolution — a device, a custom size, or full resolution.");
     return;
   }
-  const deviceTarget = resChoice === RES_FULL ? null : MANGA_DEVICE_TARGETS[resChoice];
+  let deviceTarget = null;
+  if (resChoice === RES_CUSTOM) {
+    deviceTarget = customResTarget();
+    if (!deviceTarget) {
+      logValidation(`Enter a custom width and height, each between 1 and ${RES_CUSTOM_MAX} px.`);
+      return;
+    }
+    // XTCH's two bit-planes are indexed by column in 8-row groups, so a height that isn't a
+    // multiple of 8 makes the firmware read past the buffer it sized. The presets all divide by 8;
+    // a typed one may not, and rounding it silently would export a size nobody asked for.
+    if (wantXtch && deviceTarget[1] % 8 !== 0) {
+      const near = Math.max(8, Math.round(deviceTarget[1] / 8) * 8);
+      logValidation(`XTCH needs a page height that is a multiple of 8 — try ${near} instead of ${deviceTarget[1]}.`);
+      return;
+    }
+  } else if (resChoice !== RES_FULL) {
+    deviceTarget = MANGA_DEVICE_TARGETS[resChoice];
+  }
   // XTC/XTCH are pre-rendered: every page is written at one fixed size, because the reader
   // allocates a single page buffer for the book. Full resolution leaves panels at their own
   // (varying, full-size) dimensions, which has no sensible answer here -- so a device is required.
   if (anyXtc && !deviceTarget) {
-    logValidation("Pick a target resolution (X3 or X4) for XTC/XTCH — those formats need a fixed page size.");
+    logValidation("Pick a target resolution (a device or a custom size) for XTC/XTCH — those formats need a fixed page size.");
     return;
   }
   const apiKey = $("manga-key").value.trim();
@@ -635,6 +673,10 @@ async function runMangaConversion() {
   saveSetting("manga-rotate-panels", rotatePanels ? "1" : "0");
   saveSetting("manga-format", [...formats].join(","));
   saveSetting("manga-res", resChoice);
+  if (resChoice === RES_CUSTOM) {
+    saveSetting("manga-res-w", String(deviceTarget[0]));
+    saveSetting("manga-res-h", String(deviceTarget[1]));
+  }
 
   const panelMargin = parseInt($("manga-margin").value, 10);
   const margin = Number.isInteger(panelMargin) ? panelMargin : 10;
@@ -1050,7 +1092,9 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     applyFormatVisibility();
   }
   $("manga-res").value = validResChoice(loadSetting("manga-res", ""));
-  applyResHint();
+  $("manga-res-w").value = loadSetting("manga-res-w", "");
+  $("manga-res-h").value = loadSetting("manga-res-h", "");
+  applyResChoiceUi();
   $("manga-run").addEventListener("click", runMangaConversion);
   $("manga-cancel").addEventListener("click", () => { mangaState.cancelled = true; });
   $("manga-file").addEventListener("change", () => {
@@ -1065,5 +1109,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-key").addEventListener("input", clearValidationWarnings);
   $("manga-no-ocr").addEventListener("change", clearValidationWarnings);
   $("manga-res").addEventListener("change", clearValidationWarnings);
-  $("manga-res").addEventListener("change", applyResHint);
+  $("manga-res").addEventListener("change", applyResChoiceUi);
+  $("manga-res-w").addEventListener("input", clearValidationWarnings);
+  $("manga-res-h").addEventListener("input", clearValidationWarnings);
 }
