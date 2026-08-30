@@ -39,25 +39,28 @@ async function decodeImage(bytes, ext) {
   }
 }
 
-async function canvasToJpegBytes(canvas, quality) {
-  let blob;
-  if (canvas.convertToBlob) {
-    blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
-  } else {
-    blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+/* Encode a page or panel canvas, whichever kind of canvas makeCanvas handed back.
+ *
+ * OffscreenCanvas.convertToBlob rejects when it cannot encode, but HTMLCanvasElement.toBlob
+ * reports the same failure by passing the callback null -- so on the branch browsers without
+ * OffscreenCanvas take, an encode failure used to surface much later as "Cannot read
+ * properties of null (reading 'arrayBuffer')", naming neither the page nor the cause. Say
+ * what actually failed instead; the caller turns it into a log line the user can act on. */
+async function canvasBytes(canvas, type, quality) {
+  const opts = quality === undefined ? { type } : { type, quality };
+  const blob = canvas.convertToBlob
+    ? await canvas.convertToBlob(opts)
+    : await new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+  if (!blob) {
+    throw new Error(`This browser could not encode a ${canvas.width}x${canvas.height} image as ${type} ` +
+      "— try a smaller target resolution.");
   }
   return new Uint8Array(await blob.arrayBuffer());
 }
 
-async function canvasToPngBytes(canvas) {
-  let blob;
-  if (canvas.convertToBlob) {
-    blob = await canvas.convertToBlob({ type: "image/png" });
-  } else {
-    blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  }
-  return new Uint8Array(await blob.arrayBuffer());
-}
+function canvasToJpegBytes(canvas, quality) { return canvasBytes(canvas, "image/jpeg", quality); }
+
+function canvasToPngBytes(canvas) { return canvasBytes(canvas, "image/png"); }
 
 /* Rotate a canvas 90° clockwise into a new (height×width) canvas. */
 function rotateCanvas90CW(src) {

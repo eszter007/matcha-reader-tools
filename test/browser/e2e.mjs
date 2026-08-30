@@ -469,6 +469,72 @@ async function testMangaPanelsOnly(page, base) {
   check(`${pageCount} panel crops written`, cropFiles.length === pageCount, `got ${cropFiles.length}`);
 }
 
+/* The whole pipeline on a browser WITHOUT OffscreenCanvas -- the branch makeCanvas takes
+ * for older Safari/WebKit, where every page and panel is encoded through
+ * HTMLCanvasElement.toBlob instead of convertToBlob. Nothing exercised it before, so a
+ * break there would have reached those users first. Needs its own context: the global has
+ * to be gone before any page script runs, and it must not leak into the other tests.
+ *
+ * The check is equality, not just "it produced something": the same book converted with
+ * and without OffscreenCanvas must come out byte for byte identical. */
+async function testMangaNoOffscreenCanvas(browser, base) {
+  console.log("manga.html end-to-end (no OffscreenCanvas — the older-Safari path):");
+  const setup = async (pg) => {
+    await pg.goto(`${base}/manga.html`);
+    await pg.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
+    await pg.check("#manga-no-ocr");
+    await pg.uncheck("#manga-yolo");
+    await setMangaForm(pg, { formats: ["matcha", "epub", "xtc"], res: "x4" });
+    await pg.fill("#manga-title", "NoOffscreen");
+  };
+  const runIn = async (ctx, dest) => {
+    const pg = await ctx.newPage();
+    pg.on("pageerror", (e) => { console.error("  page error:", e.message); failures++; });
+    await setup(pg);
+    const zipFile = await downloadFromPage(pg, () => pg.click("#manga-run"));
+    unzipTo(zipFile, dest);
+    await pg.close();
+  };
+
+  const plainCtx = await browser.newContext({ acceptDownloads: true });
+  const fallbackCtx = await browser.newContext({ acceptDownloads: true });
+  // A browser without it simply lacks the global, so `typeof OffscreenCanvas` is
+  // "undefined" -- deleting it is the faithful simulation.
+  await fallbackCtx.addInitScript(() => { delete window.OffscreenCanvas; });
+  try {
+    const withOsc = path.join(OUT, "no_osc_with");
+    const without = path.join(OUT, "no_osc_without");
+    await runIn(plainCtx, withOsc);
+    const probe = await fallbackCtx.newPage();
+    await probe.goto(`${base}/manga.html`);
+    const seen = await probe.evaluate(() => typeof OffscreenCanvas);
+    await probe.close();
+    check("OffscreenCanvas really is absent for this run", seen === "undefined", seen);
+    await runIn(fallbackCtx, without);
+
+    const walk = (root) => {
+      const out = [];
+      const rec = (d, pre) => {
+        for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
+          const p = path.join(d, e.name);
+          if (e.isDirectory()) rec(p, pre + e.name + "/"); else out.push([pre + e.name, p]);
+        }
+      };
+      rec(root, "");
+      return out;
+    };
+    const a = walk(withOsc), b = walk(without);
+    check("same set of output files", a.length === b.length && a.every((x, i) => x[0] === b[i][0]),
+          `${a.length} vs ${b.length}`);
+    const differing = a.filter(([name, p], i) => b[i] && !filesEqual(p, b[i][1])).map(([n]) => n);
+    check("every file byte-identical to the OffscreenCanvas run", a.length > 0 && differing.length === 0,
+          differing.join(", "));
+  } finally {
+    await plainCtx.close();
+    await fallbackCtx.close();
+  }
+}
+
 async function testDict(page, base) {
   console.log("dictionary.html end-to-end (Yomitan zip):");
   await page.goto(`${base}/dictionary.html`);
@@ -499,6 +565,7 @@ async function testDict(page, base) {
     await testMangaPdf(page, base);
     await testMangaPanelsOnly(page, base);
     await testMangaGeminiOcr(page, base);
+    await testMangaNoOffscreenCanvas(browser, base);
     await testDict(page, base);
     await testDictMdx(page, base);
     await testFonts(page, base);

@@ -148,15 +148,48 @@ function decodeBmp1bit(bmp) {
 /* Paths a V8 coverage sweep of the browser tool showed were reached by real user input
  * but exercised by no test: source metadata, the EPUB2 chapter list, and the ink-coverage
  * math that decides whether a panels-only page keeps its full page. */
+/* Metadata and chapter titles are lifted out of XML with regexes, so whatever the file
+ * escaped arrives still escaped unless it is decoded here. The set is deliberately the
+ * five predefined XML entities plus numeric references -- exactly what
+ * convert_manga.py:xml_unescape decodes, since the two tools must agree byte for byte. */
+function testXmlUnescape() {
+  console.log("XML entity decoding (shared with convert_manga.py):");
+  const u = manga.xmlUnescape;
+  check("the five predefined entities",
+        u("&amp; &lt; &gt; &quot; &apos;") === "& < > \" '", JSON.stringify(u("&amp; &lt; &gt; &quot; &apos;")));
+  check("decimal character reference", u("&#65;&#66;") === "AB", u("&#65;&#66;"));
+  check("hex character reference", u("&#x41;&#X42;") === "AB", u("&#x41;&#X42;"));
+  check("astral character reference", u("&#x1F375;") === "\u{1F375}", u("&#x1F375;"));
+  // One pass, so an escaped escape survives as text rather than decoding twice.
+  check("single pass: &amp;lt; stays &lt;", u("&amp;lt;") === "&lt;", u("&amp;lt;"));
+  // html.unescape would turn this into a space; we must not, or the tools diverge.
+  check("HTML5-only named entities are left alone", u("&nbsp;") === "&nbsp;", u("&nbsp;"));
+  check("unknown and unterminated entities are left alone",
+        u("&unknown; &amp") === "&unknown; &amp", u("&unknown; &amp"));
+  check("out-of-range character reference left alone",
+        u("&#999999999;") === "&#999999999;", u("&#999999999;"));
+  check("text with no entities is unchanged", u("plain 日本語 text") === "plain 日本語 text");
+
+  const nav = '<nav epub:type="toc"><ol><li><a href="p1.xhtml">Tom &amp; Jerry</a></li></ol></nav>';
+  check("EPUB3 nav chapter titles decode",
+        manga.epubTocFromNav(nav, "OEBPS/nav.xhtml")[0][1] === "Tom & Jerry",
+        JSON.stringify(manga.epubTocFromNav(nav, "OEBPS/nav.xhtml")));
+  const ncx = '<ncx><navMap><navPoint><navLabel><text>R &amp; D</text></navLabel>' +
+              '<content src="p1.xhtml"/></navPoint></navMap></ncx>';
+  check("EPUB2 ncx chapter titles decode",
+        manga.epubTocFromNcx(ncx, "OEBPS/toc.ncx")[0][1] === "R & D",
+        JSON.stringify(manga.epubTocFromNcx(ncx, "OEBPS/toc.ncx")));
+  check("OPF metadata decodes",
+        manga.epubMetadataFromOpf("<dc:title>A &amp; B</dc:title>").title === "A & B");
+}
+
 function testMangaSourceMetadata() {
   console.log("manga source metadata + EPUB2 chapters (previously untested):");
   const ci = manga.cbzMetadataFromComicInfo(
     "<ComicInfo><Title>Tom &amp; Jerry</Title><Writer>Ada Lovelace</Writer>" +
     "<LanguageISO>jp</LanguageISO></ComicInfo>");
-  // XML entities are deliberately NOT decoded -- convert_manga.py uses the same regex
-  // and the two must agree; changing it here alone would break that parity.
-  check("ComicInfo title (entities left as-is, matching the Python tool)",
-        ci.title === "Tom &amp; Jerry", JSON.stringify(ci.title));
+  check("ComicInfo title decodes XML entities",
+        ci.title === "Tom & Jerry", JSON.stringify(ci.title));
   check("ComicInfo writer", ci.author === "Ada Lovelace", JSON.stringify(ci.author));
   check("ComicInfo language", ci.language === "jp", JSON.stringify(ci.language));
   check("ComicInfo language normalises to ja", manga.normalizeLanguage(ci.language) === "ja");
@@ -671,6 +704,7 @@ function testXtc() {
 (async () => {
   testManga();
   testXtc();
+  testXmlUnescape();
   testMangaSourceMetadata();
   testMangaInkCoverage();
   testMangaToc();

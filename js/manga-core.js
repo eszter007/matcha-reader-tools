@@ -704,25 +704,49 @@ function epubParseOpf(opf) {
   return { manifest, spineIds };
 }
 
+/* Decode the five predefined XML entities plus numeric character references.
+ *
+ * Metadata and chapter titles are pulled out of XML with regexes rather than a parser, so
+ * whatever the file escaped arrives still escaped: a ComicInfo <Title>Tom &amp; Jerry</Title>
+ * would otherwise reach meta.bin -- and the output folder name -- as the literal "Tom &amp;
+ * Jerry". Deliberately NOT html.unescape's full HTML5 named-entity set: convert_manga.py
+ * decodes exactly this set, and the two tools have to agree byte for byte. A single pass is
+ * what makes "&amp;lt;" come back as "&lt;" rather than "<".
+ * Mirror of convert_manga.py:xml_unescape. */
+const XML_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" };
+
+function xmlUnescape(text) {
+  return String(text).replace(/&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z]+);/g, (match, ent) => {
+    if (ent[0] === "#") {
+      const cp = ent[1] === "x" || ent[1] === "X"
+        ? parseInt(ent.substring(2), 16)
+        : parseInt(ent.substring(1), 10);
+      if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) return match;
+      try { return String.fromCodePoint(cp); } catch (e) { return match; }
+    }
+    return Object.prototype.hasOwnProperty.call(XML_ENTITIES, ent) ? XML_ENTITIES[ent] : match;
+  });
+}
+
 function epubMetadataFromOpf(opf) {
   let title = "", author = "", language = "";
   const t = opf.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/);
-  if (t) title = t[1].trim();
+  if (t) title = xmlUnescape(t[1]).trim();
   const a = opf.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/);
-  if (a) author = a[1].trim();
+  if (a) author = xmlUnescape(a[1]).trim();
   const l = opf.match(/<dc:language[^>]*>([^<]+)<\/dc:language>/);
-  if (l) language = l[1].trim();
+  if (l) language = xmlUnescape(l[1]).trim();
   return { title, author, language };
 }
 
 function cbzMetadataFromComicInfo(xml) {
   let title = "", author = "", language = "";
   const t = xml.match(/<Title>([^<]+)<\/Title>/);
-  if (t) title = t[1].trim();
+  if (t) title = xmlUnescape(t[1]).trim();
   const a = xml.match(/<Writer>([^<]+)<\/Writer>/);
-  if (a) author = a[1].trim();
+  if (a) author = xmlUnescape(a[1]).trim();
   const l = xml.match(/<LanguageISO>([^<]+)<\/LanguageISO>/);
-  if (l) language = l[1].trim();
+  if (l) language = xmlUnescape(l[1]).trim();
   return { title, author, language };
 }
 
@@ -734,7 +758,7 @@ function epubTocFromNav(navXhtml, navPath) {
   if (!tocM) return entries;
   for (const aM of tocM[1].matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)) {
     const href = pathJoinNorm(navDir, aM[1]);
-    const title = aM[2].replace(/<[^>]+>/g, "").trim();
+    const title = xmlUnescape(aM[2].replace(/<[^>]+>/g, "")).trim();
     if (title) entries.push([href, title]);
   }
   return entries;
@@ -750,7 +774,7 @@ function epubTocFromNcx(ncx, ncxPath) {
     const srcM = block.match(/<content[^>]*src="([^"]+)"/);
     if (textM && srcM) {
       const href = pathJoinNorm(ncxDir, srcM[1]);
-      const title = textM[1].trim();
+      const title = xmlUnescape(textM[1]).trim();
       if (title) entries.push([href, title]);
     }
   }
@@ -818,7 +842,7 @@ if (typeof module !== "undefined") {
     encodePage, writePanelsIdx, writeMetaBin, writeTocIdx, normalizeLanguage, PANEL_CROP_SUBDIR,
     encodeXtgPage, encodeXthPage, buildXtcFile,
     pathDirname, pathNorm, pathJoinNorm,
-    epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo,
+    epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo, xmlUnescape,
     epubTocFromNav, epubTocFromNcx, epubNavHref, epubNcxHref, parseTocText,
   };
 }
