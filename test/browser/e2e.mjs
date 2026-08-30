@@ -61,9 +61,22 @@ with zipfile.ZipFile(sys.argv[1]) as z: z.extractall(sys.argv[2])
 `, zipFile, destDir]);
 }
 
-/* Formats and target resolution start unpicked (the page rejects an empty choice
- * rather than guessing), so each manga run below states both. */
-const MATCHA_FMT = '#manga-format .fmt[value="matcha"]';
+/* The manga page remembers the last run's format, resolution and panels-only choice in
+ * localStorage and restores them on load, so one test's settings would otherwise carry
+ * into the next (a leftover "xtc" plus a "full" resolution is a validation error, and the
+ * run never starts). Every manga test therefore states the whole form, not just the parts
+ * it cares about. Formats and resolution start unpicked on a fresh profile anyway -- the
+ * page rejects an empty choice rather than guessing one. */
+const MANGA_FORMATS = ["matcha", "epub", "xtc", "xtch"];
+
+async function setMangaForm(page, { formats = ["matcha"], res = "full", panelsOnly = false }) {
+  for (const f of MANGA_FORMATS) {
+    const sel = `#manga-format .fmt[value="${f}"]`;
+    if (formats.includes(f)) await page.check(sel); else await page.uncheck(sel);
+  }
+  if (panelsOnly) await page.check("#manga-panels-only"); else await page.uncheck("#manga-panels-only");
+  await page.selectOption("#manga-res", res);
+}
 
 /* Page count from an XTC/XTCH container header (u16 at offset 6). */
 function xtcPageCount(file) {
@@ -140,8 +153,8 @@ async function testManga(page, base) {
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo"); // byte-exact references use the grid path
-  await page.check(MATCHA_FMT);
-  await page.selectOption("#manga-res", "full"); // references have no device downscaling
+  // References are generated with no device downscaling, so "full" is the matching pick.
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
   await page.fill("#manga-title", "Test Manga");
   await page.fill("#manga-author", "Test Author");
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
@@ -194,8 +207,7 @@ async function testMangaYolo(page, base) {
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
   await page.check("#manga-no-ocr");
   await page.check("#manga-yolo");
-  await page.check(MATCHA_FMT);
-  await page.selectOption("#manga-res", "full");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
   await page.fill("#manga-title", "Yolo Manga");
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
   const dest = path.join(OUT, "manga_yolo");
@@ -222,8 +234,7 @@ async function testMangaEpub(page, base) {
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.epub"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
-  await page.check(MATCHA_FMT);
-  await page.selectOption("#manga-res", "full");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
   const dest = path.join(OUT, "manga_epub");
   unzipTo(zipFile, dest);
@@ -246,8 +257,7 @@ async function testMangaPdf(page, base) {
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.pdf"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
-  await page.check(MATCHA_FMT);
-  await page.selectOption("#manga-res", "full");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
   const dest = path.join(OUT, "manga_pdf");
   unzipTo(zipFile, dest);
@@ -282,6 +292,140 @@ async function testMangaPdf(page, base) {
  * was allocated only for pages with a non-full-page panel, but panels-only cropped
  * from it anyway -- and, once merely guarded, silently dropped those pages from the
  * pre-rendered exports. So the check is that every source page reaches the XTC. */
+/* Full panels.idx/panels.dat reader, including the v2 per-panel translation and the
+ * text blocks (parsePanelBoxes above only walks the no-OCR layout). Returns
+ * [{w, h, panels: [{box, translation, texts: [{box, text}]}]}]. */
+function parsePanelsDat(dir) {
+  const idx = fs.readFileSync(path.join(dir, "panels.idx"));
+  const dat = fs.readFileSync(path.join(dir, "panels.dat"));
+  const pages = [];
+  for (let p = 0; p < idx.readUInt32LE(4); p++) {
+    let off = idx.readUInt32LE(8 + p * 12);
+    const w = idx.readUInt16LE(8 + p * 12 + 8), h = idx.readUInt16LE(8 + p * 12 + 10);
+    const count = dat.readUInt8(off);
+    off += 2;
+    const panels = [];
+    for (let i = 0; i < count; i++) {
+      const x = dat.readUInt16LE(off), y = dat.readUInt16LE(off + 2);
+      const pw = dat.readUInt16LE(off + 4), ph = dat.readUInt16LE(off + 6);
+      const textCount = dat.readUInt8(off + 8);
+      const trLen = dat.readUInt16LE(off + 10);
+      off += 12;
+      const translation = dat.subarray(off, off + trLen).toString("utf-8");
+      off += trLen;
+      const texts = [];
+      for (let t = 0; t < textCount; t++) {
+        // Text-block boxes are raw corners (x1,y1,x2,y2), unlike the panel's x,y,w,h --
+        // the Python tool writes them that way and this port matches it byte-for-byte.
+        const box = [dat.readUInt16LE(off), dat.readUInt16LE(off + 2),
+                     dat.readUInt16LE(off + 4), dat.readUInt16LE(off + 6)];
+        const len = dat.readUInt16LE(off + 8);
+        off += 10;
+        texts.push({ box, text: dat.subarray(off, off + len).toString("utf-8") });
+        off += len;
+      }
+      panels.push({ box: [x, y, x + pw, y + ph], translation, texts });
+    }
+    pages.push({ w, h, panels });
+  }
+  return pages;
+}
+
+/* The Gemini OCR path, with the API stubbed so it runs without a key or a network call.
+ * Covers the request the tool actually sends, and what comes back reaching panels.dat.
+ *
+ * The stub answers with bbox_2d covering the whole crop, so each decoded text box must
+ * land exactly on the region that was sent -- the MARGINED panel rect. That pins the bug
+ * where the box was mapped from the panel's own corner while being scaled by the margined
+ * size, sliding every text box down-right by the crop margin. */
+async function testMangaGeminiOcr(page, base) {
+  console.log("manga.html end-to-end (Gemini OCR + translations, API stubbed):");
+  const MARGIN = 10;                        // the page's default panel crop margin
+  const KEY = "stub-key-not-a-real-credential";
+  const JP = "テスト";
+  const TRANSLATION = "Hello — こんにちは! 🍵";  // multi-byte, to pin the u16 BYTE-length prefix
+  const GEMINI = "https://generativelanguage.googleapis.com/**";
+  const requests = [];
+  await page.route(GEMINI, async (route) => {
+    const req = route.request();
+    requests.push({ url: req.url(), headers: req.headers(), body: JSON.parse(req.postData() || "{}") });
+    await route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+        blocks: [{ text: JP, bbox_2d: [0, 0, 1000, 1000] }], translation: TRANSLATION,
+      }) }] } }] }),
+    });
+  });
+  try {
+    await page.goto(`${base}/manga.html`);
+    await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
+    await page.uncheck("#manga-no-ocr");
+    await page.uncheck("#manga-yolo");
+    await setMangaForm(page, { formats: ["matcha"], res: "full" });
+    await page.fill("#manga-key", KEY);
+    await page.fill("#manga-title", "Ocr Manga");
+    const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+    const dest = path.join(OUT, "manga_ocr");
+    unzipTo(zipFile, dest);
+
+    // What went out on the wire.
+    check("Gemini was called", requests.length > 0, `got ${requests.length}`);
+    const r = requests[0] || { url: "", headers: {}, body: {} };
+    check("calls generateContent for the chosen model",
+          r.url.endsWith("/v1beta/models/gemini-3.6-flash:generateContent"), r.url);
+    check("sends the key as the x-goog-api-key header (not in the URL)",
+          r.headers["x-goog-api-key"] === KEY && !r.url.includes(KEY));
+    check("asks for a JSON response",
+          r.body.generationConfig?.responseMimeType === "application/json");
+    const parts = r.body.contents?.[0]?.parts || [];
+    const inline = parts[1]?.inline_data || {};
+    const jpeg = Buffer.from(inline.data || "", "base64");
+    check("sends prompt + inline JPEG",
+          typeof parts[0]?.text === "string" && inline.mime_type === "image/jpeg" &&
+          jpeg[0] === 0xff && jpeg[1] === 0xd8);
+
+    // What came back, as written to disk.
+    const pages = parsePanelsDat(path.join(dest, "Ocr Manga"));
+    // A panel covering essentially the whole page is deliberately never sent to Gemini --
+    // the page image already shows it, and OCRing both would double the calls. So the two
+    // kinds of panel are checked against opposite expectations.
+    const isFullPage = (b, w, h) =>
+      (b[2] - b[0]) / w >= 0.95 && (b[3] - b[1]) / h >= 0.95;
+    let ocred = 0, fullPage = 0, badBox = 0, badText = 0, outside = 0, leaked = 0;
+    for (const pg of pages) {
+      for (const panel of pg.panels) {
+        const [x1, y1, x2, y2] = panel.box;
+        if (isFullPage(panel.box, pg.w, pg.h)) {
+          fullPage++;
+          if (panel.translation !== "" || panel.texts.length) leaked++;
+          continue;
+        }
+        ocred++;
+        if (panel.translation !== TRANSLATION) badText++;
+        // The crop handed to the model, in page space.
+        const want = [Math.max(0, x1 - MARGIN), Math.max(0, y1 - MARGIN),
+                      Math.min(pg.w, x2 + MARGIN), Math.min(pg.h, y2 + MARGIN)];
+        if (panel.texts.length !== 1) badText++;
+        for (const t of panel.texts) {
+          if (t.text !== JP) badText++;
+          if (t.box.some((v, i) => v !== want[i])) badBox++;
+          if (t.box[2] > pg.w || t.box[3] > pg.h) outside++;
+        }
+      }
+    }
+    check("every OCRed panel got its translation and text", ocred > 0 && badText === 0,
+          `${ocred} panels, ${badText} wrong`);
+    check("text boxes land on the crop the model was shown", badBox === 0, `${badBox} misplaced`);
+    check("no text box runs past the page edge", outside === 0, `${outside} outside`);
+    check("one Gemini call per OCRed panel", requests.length === ocred,
+          `${requests.length} calls, ${ocred} panels`);
+    check("full-page panels are not sent to Gemini", fullPage > 0 && leaked === 0,
+          `${fullPage} full-page, ${leaked} with text`);
+  } finally {
+    await page.unroute(GEMINI);
+  }
+}
+
 async function testMangaPanelsOnly(page, base) {
   console.log("manga.html end-to-end (panels-only, borderless pages, XTC + EPUB):");
   const cbz = path.join(FIXTURES, "manga_fullbleed.cbz");
@@ -294,11 +438,8 @@ async function testMangaPanelsOnly(page, base) {
   await page.setInputFiles("#manga-file", cbz);
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
-  await page.check("#manga-panels-only");
-  await page.check(MATCHA_FMT);
-  await page.check('#manga-format .fmt[value="xtc"]');
-  await page.check('#manga-format .fmt[value="epub"]');
-  await page.selectOption("#manga-res", "x4");  // XTC needs a fixed page size
+  // XTC needs a fixed page size, hence a device resolution rather than "full".
+  await setMangaForm(page, { formats: ["matcha", "epub", "xtc"], res: "x4", panelsOnly: true });
   await page.fill("#manga-title", "Full Bleed");
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
   const dest = path.join(OUT, "manga_panels_only");
@@ -357,6 +498,7 @@ async function testDict(page, base) {
     await testMangaEpub(page, base);
     await testMangaPdf(page, base);
     await testMangaPanelsOnly(page, base);
+    await testMangaGeminiOcr(page, base);
     await testDict(page, base);
     await testDictMdx(page, base);
     await testFonts(page, base);

@@ -145,6 +145,10 @@ async function geminiOcrPanel(jpegBytes, apiKey, model, retries = 3) {
     if (result !== null) return result;
     if (attempt < retries - 1) await sleep(Math.pow(2, attempt) * 1000);
   }
+  // Every retryable failure -- a dropped connection, a gateway's HTML error page, a run of
+  // UNAVAILABLE -- lands here. Say so: the panel is exported untranslated either way, and
+  // without a line here an unreachable API looks exactly like a panel that has no text.
+  logLine(`  Warning: no answer from Gemini after ${retries} attempts; this panel keeps no text.`, "warn");
   return { blocks: [], translation: "" };
 }
 
@@ -977,12 +981,17 @@ async function runMangaConversion() {
           const bbox = b.bbox_2d;
           let tb;
           if (Array.isArray(bbox) && bbox.length === 4) {
+            // bbox_2d is normalised 0-1000 over the image the model was actually shown,
+            // which is the MARGINED crop -- so it maps back from that rect's corner, not
+            // the panel's. Anchoring at the panel corner while scaling by the margined
+            // size mixes the two frames and slides every box down-right by the margin.
             const [ymin, xmin, ymax, xmax] = bbox;
+            const at = (v, span) => Math.trunc((Math.min(1000, Math.max(0, Number(v) || 0)) / 1000) * span);
             tb = [
-              x1 + Math.trunc((xmin / 1000) * panelW),
-              y1 + Math.trunc((ymin / 1000) * panelH),
-              x1 + Math.trunc((xmax / 1000) * panelW),
-              y1 + Math.trunc((ymax / 1000) * panelH),
+              mx1 + at(xmin, panelW),
+              my1 + at(ymin, panelH),
+              mx1 + at(xmax, panelW),
+              my1 + at(ymax, panelH),
             ];
           } else {
             tb = [x1, y1, x2, y2];
