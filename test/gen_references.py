@@ -7,6 +7,7 @@ Usage:
 
 Produces under test/fixtures/:
     manga_pages/         synthetic PNG pages + raw grayscale (.gray) and RGBA (.rgba) dumps
+    manga_fullbleed.cbz  borderless pages (one full-page panel each), for panels-only
     ref_manga/           convert_manga.py --no-ocr output
     ref_yolo/boxes.json  YOLO panel boxes (needs numpy + onnxruntime, else skipped)
     ref_manga_pdf/       convert_manga.py --no-ocr output for the PDF fixture
@@ -125,6 +126,33 @@ def make_manga_cbz():
             if name.endswith(".png"):
                 z.write(os.path.join(pages, name), name)
     print(f"manga cbz: {path}")
+
+
+def make_manga_fullbleed_cbz():
+    """CBZ of borderless, edge-to-edge pages, for the panels-only end-to-end test.
+
+    Every page is inked into all four corners, so the white-gutter detector finds
+    no gutter and returns a single panel covering the whole page. That is the one
+    shape "panels only" has no crop-free fallback for -- see testMangaPanelsOnly
+    in test/browser/e2e.mjs.
+    """
+    path = os.path.join(FIXTURES, "manga_fullbleed.cbz")
+    out = os.path.join(FIXTURES, "manga_fullbleed")
+    os.makedirs(out, exist_ok=True)
+    for i in range(3):
+        img = Image.new("RGB", (800, 1200), "white")
+        d = ImageDraw.Draw(img)
+        # 45-degree hatching across the whole page: every row and every column
+        # crosses a line, so there is no blank band anywhere for the detector to
+        # split the page on. The offset just makes the three pages differ.
+        for x0 in range(-1200 + i * 2, 800, 6):
+            d.line([(x0, 0), (x0 + 1200, 1200)], fill=40, width=3)
+        img.save(os.path.join(out, f"full{i + 1:02d}.png"))
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for name in sorted(os.listdir(out)):
+            if name.endswith(".png"):
+                z.write(os.path.join(out, name), name)
+    print(f"manga full-bleed cbz: {path}")
 
 
 def make_manga_epub():
@@ -524,6 +552,7 @@ if __name__ == "__main__":
     run_manga_reference()
     run_yolo_reference()
     make_manga_cbz()
+    make_manga_fullbleed_cbz()
     make_manga_epub()
     run_manga_epub_reference()
     make_manga_pdf()

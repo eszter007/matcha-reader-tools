@@ -61,6 +61,15 @@ with zipfile.ZipFile(sys.argv[1]) as z: z.extractall(sys.argv[2])
 `, zipFile, destDir]);
 }
 
+/* Formats and target resolution start unpicked (the page rejects an empty choice
+ * rather than guessing), so each manga run below states both. */
+const MATCHA_FMT = '#manga-format .fmt[value="matcha"]';
+
+/* Page count from an XTC/XTCH container header (u16 at offset 6). */
+function xtcPageCount(file) {
+  return fs.readFileSync(file).readUInt16LE(6);
+}
+
 function filesEqual(a, b) {
   const ba = fs.readFileSync(a), bb = fs.readFileSync(b);
   return ba.length === bb.length && ba.equals(bb);
@@ -131,6 +140,8 @@ async function testManga(page, base) {
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo"); // byte-exact references use the grid path
+  await page.check(MATCHA_FMT);
+  await page.selectOption("#manga-res", "full"); // references have no device downscaling
   await page.fill("#manga-title", "Test Manga");
   await page.fill("#manga-author", "Test Author");
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
@@ -183,6 +194,8 @@ async function testMangaYolo(page, base) {
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
   await page.check("#manga-no-ocr");
   await page.check("#manga-yolo");
+  await page.check(MATCHA_FMT);
+  await page.selectOption("#manga-res", "full");
   await page.fill("#manga-title", "Yolo Manga");
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
   const dest = path.join(OUT, "manga_yolo");
@@ -209,6 +222,8 @@ async function testMangaEpub(page, base) {
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.epub"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
+  await page.check(MATCHA_FMT);
+  await page.selectOption("#manga-res", "full");
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
   const dest = path.join(OUT, "manga_epub");
   unzipTo(zipFile, dest);
@@ -231,6 +246,8 @@ async function testMangaPdf(page, base) {
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.pdf"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
+  await page.check(MATCHA_FMT);
+  await page.selectOption("#manga-res", "full");
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
   const dest = path.join(OUT, "manga_pdf");
   unzipTo(zipFile, dest);
@@ -257,6 +274,58 @@ async function testMangaPdf(page, base) {
     const name = `page_${String(i).padStart(4, "0")}.png`;
     check(`${name} present`, fs.existsSync(path.join(dir, name)));
   }
+}
+
+/* Panels-only on borderless pages: every page is a single full-page panel, which is
+ * the one shape with no full page behind it to fall back on. That combination used to
+ * throw "drawImage ... value is not of type ..." -- the full-resolution source canvas
+ * was allocated only for pages with a non-full-page panel, but panels-only cropped
+ * from it anyway -- and, once merely guarded, silently dropped those pages from the
+ * pre-rendered exports. So the check is that every source page reaches the XTC. */
+async function testMangaPanelsOnly(page, base) {
+  console.log("manga.html end-to-end (panels-only, borderless pages, XTC + EPUB):");
+  const cbz = path.join(FIXTURES, "manga_fullbleed.cbz");
+  if (!fs.existsSync(cbz)) {
+    console.log("  skip (no manga_fullbleed.cbz — rerun gen_references.py)");
+    return;
+  }
+  const pageCount = 3;  // full01..full03, one full-page panel each
+  await page.goto(`${base}/manga.html`);
+  await page.setInputFiles("#manga-file", cbz);
+  await page.check("#manga-no-ocr");
+  await page.uncheck("#manga-yolo");
+  await page.check("#manga-panels-only");
+  await page.check(MATCHA_FMT);
+  await page.check('#manga-format .fmt[value="xtc"]');
+  await page.check('#manga-format .fmt[value="epub"]');
+  await page.selectOption("#manga-res", "x4");  // XTC needs a fixed page size
+  await page.fill("#manga-title", "Full Bleed");
+  const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+  const dest = path.join(OUT, "manga_panels_only");
+  unzipTo(zipFile, dest);
+
+  const xtc = path.join(dest, "Full Bleed.xtc");
+  check("XTC produced", fs.existsSync(xtc));
+  if (fs.existsSync(xtc)) {
+    const got = xtcPageCount(xtc);
+    check(`XTC keeps all ${pageCount} pages`, got === pageCount, `got ${got}`);
+  }
+
+  const epubFile = path.join(dest, "Full Bleed.epub");
+  check("EPUB produced", fs.existsSync(epubFile));
+  if (fs.existsSync(epubFile)) {
+    const epubDir = path.join(dest, "epub_unzipped");
+    unzipTo(epubFile, epubDir);
+    const imgDir = path.join(epubDir, "OEBPS", "images");
+    const images = fs.existsSync(imgDir) ? fs.readdirSync(imgDir) : [];
+    check(`EPUB keeps all ${pageCount} pages`, images.length === pageCount, `got ${images.length}`);
+  }
+
+  // The device folder is unaffected by the bug, but its crops are what the XTC pages
+  // are built from -- if they are missing, the counts above pass for the wrong reason.
+  const crops = path.join(dest, "Full Bleed", "panels");
+  const cropFiles = fs.existsSync(crops) ? fs.readdirSync(crops) : [];
+  check(`${pageCount} panel crops written`, cropFiles.length === pageCount, `got ${cropFiles.length}`);
 }
 
 async function testDict(page, base) {
@@ -287,6 +356,7 @@ async function testDict(page, base) {
     await testMangaYolo(page, base);
     await testMangaEpub(page, base);
     await testMangaPdf(page, base);
+    await testMangaPanelsOnly(page, base);
     await testDict(page, base);
     await testDictMdx(page, base);
     await testFonts(page, base);

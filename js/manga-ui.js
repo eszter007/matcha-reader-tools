@@ -859,6 +859,14 @@ async function runMangaConversion() {
         if (v.xtch) xtchPages.push(v.xtch);
       }
 
+      // Which panels get cropped at all. A full-page panel normally gets no crop: the page image
+      // is already the best presentation of it. Panels-only books may have dropped that page
+      // image, so the crop is written anyway or the page would export nothing. The full-res
+      // source canvas below is allocated from this same predicate, so the two cannot disagree --
+      // they did once, and a panels-only page whose panels were *all* full-page entered the crop
+      // branch with no source canvas, throwing "drawImage ... value is not of type ...".
+      const needsCrop = (b) => !isFullPagePanel(b, imgW, imgH) || panelsOnly;
+
       // Full-resolution page for the panel crops. A panel is shown zoomed to fill
       // the screen, so cropping it from the already-downscaled page magnifies a
       // fraction of an already-reduced image (softness and dither dots and all);
@@ -867,7 +875,7 @@ async function runMangaConversion() {
       // actually has a panel to crop — covers / full-page spreads skip it.
       // Transparent sources composite onto white (the device's alpha handling).
       let sourceCanvas = null;
-      if (boxes.some((b) => !isFullPagePanel(b, imgW, imgH))) {
+      if (boxes.some(needsCrop)) {
         sourceCanvas = makeCanvas(origW, origH);
         const sctx = sourceCanvas.getContext("2d");
         sctx.fillStyle = "#ffffff"; sctx.fillRect(0, 0, origW, origH);
@@ -885,11 +893,8 @@ async function runMangaConversion() {
         const mx2 = Math.min(imgW, x2 + margin);
         const my2 = Math.min(imgH, y2 + margin);
         let cropBytes = null;  // full-colour JPEG crop for OCR (null = no crop / no OCR)
-        // A full-page panel normally gets no crop: the page image is already the best
-        // presentation of it. Panels-only books have no page image to fall back on, so the crop
-        // must be written anyway or that page would export nothing at all.
         const fullPagePanel = isFullPagePanel(boxes[panelIdx], imgW, imgH);
-        if (!fullPagePanel || panelsOnly) {
+        if (needsCrop(boxes[panelIdx])) {
           // Map the detected rect into full-resolution page coordinates, then draw
           // that region straight into a device-fitted panel canvas (one drawImage
           // crops + scales). fitToDeviceSize fits a landscape panel against the
@@ -920,7 +925,13 @@ async function runMangaConversion() {
             cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
             if (matchaFolder) zip.addFile(`${folder}/${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
           }
-          if (epub && !fullPagePanel) {
+          // A full-page panel is normally left out of the pre-rendered books: the full page
+          // image in front of it already carries the same artwork, so the crop would only
+          // duplicate it. When panels-only dropped that page image, the crop is the page's only
+          // copy -- without it the page is simply missing from the EPUB/XTC (the device folder
+          // still gets the crop either way).
+          const cropInsteadOfPage = !fullPagePanel || !keepPageImage;
+          if (epub && cropInsteadOfPage) {
             // Rotate wide (landscape) panels to portrait so they display as
             // large as possible on the usual portrait reading screen; the
             // fixed-layout reader then scales each to fullscreen. Off, the
@@ -929,7 +940,7 @@ async function runMangaConversion() {
             if (rotatePanels && pw > ph) { panelCanvas = rotateCanvas90CW(cropCanvas); epw = ph; eph = pw; }
             epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: epw, h: eph });
           }
-          if (anyXtc && !fullPagePanel) {
+          if (anyXtc && cropInsteadOfPage) {
             const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget, rotatePanels);
             if (v.xtc) xtcPages.push(v.xtc);
             if (v.xtch) xtchPages.push(v.xtch);
