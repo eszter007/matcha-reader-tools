@@ -15,6 +15,7 @@ Produces under test/fixtures/:
     yomitan.zip          synthetic Yomitan dictionary
     jmdict.json          synthetic jmdict-simplified JSON
     ref_dict_yomitan/    convert_jmdict.py output + .spx
+    ref_font/            fontconvert_sdcard.py .cpfont (needs freetype-py + fontTools)
     ref_dict_jmdict/     convert_jmdict.py output + .spx
 """
 
@@ -533,6 +534,34 @@ def run_mdx_reference():
     print(f"mdx reference: {out}")
 
 
+def run_font_reference():
+    """Reference .cpfont from the firmware's own converter, for the fonts.html
+    end-to-end test. Skipped when the font or the converter's deps are missing --
+    freetype-py and fontTools are not needed by anything else here.
+
+    Must match what test/browser/e2e.mjs asks the page for: DejaVuSans at 14pt,
+    latin-ext, regular.
+    """
+    out = os.path.join(FIXTURES, "ref_font")
+    script = os.path.join(FIRMWARE, "lib", "EpdFont", "scripts", "fontconvert_sdcard.py")
+    font = os.environ.get("TEST_FONT", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    if not os.path.exists(script) or not os.path.exists(font):
+        print("font reference: SKIPPED (need the firmware's fontconvert_sdcard.py and DejaVuSans.ttf)")
+        return
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out, exist_ok=True)
+    try:
+        subprocess.run([sys.executable, script,
+                        "--intervals", "latin-ext", "--size", "14", "--style", "regular",
+                        font, "-o", os.path.join(out, "DejaVuSans_14.cpfont")],
+                       check=True, cwd=os.path.dirname(script))
+    except subprocess.CalledProcessError:
+        shutil.rmtree(out, ignore_errors=True)
+        print("font reference: SKIPPED (converter failed; pip install freetype-py fonttools)")
+        return
+    print(f"font reference: {out}")
+
+
 def run_dict_references():
     script = os.path.join(FIRMWARE, "tools", "dict_convert", "convert_jmdict.py")
     spx_script = os.path.join(FIRMWARE, "scripts", "gen_dict_spx.py")
@@ -559,6 +588,7 @@ if __name__ == "__main__":
     run_manga_pdf_reference()
     make_yomitan_zip()
     make_jmdict_json()
+    run_font_reference()
     run_dict_references()
     if make_mdx_fixtures():
         run_mdx_reference()
