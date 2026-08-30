@@ -141,6 +141,39 @@ function decodeBmp1bit(bmp) {
   return { magic: bmp[0] === 0x42 && bmp[1] === 0x4d, offBits, width, height, bpp, comp, colorsUsed, rowBytes, mono };
 }
 
+/* Chapter lists come from a textarea, so the page index is whatever was typed.
+ * toc.idx stores it as u32: a negative one used to wrap (-5 -> 4294967291) and point
+ * the device at a page that cannot exist, where the Python tool's struct.pack refuses
+ * the value outright. Rejected at both the parse and the encode step now. */
+function testMangaToc() {
+  console.log("manga chapter list (toc.idx page indices):");
+  const parsed = manga.parseTocText("-5|Bad\n0|Start\n2|Two\nnope\nx|Nan");
+  check("negative page index dropped",
+        parsed.entries.length === 2 && parsed.entries[0][0] === 0 && parsed.entries[1][0] === 2,
+        JSON.stringify(parsed.entries));
+  check("negative page index warns",
+        parsed.warnings.some((w) => /negative page index/.test(w)), JSON.stringify(parsed.warnings));
+  check("malformed and non-integer lines still warn", parsed.warnings.length === 3,
+        JSON.stringify(parsed.warnings));
+
+  const out = manga.writeTocIdx([[-5, "Bad"], [0, "Start"], [2, "Two"]]);
+  const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  const count = dv.getUint32(4, true);
+  const indices = [];
+  let o = 8;
+  for (let i = 0; i < count; i++) {
+    indices.push(dv.getUint32(o, true));
+    o += 6 + dv.getUint16(o + 4, true);
+  }
+  check("writeTocIdx drops a negative index rather than wrapping it",
+        indices.every((v) => v < 0x80000000) && count === 2, JSON.stringify(indices));
+
+  // A cover entry is still prepended when the first real chapter is not page 0.
+  const withCover = manga.writeTocIdx([[3, "Three"]]);
+  const dv2 = new DataView(withCover.buffer, withCover.byteOffset, withCover.byteLength);
+  check("cover entry still prepended", dv2.getUint32(4, true) === 2 && dv2.getUint32(8, true) === 0);
+}
+
 function testMangaMono() {
   console.log("manga 1-bit BMP output (--mono / Floyd-Steinberg):");
 
@@ -579,6 +612,7 @@ function testXtc() {
 (async () => {
   testManga();
   testXtc();
+  testMangaToc();
   testMangaMono();
   testMangaFit();
   await testMangaEpub();

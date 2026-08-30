@@ -638,6 +638,10 @@ function writeMetaBin(title, author, language) {
 
 /* entries: [[pageIndex, title], ...]. Returns toc.idx bytes. */
 function writeTocIdx(entries, addCover = true) {
+  // Defensive: pageIndex is written as u32, so anything negative would wrap into a huge
+  // page number instead of failing. Callers already filter, but this is the last point
+  // before the bytes are committed.
+  entries = entries.filter(([pageIndex]) => Number.isInteger(pageIndex) && pageIndex >= 0);
   entries = entries.slice().sort((a, b) => a[0] - b[0]);
   if (addCover && (entries.length === 0 || entries[0][0] !== 0)) {
     entries = [[0, "Cover"], ...entries];
@@ -788,6 +792,14 @@ function parseTocText(text) {
     const pageIndex = parseInt(line.substring(0, idx).trim(), 10);
     if (!Number.isInteger(pageIndex)) {
       warnings.push(`Chapter line ${i + 1} has a non-integer page index, skipping`);
+      continue;
+    }
+    // Page indices are 0-based, and toc.idx stores them as u32. A negative one would wrap
+    // (-5 becomes 4294967291) and point the device at a page that cannot exist -- the Python
+    // tool's struct.pack refuses it outright, so drop the line and say why rather than
+    // writing a chapter nobody can navigate to.
+    if (pageIndex < 0) {
+      warnings.push(`Chapter line ${i + 1} has a negative page index, skipping`);
       continue;
     }
     entries.push([pageIndex, line.substring(idx + 1).trim()]);
