@@ -145,6 +145,65 @@ function decodeBmp1bit(bmp) {
  * toc.idx stores it as u32: a negative one used to wrap (-5 -> 4294967291) and point
  * the device at a page that cannot exist, where the Python tool's struct.pack refuses
  * the value outright. Rejected at both the parse and the encode step now. */
+/* Paths a V8 coverage sweep of the browser tool showed were reached by real user input
+ * but exercised by no test: source metadata, the EPUB2 chapter list, and the ink-coverage
+ * math that decides whether a panels-only page keeps its full page. */
+function testMangaSourceMetadata() {
+  console.log("manga source metadata + EPUB2 chapters (previously untested):");
+  const ci = manga.cbzMetadataFromComicInfo(
+    "<ComicInfo><Title>Tom &amp; Jerry</Title><Writer>Ada Lovelace</Writer>" +
+    "<LanguageISO>jp</LanguageISO></ComicInfo>");
+  // XML entities are deliberately NOT decoded -- convert_manga.py uses the same regex
+  // and the two must agree; changing it here alone would break that parity.
+  check("ComicInfo title (entities left as-is, matching the Python tool)",
+        ci.title === "Tom &amp; Jerry", JSON.stringify(ci.title));
+  check("ComicInfo writer", ci.author === "Ada Lovelace", JSON.stringify(ci.author));
+  check("ComicInfo language", ci.language === "jp", JSON.stringify(ci.language));
+  check("ComicInfo language normalises to ja", manga.normalizeLanguage(ci.language) === "ja");
+  const none = manga.cbzMetadataFromComicInfo("<ComicInfo/>");
+  check("ComicInfo with no fields yields empties",
+        none.title === "" && none.author === "" && none.language === "");
+
+  const opf = '<package><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>' +
+              '</manifest><spine toc="ncx"><itemref idref="x1"/></spine></package>';
+  check("EPUB2 ncx href resolved from the spine's toc attribute",
+        manga.epubNcxHref(opf) === "toc.ncx", String(manga.epubNcxHref(opf)));
+  check("no ncx attribute yields null", manga.epubNcxHref("<package><spine/></package>") === null);
+  const ncx = '<ncx><navMap>' +
+    '<navPoint><navLabel><text>First Chapter</text></navLabel><content src="text/p1.xhtml"/></navPoint>' +
+    '<navPoint><navLabel><text>Second Chapter</text></navLabel><content src="text/p2.xhtml"/></navPoint>' +
+    '<navPoint><navLabel><text>  </text></navLabel><content src="text/p3.xhtml"/></navPoint>' +
+    '</navMap></ncx>';
+  const entries = manga.epubTocFromNcx(ncx, "OEBPS/toc.ncx");
+  check("EPUB2 chapters resolved against the ncx's own directory",
+        entries.length === 2 && entries[0][0] === "OEBPS/text/p1.xhtml" && entries[0][1] === "First Chapter",
+        JSON.stringify(entries));
+  check("blank-titled navPoint dropped", entries.every(([, t]) => t.trim() !== ""));
+}
+
+function testMangaInkCoverage() {
+  console.log("manga panels-only ink coverage (previously untested):");
+  const w = 100, h = 100;
+  const page = (px) => { const g = new Uint8Array(w * h).fill(255); for (const [x, y] of px) g[y * w + x] = 0; return g; };
+  const inside = [], outside = [];
+  for (let i = 0; i < 100; i++) inside.push([10 + (i % 10), 10 + Math.floor(i / 10)]);
+  for (let i = 0; i < 10; i++) outside.push([90, 90 + (i % 10)]);
+  const rect = [[10, 10, 20, 20]];
+  const mixed = manga.panelInkCoverage(page(inside.concat(outside)), w, h, rect);
+  check("ink split 100 inside / 10 outside", Math.abs(mixed - 100 / 110) < 1e-9, String(mixed));
+  check("all ink inside → 1", manga.panelInkCoverage(page(inside), w, h, rect) === 1);
+  check("a blank page counts as fully covered",
+        manga.panelInkCoverage(new Uint8Array(w * h).fill(255), w, h, rect) === 1);
+  check("no panels → 0", manga.panelInkCoverage(page(inside), w, h, []) === 0);
+  check("a rect past the page edge is clamped, not out of bounds",
+        manga.panelInkCoverage(page(inside), w, h, [[-50, -50, 500, 500]]) === 1);
+  check("gaps narrower than the minimum are merged",
+        JSON.stringify(manga.mergeSmallGaps([0, 10, 12, 100], 5)) === "[0,10,100]",
+        JSON.stringify(manga.mergeSmallGaps([0, 10, 12, 100], 5)));
+  check("wide gaps are kept",
+        JSON.stringify(manga.mergeSmallGaps([0, 50, 100], 5)) === "[0,50,100]");
+}
+
 function testMangaToc() {
   console.log("manga chapter list (toc.idx page indices):");
   const parsed = manga.parseTocText("-5|Bad\n0|Start\n2|Two\nnope\nx|Nan");
@@ -612,6 +671,8 @@ function testXtc() {
 (async () => {
   testManga();
   testXtc();
+  testMangaSourceMetadata();
+  testMangaInkCoverage();
   testMangaToc();
   testMangaMono();
   testMangaFit();
