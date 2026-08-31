@@ -338,6 +338,43 @@ function parsePanelsDat(dir) {
  * land exactly on the region that was sent -- the MARGINED panel rect. That pins the bug
  * where the box was mapped from the panel's own corner while being scaled by the margined
  * size, sliding every text box down-right by the crop margin. */
+/* Chapter-foldered CBZ: one folder per chapter, page numbering restarting inside each,
+ * so ch01/001.png and ch03/001.png share a basename. Pages used to be keyed on that
+ * basename, so each chapter's page 1 overwrote the last -- a nine-page archive converted
+ * to three, silently, and the survivors read as jumbled chapters. Reported against the
+ * XTCH export by a reader whose source was exactly this layout.
+ *
+ * The fixture gives each chapter a distinct page WIDTH, so panels.idx records the reading
+ * order unambiguously: 600,600,600,620,620,620,640,640,640 is ch01,ch02,ch03 in order. */
+async function testMangaFolderedCbz(page, base) {
+  console.log("manga.html end-to-end (chapter-foldered CBZ, page order):");
+  const cbz = path.join(FIXTURES, "manga_foldered.cbz");
+  if (!fs.existsSync(cbz)) {
+    console.log("  skip (no manga_foldered.cbz — rerun gen_references.py)");
+    return;
+  }
+  await page.goto(`${base}/manga.html`);
+  await page.setInputFiles("#manga-file", cbz);
+  await page.check("#manga-no-ocr");
+  await page.uncheck("#manga-yolo");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
+  await page.fill("#manga-title", "Foldered");
+  const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+  const dest = path.join(OUT, "manga_foldered");
+  unzipTo(zipFile, dest);
+  const dir = path.join(dest, "Foldered");
+
+  const pages = parsePanelsDat(dir);
+  check("every page of every chapter survives", pages.length === 9, `got ${pages.length}`);
+  const widths = pages.map((p) => p.w);
+  check("pages in chapter order (widths identify the chapter)",
+        JSON.stringify(widths) === JSON.stringify([600, 600, 600, 620, 620, 620, 640, 640, 640]),
+        JSON.stringify(widths));
+  const written = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((n) => /^page_\d+\./.test(n)).sort() : [];
+  check("one page image per source page", written.length === 9, `got ${written.length}`);
+}
+
 async function testMangaGeminiOcr(page, base) {
   console.log("manga.html end-to-end (Gemini OCR + translations, API stubbed):");
   const MARGIN = 10;                        // the page's default panel crop margin
@@ -564,6 +601,7 @@ async function testDict(page, base) {
     await testMangaEpub(page, base);
     await testMangaPdf(page, base);
     await testMangaPanelsOnly(page, base);
+    await testMangaFolderedCbz(page, base);
     await testMangaGeminiOcr(page, base);
     await testMangaNoOffscreenCanvas(browser, base);
     await testDict(page, base);

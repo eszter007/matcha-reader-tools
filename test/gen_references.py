@@ -8,6 +8,7 @@ Usage:
 Produces under test/fixtures/:
     manga_pages/         synthetic PNG pages + raw grayscale (.gray) and RGBA (.rgba) dumps
     manga_fullbleed.cbz  borderless pages (one full-page panel each), for panels-only
+    manga_foldered.cbz   one folder per chapter, page numbers restarting in each
     ref_manga/           convert_manga.py --no-ocr output
     ref_yolo/boxes.json  YOLO panel boxes (needs numpy + onnxruntime, else skipped)
     ref_manga_pdf/       convert_manga.py --no-ocr output for the PDF fixture
@@ -154,6 +155,34 @@ def make_manga_fullbleed_cbz():
             if name.endswith(".png"):
                 z.write(os.path.join(out, name), name)
     print(f"manga full-bleed cbz: {path}")
+
+
+def make_manga_foldered_cbz():
+    """CBZ with one folder per chapter, page numbering restarting inside each.
+
+    The layout that cost a reader most of a volume: ch01/001.png and ch03/001.png
+    share a basename, so keying pages on the basename kept only the last of each.
+    Every chapter gets a distinct page WIDTH so the resulting panels.idx records
+    the reading order unambiguously -- see testMangaFolderedCbz in
+    test/browser/e2e.mjs.
+    """
+    path = os.path.join(FIXTURES, "manga_foldered.cbz")
+    out = os.path.join(FIXTURES, "manga_foldered")
+    os.makedirs(out, exist_ok=True)
+    widths = {1: 600, 2: 620, 3: 640}
+    for ch in (1, 2, 3):
+        for pg in (1, 2, 3):
+            w = widths[ch]
+            img = Image.new("RGB", (w, 900), "white")
+            d = ImageDraw.Draw(img)
+            d.rectangle([40, 40, w - 40, 860], fill=(150, 150, 150), outline=0, width=3)
+            d.text((60, 60), f"ch{ch} pg{pg}", fill=0)
+            img.save(os.path.join(out, f"ch{ch:02d}_{pg:03d}.png"))
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for ch in (1, 2, 3):
+            for pg in (1, 2, 3):
+                z.write(os.path.join(out, f"ch{ch:02d}_{pg:03d}.png"), f"ch{ch:02d}/{pg:03d}.png")
+    print(f"manga foldered cbz: {path}")
 
 
 def make_manga_epub():
@@ -582,6 +611,7 @@ if __name__ == "__main__":
     run_yolo_reference()
     make_manga_cbz()
     make_manga_fullbleed_cbz()
+    make_manga_foldered_cbz()
     make_manga_epub()
     run_manga_epub_reference()
     make_manga_pdf()
