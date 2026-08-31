@@ -591,7 +591,10 @@ async function testDict(page, base) {
   fs.mkdirSync(OUT, { recursive: true });
   const server = await serve(ROOT);
   const base = `http://127.0.0.1:${server.address().port}`;
-  const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
+  // Playwright's own managed Chromium by default (npx playwright install chromium).
+  // CHROMIUM_PATH overrides it for environments that ship a browser elsewhere.
+  const browser = await chromium.launch(
+    process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   const page = await browser.newPage();
   page.on("pageerror", (e) => { console.error("  page error:", e.message); failures++; });
 

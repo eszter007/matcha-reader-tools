@@ -1,0 +1,38 @@
+# Python packages for test/gen_references.py, which builds the fixtures and the
+# reference outputs the two test suites compare against.
+#
+#   pip install -r test/requirements.txt
+#
+# Only Pillow is required. Every other package unlocks one more reference; when one
+# is missing gen_references.py prints "SKIPPED (...)" and the tests that need it
+# report "skip" rather than failing, so a partial install still gives a useful run.
+#
+# Versions are floors, not pins -- these are the ones this was last verified against.
+
+# Required: the synthetic pages, and every CBZ/EPUB/PDF fixture built from them.
+Pillow>=10.0
+
+# ref_yolo/boxes.json -- the AI panel-detection reference.
+# Without these: "manga.html end-to-end (CBZ, no OCR, AI panel detection)" skips,
+# and so does the node suite's YOLO comparison.
+numpy>=1.26
+onnxruntime>=1.17
+
+# manga.pdf and ref_manga_pdf/ -- the PDF input path.
+# Without this: "manga.html end-to-end (PDF, no OCR, grid detection)" skips.
+pymupdf>=1.24
+
+# ref_font/DejaVuSans_14.cpfont, generated with the firmware's own
+# lib/EpdFont/scripts/fontconvert_sdcard.py (so this needs MATCHA_READER set).
+# Without these: "fonts.html end-to-end" still converts, but the structural
+# comparison against the reference is skipped.
+freetype-py>=2.4
+fonttools>=4.50
+
+# dict.mdx / dict_reg.mdx and ref_dict_mdx/ -- the MDict dictionary path.
+# Without these: the MDX cases in both suites skip.
+# python-lzo builds a C extension and needs the liblzo2 headers first:
+#   Debian/Ubuntu  sudo apt-get install liblzo2-dev
+#   macOS          brew install lzo
+readmdict>=0.1
+python-lzo>=1.14
