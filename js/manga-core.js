@@ -38,23 +38,33 @@ function baseName(path) {
 /* ── Page ordering (matches FsHelpers::sortFileList on the device) ── */
 
 /* Natural sort key: list of [group, len, str] triples. Cover and copyright
- * pages are pinned to the front (see convert_manga.py:_natural_sort_key). */
+ * pages are pinned to the front (see convert_manga.py:_natural_sort_key).
+ *
+ * The key is built from the WHOLE path, not just the basename. Archives that put each
+ * chapter in its own folder restart page numbering inside it, so "ch01/001.jpg" and
+ * "ch08/001.jpg" share a basename: keying or sorting on the basename alone collapses
+ * them into one page and interleaves whatever survives. Including the directory sorts
+ * ch01's pages before ch02's, which is the reading order those archives encode.
+ * A flat archive has no directory component, so its order is unchanged -- which is why
+ * this still matches convert_manga.py byte for byte on the reference fixtures.
+ * The cover/copyright pin stays keyed on the basename, where those names live. */
 function naturalSortKey(path) {
   const name = baseName(path);
   const lower = name.toLowerCase();
   if (lower.includes("cover")) return [[-2, 0, ""]];
   if (lower.includes("copyright")) return [[-1, 0, ""]];
+  const full = String(path);
   const parts = [];
   let i = 0;
-  while (i < name.length) {
-    if (name[i] >= "0" && name[i] <= "9") {
+  while (i < full.length) {
+    if (full[i] >= "0" && full[i] <= "9") {
       let j = i;
-      while (j < name.length && name[j] >= "0" && name[j] <= "9") j++;
-      const numStr = name.substring(i, j).replace(/^0+/, "");
+      while (j < full.length && full[j] >= "0" && full[j] <= "9") j++;
+      const numStr = full.substring(i, j).replace(/^0+/, "");
       parts.push([0, numStr.length, numStr]);
       i = j;
     } else {
-      parts.push([1, 0, name[i].toLowerCase()]);
+      parts.push([1, 0, full[i].toLowerCase()]);
       i += 1;
     }
   }

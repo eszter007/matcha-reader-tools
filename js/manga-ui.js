@@ -247,14 +247,22 @@ async function collectPagesFromInput(files) {
 
 async function collectFromCbz(bytes, fileName) {
   const zip = new ZipReader(bytes);
-  // Flatten by basename; later entries overwrite (matches the Python tool).
-  const byBase = new Map();
+  // Keyed by FULL path, not basename. Archives that give each chapter its own folder
+  // restart page numbering inside it, so ch01/001.jpg and ch08/001.jpg share a basename
+  // -- flattening on that silently kept only the last one, dropping most of the book and
+  // interleaving the survivors. Only a genuine duplicate path collides now, and the log
+  // says so rather than losing pages quietly.
+  const byPath = new Map();
+  let duplicates = 0;
   for (const e of zip.entries) {
     if (e.isDir || !isImageName(e.name)) continue;
-    byBase.set(baseName(e.name), e);
+    const key = pathNorm(e.name);
+    if (byPath.has(key)) duplicates++;
+    byPath.set(key, e);
   }
-  if (!byBase.size) throw new Error("No image files found in the archive");
-  const ordered = naturalSortPaths([...byBase.keys()]);
+  if (!byPath.size) throw new Error("No image files found in the archive");
+  if (duplicates) logLine(`${duplicates} duplicate image path(s) in the archive; keeping the last of each.`, "warn");
+  const ordered = naturalSortPaths([...byPath.keys()]);
 
   let meta = { title: "", author: "", language: "" };
   const infoEntry = zip.entries.find((e) => baseName(e.name).toLowerCase() === "comicinfo.xml");
@@ -265,7 +273,7 @@ async function collectFromCbz(bytes, fileName) {
   }
 
   return {
-    pages: ordered.map((name) => ({ name, read: () => zip.readEntry(byBase.get(name)) })),
+    pages: ordered.map((name) => ({ name, read: () => zip.readEntry(byPath.get(name)) })),
     meta,
     tocEntries: [],
     sourceLabel: fileName,

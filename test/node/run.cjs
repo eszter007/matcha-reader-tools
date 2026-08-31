@@ -152,6 +152,35 @@ function decodeBmp1bit(bmp) {
  * escaped arrives still escaped unless it is decoded here. The set is deliberately the
  * five predefined XML entities plus numeric references -- exactly what
  * convert_manga.py:xml_unescape decodes, since the two tools must agree byte for byte. */
+/* Chapter-foldered archives: each chapter restarts page numbering, so basenames repeat
+ * across folders. Keying or sorting on the basename alone collapsed ch01/001 and ch08/001
+ * into one page -- most of a volume silently lost, and the survivors interleaved into
+ * something that reads as jumbled chapters. */
+function testMangaFolderedSort() {
+  console.log("manga page order in chapter-foldered archives:");
+  const foldered = ["ch02/002.png", "ch01/002.png", "ch02/001.png", "ch01/001.png", "ch10/001.png"];
+  check("directories order before the page number inside them",
+        JSON.stringify(manga.naturalSortPaths(foldered)) ===
+        JSON.stringify(["ch01/001.png", "ch01/002.png", "ch02/001.png", "ch02/002.png", "ch10/001.png"]),
+        JSON.stringify(manga.naturalSortPaths(foldered)));
+  check("repeated basenames stay distinct entries",
+        new Set(foldered.map((p) => manga.baseName(p))).size === 2 &&
+        manga.naturalSortPaths(foldered).length === 5);
+  // ch10 must follow ch02, not sort between ch01 and ch02 as a string compare would.
+  check("chapter numbers compare numerically, not as text",
+        manga.naturalSortPaths(["ch10/001.png", "ch2/001.png"])[0] === "ch2/001.png");
+
+  // A flat archive has no directory component, so nothing about it changes -- this is what
+  // keeps the byte-comparison against convert_manga.py valid.
+  const flat = ["010.png", "9.png", "002.png", "cover.jpg", "copyright.png"];
+  check("flat archive order unchanged (cover, copyright, then natural)",
+        JSON.stringify(manga.naturalSortPaths(flat)) ===
+        JSON.stringify(["cover.jpg", "copyright.png", "002.png", "9.png", "010.png"]),
+        JSON.stringify(manga.naturalSortPaths(flat)));
+  check("cover/copyright pinned by basename even inside a folder",
+        manga.naturalSortPaths(["ch01/001.png", "front/cover.jpg"])[0] === "front/cover.jpg");
+}
+
 function testXmlUnescape() {
   console.log("XML entity decoding (shared with convert_manga.py):");
   const u = manga.xmlUnescape;
@@ -704,6 +733,7 @@ function testXtc() {
 (async () => {
   testManga();
   testXtc();
+  testMangaFolderedSort();
   testXmlUnescape();
   testMangaSourceMetadata();
   testMangaInkCoverage();
