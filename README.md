@@ -19,22 +19,53 @@ files via the reader's built-in Wi-Fi web file transfer.
 
 ## What the panel detection does
 
-Red boxes are the panels the converter found; the number on each is its position in the reading
+Red boxes are the panels the converter found. The number on each is its position in the reading
 order written to `panels.dat`. Pick the **book type** in step 3 and the rest follows from it.
 
-| Book type | Example | What it does |
-|---|---|---|
-| **Manga** | <img src="docs/images/panels-manga.jpg" width="300" alt="A manga page with eight numbered panels, walked right to left"> | Panels are walked right to left within each row, then down the page. A full-width panel separates the rows above and below it, and a tall panel beside two stacked shorter ones resolves correctly — the order comes from a topological sort, not from clustering panels by their vertical centre. |
-| **Western comic** | <img src="docs/images/panels-calvin.jpg" width="300" alt="A Calvin and Hobbes page with eight numbered panels, walked left to right"> | Same layout logic mirrored: left to right within a row, then down. The blank paper border and the page number are cropped off first, so a scan fills the screen instead of floating in the middle of it. |
-| **Western comic**<br>(newspaper strips) | <img src="docs/images/panels-moomin-german.jpg" width="300" alt="A Moomin page of four strips with eleven numbered panels"> | Strip collections work the same way. Trimming the margin before detection is what makes this page come out as all 11 panels — untrimmed it returns 9, with one whole strip left undivided. |
-| **Webtoon / manhwa** | <img src="docs/images/panels-webtoon.jpg" width="600" alt="Six webtoon pages re-cut from a vertical strip, each with numbered panels"> | One continuous vertical strip. The fixed-height tiles it was distributed in are reassembled and re-cut at the artwork's own gutters, so no page starts or ends mid-panel, and panels are the art blocks between those gutters. A 48-tile chapter came out as 42 pages filling 90% of the screen on average. |
+<details>
+<summary><b>Manga</b> — right to left, then down the page</summary>
+
+A full-width panel separates the rows above and below it, and a tall panel beside two stacked
+shorter ones resolves correctly. The order comes from a topological sort rather than clustering
+panels by their vertical centre, which is what gets mixed-size layouts wrong.
+
+<img src="docs/images/panels-manga.jpg" width="360" alt="A manga page with eight numbered panels, walked right to left">
+</details>
 
 <details>
-<summary>One more western example</summary>
+<summary><b>Western comic</b> — left to right, then down the page</summary>
 
-<img src="docs/images/panels-moomin-english.jpg" width="420" alt="An English Moomin page with twelve numbered panels across four strips">
+The same layout logic mirrored. The blank paper border and the page number are cropped off first,
+so a scan fills the screen instead of floating in the middle of it.
+
+<img src="docs/images/panels-calvin.jpg" width="360" alt="A Calvin and Hobbes page with eight numbered panels, walked left to right">
+</details>
+
+<details>
+<summary><b>Western comic</b> — newspaper strip collections</summary>
+
+Strips work the same way. Trimming the margin before detection is what makes this page come out
+as all 11 panels; untrimmed it returns 9, with one whole strip left undivided.
+
+<img src="docs/images/panels-moomin-german.jpg" width="360" alt="A Moomin page of four strips with eleven numbered panels">
+</details>
+
+<details>
+<summary><b>Western comic</b> — another strip page</summary>
 
 Twelve panels across four strips, in reading order.
+
+<img src="docs/images/panels-moomin-english.jpg" width="360" alt="An English Moomin page with twelve numbered panels across four strips">
+</details>
+
+<details>
+<summary><b>Webtoon / manhwa</b> — one long vertical strip</summary>
+
+The fixed-height tiles it was distributed in are reassembled and re-cut at the artwork's own
+gutters, so no page starts or ends mid-panel, and panels are the art blocks between those gutters.
+A 48-tile chapter came out as 42 pages filling 90% of the screen on average.
+
+<img src="docs/images/panels-webtoon.jpg" width="720" alt="Six webtoon pages re-cut from a vertical strip, each with numbered panels">
 </details>
 
 ## Hosting / running
