@@ -5,22 +5,15 @@
 
 const GEMINI_DEFAULT_MODEL = "gemini-3.6-flash";
 
-/* Exact prompt from tools/manga_convert/convert_manga.py. */
-const PANEL_OCR_PROMPT = `This image is a single panel cropped from a Japanese manga page.
-List every piece of text/dialogue visible in this panel, in the order a
-reader would read them (top-to-bottom, right-to-left for manga). Then give
-a single natural English translation of all of it combined, in the same
-reading order, as it would read in an English localization of this manga.
+/* Book types, mirroring the flags convert_manga.py takes. The type decides panel
+ * reading order, whether printed margins are trimmed, and whether the page is a
+ * webtoon strip to be re-cut. */
+const BOOK_MANGA = "manga";
+const BOOK_WESTERN = "western";
+const BOOK_WEBTOON = "webtoon";
+const BOOK_TYPES = [BOOK_MANGA, BOOK_WESTERN, BOOK_WEBTOON];
 
-Return ONLY a JSON object, no other text:
-{"blocks": [{"text": "<the Japanese text, line breaks as \\n>",
-             "bbox_2d": [ymin, xmin, ymax, xmax]}, ...],
- "translation": "<natural English translation of all the panel's text combined, in reading order>"}
-
-bbox_2d is each text region's bounding box normalized to a 0-1000 scale
-(0,0 = top-left of the panel image, 1000,1000 = bottom-right). If you
-cannot determine a precise box, omit bbox_2d for that entry.
-If there is no text in the panel, return {"blocks": [], "translation": ""}.`;
+function validBookType(v) { return BOOK_TYPES.includes(v) ? v : ""; }
 
 /* ── Image helpers ────────────────────────────────────────────── */
 
@@ -83,12 +76,12 @@ function bytesToBase64(bytes) {
 
 /* ── Gemini OCR ───────────────────────────────────────────────── */
 
-async function geminiOcrOnce(jpegBytes, apiKey, model) {
+async function geminiOcrOnce(jpegBytes, apiKey, model, prompt) {
   const imageB64 = await bytesToBase64(jpegBytes);
   const payload = {
     contents: [{
       parts: [
-        { text: PANEL_OCR_PROMPT },
+        { text: prompt },
         { inline_data: { mime_type: "image/jpeg", data: imageB64 } },
       ],
     }],
@@ -142,9 +135,9 @@ async function geminiOcrOnce(jpegBytes, apiKey, model) {
   }
 }
 
-async function geminiOcrPanel(jpegBytes, apiKey, model, retries = 3) {
+async function geminiOcrPanel(jpegBytes, apiKey, model, prompt, retries = 3) {
   for (let attempt = 0; attempt < retries; attempt++) {
-    const result = await geminiOcrOnce(jpegBytes, apiKey, model);
+    const result = await geminiOcrOnce(jpegBytes, apiKey, model, prompt);
     if (result !== null) return result;
     if (attempt < retries - 1) await sleep(Math.pow(2, attempt) * 1000);
   }
@@ -153,6 +146,96 @@ async function geminiOcrPanel(jpegBytes, apiKey, model, retries = 3) {
   // without a line here an unreachable API looks exactly like a panel that has no text.
   logLine(`  Warning: no answer from Gemini after ${retries} attempts; this panel keeps no text.`, "warn");
   return { blocks: [], translation: "" };
+}
+
+/* ── Webtoon re-pagination ────────────────────────────────────── */
+
+/* Re-cut a pre-sliced webtoon into screen-shaped pages at its own gutters.
+ *
+ * Takes the collected tile list and returns a replacement page list in the same
+ * {name, read} shape, so everything downstream is unchanged. Tiles are scaled to the
+ * most common width first, since a chapter's title banner often arrives at another size
+ * and would otherwise offset every row below it. Port of assemble_webtoon_pages().
+ *
+ * Two passes, holding only the tiles that overlap the page being written: stitching a
+ * 50,000px chapter into one canvas would be ~123MB, and browsers are a lot less
+ * forgiving about that than a desktop. The row profile itself is one boolean per row. */
+async function assembleWebtoonPages(pages, target, onProgress) {
+  const decoded = [];  // {bitmap, w, h} after width normalisation, decoded lazily twice
+  const widthCounts = new Map();
+  const sizes = [];
+
+  for (let i = 0; i < pages.length; i++) {
+    const bmp = await decodeImage(await pages[i].read(), mangaFileExt(pages[i].name));
+    sizes.push([bmp.width, bmp.height]);
+    widthCounts.set(bmp.width, (widthCounts.get(bmp.width) || 0) + 1);
+    bmp.close && bmp.close();
+  }
+  let width = sizes[0][0], bestCount = -1;
+  for (const [w, count] of widthCounts) if (count > bestCount) { width = w; bestCount = count; }
+
+  // Height each tile takes once scaled to the common width.
+  const scaledH = sizes.map(([w, h]) => (w === width ? h : Math.max(1, Math.round(h * width / w))));
+
+  async function tileCanvas(i) {
+    const bmp = await decodeImage(await pages[i].read(), mangaFileExt(pages[i].name));
+    const c = makeCanvas(width, scaledH[i]);
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, scaledH[i]);
+    ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 0, 0, width, scaledH[i]);
+    bmp.close && bmp.close();
+    return c;
+  }
+
+  // Pass 1: row profile and tile offsets, one tile in memory at a time.
+  const rows = [];
+  const offsets = [];
+  for (let i = 0; i < pages.length; i++) {
+    const c = await tileCanvas(i);
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    const gray = grayFromRGBA(ctx.getImageData(0, 0, width, scaledH[i]).data, width, scaledH[i]);
+    offsets.push([rows.length, scaledH[i]]);
+    for (const blank of blankRows(gray, width, scaledH[i])) rows.push(blank);
+    if (onProgress) onProgress(i, pages.length * 2);
+  }
+
+  const [tw, th] = Array.isArray(target) && target.length >= 2 ? target : MANGA_DEVICE_TARGETS.x4;
+  const pageH = Math.max(1, Math.round(width * th / tw));
+  const cuts = webtoonCutPoints(rows, pageH);
+
+  // Pass 2: paint each page from the tiles it spans.
+  const out = [];
+  const cache = new Map();
+  for (let n = 0; n < cuts.length - 1; n++) {
+    let top = cuts[n];
+    const bottom = cuts[n + 1];
+    // Blank rows at a page's head are the tail of the gutter it was cut from; keeping
+    // them would open every page with a band of empty paper.
+    while (top < bottom && rows[top]) top++;
+    if (top >= bottom) continue;
+
+    const canvas = makeCanvas(width, bottom - top);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, bottom - top);
+    for (let i = 0; i < offsets.length; i++) {
+      const [start, height] = offsets[i];
+      if (start >= bottom || start + height <= top) continue;
+      if (!cache.has(i)) cache.set(i, await tileCanvas(i));
+      ctx.drawImage(cache.get(i), 0, start - top);
+    }
+    for (const i of [...cache.keys()]) {
+      if (offsets[i][0] + offsets[i][1] <= bottom) cache.delete(i);
+    }
+    const bytes = await canvasToPngBytes(canvas);
+    const name = `webtoon_${String(out.length).padStart(4, "0")}.png`;
+    out.push({ name, read: async () => bytes });
+    if (onProgress) onProgress(pages.length + n, pages.length + cuts.length);
+  }
+
+  const snapped = cuts.slice(1, -1).filter((c) => rows[c - 1] || rows[Math.min(c, rows.length - 1)]).length;
+  return { pages: out, stripHeight: rows.length, pageH, cuts: cuts.length - 2, snapped };
 }
 
 /* ── Page collection ──────────────────────────────────────────── */
@@ -452,6 +535,41 @@ function applyResChoiceUi() {
   $("manga-res-custom").hidden = choice !== RES_CUSTOM;
 }
 
+/* Explain what the chosen book type will actually do, rather than leaving the extra
+ * behaviour (margin trimming, strip re-cutting) invisible until it shows up in the log. */
+const BOOK_TYPE_HINTS = {
+  "": "This sets the order panels are walked in, so the reader moves through the page the way " +
+      "the artist drew it.",
+  [BOOK_MANGA]: "Panels are walked right to left within each row, then down the page.",
+  [BOOK_WESTERN]: "Panels are walked left to right within each row, then down the page. The blank " +
+      "paper border and page number are cropped off every page, so the artwork fills the screen.",
+  [BOOK_WEBTOON]: "One long vertical strip. The tiles it was sliced into are reassembled and re-cut " +
+      "at the artwork's own gutters, so no page starts or ends mid-panel, and panels are the blocks " +
+      "between those gutters.",
+};
+
+/* A webtoon's panels come from its gutters, so the AI detector has nothing to find and
+ * the choice is meaningless -- disable it rather than leave a tickbox that does nothing. */
+function applyBookTypeUi() {
+  const type = validBookType($("manga-booktype").value);
+  const hint = $("manga-booktype-hint");
+  if (hint) hint.textContent = BOOK_TYPE_HINTS[type] || BOOK_TYPE_HINTS[""];
+  const yoloRow = $("manga-yolo-row");
+  if (yoloRow) {
+    const off = type === BOOK_WEBTOON;
+    yoloRow.classList.toggle("disabled", off);
+    $("manga-yolo").disabled = off;
+    yoloRow.title = off ? "Webtoon panels come from the strip's gutters, not the AI detector." : "";
+  }
+}
+
+/* The key field and the language pickers are only meaningful when Gemini will be called,
+ * so they appear when text recognition is switched on rather than sitting there greyed. */
+function applyOcrUi() {
+  const fields = $("manga-ocr-fields");
+  if (fields) fields.hidden = $("manga-no-ocr").checked;
+}
+
 const mangaState = { running: false, cancelled: false };
 
 /* Assemble the collected page/panel images into a fixed-layout EPUB 3 (a zip
@@ -674,10 +792,24 @@ async function runMangaConversion() {
     logValidation("Pick a target resolution (a device or a custom size) for XTC/XTCH — those formats need a fixed page size.");
     return;
   }
+  // Book type drives panel reading order, margin trimming and webtoon re-cutting.
+  // Like the resolution, nothing is preselected -- reading a western comic in manga
+  // order is a silent, wrong-looking result, not something to guess at.
+  const bookType = validBookType($("manga-booktype").value);
+  if (!bookType) {
+    logValidation("Pick a book type — manga, western comic, or webtoon/manhwa.");
+    return;
+  }
+  const rtl = bookType === BOOK_MANGA;
+  const isWebtoon = bookType === BOOK_WEBTOON;
+  // Western print comics are scans with a paper border; trimming it is always wanted, so
+  // it rides on the book type rather than being one more checkbox to find.
+  const trimMargins = bookType === BOOK_WESTERN;
+
   const apiKey = $("manga-key").value.trim();
   const model = $("manga-model").value.trim() || GEMINI_DEFAULT_MODEL;
   if (!noOcr && !apiKey) {
-    logValidation("Enter a Gemini API key, or tick \"Skip OCR\" for panels-only output.");
+    logValidation("Enter a Gemini API key, or tick \"Skip text recognition\" for panels-only output.");
     return;
   }
   saveSetting("gemini-key", apiKey);
@@ -687,6 +819,10 @@ async function runMangaConversion() {
   saveSetting("manga-panels-only", panelsOnly ? "1" : "0");
   saveSetting("manga-rotate-panels", rotatePanels ? "1" : "0");
   saveSetting("manga-format", [...formats].join(","));
+  saveSetting("manga-booktype", bookType);
+  saveSetting("manga-no-ocr", $("manga-no-ocr").checked ? "1" : "0");
+  saveSetting("manga-ocr-in", $("manga-ocr-in").value);
+  saveSetting("manga-ocr-out", $("manga-ocr-out").value);
   saveSetting("manga-res", resChoice);
   if (resChoice === RES_CUSTOM) {
     saveSetting("manga-res-w", String(deviceTarget[0]));
@@ -722,6 +858,21 @@ async function runMangaConversion() {
       logLine(`Using ${tocEntries.length} chapter(s) from the chapter list`);
     }
 
+    if (isWebtoon) {
+      // Re-cutting changes how many pages there are, so a table of contents resolved
+      // above now points at the wrong ones. Dropping it beats shipping wrong chapters.
+      if (tocEntries.length) {
+        logLine("The source table of contents no longer matches after re-cutting the strip, so it is dropped.", "warn");
+        tocEntries = [];
+      }
+      logLine(`Reassembling ${pages.length} webtoon tiles and re-cutting at the artwork's gutters…`);
+      const cut = await assembleWebtoonPages(pages, deviceTarget,
+        (done, total) => setProgress(done, total, "Re-cutting the strip…"));
+      pages = cut.pages;
+      logLine(`Webtoon: ${cut.stripHeight}px strip re-cut into ${pages.length} pages of up to ` +
+        `${cut.pageH}px, ${cut.snapped} of ${cut.cuts} cuts landing in a gutter`);
+    }
+
     if (Number.isInteger(maxPagesRaw) && maxPagesRaw > 0) pages = pages.slice(0, maxPagesRaw);
     logLine(`Found ${pages.length} pages in ${collected.sourceLabel}`);
 
@@ -742,6 +893,18 @@ async function runMangaConversion() {
     const metaAuthor = $("manga-author").value.trim() || collected.meta.author;
     const metaLanguage = $("manga-language").value.trim() || collected.meta.language;
     const folder = sanitizeFolderName(metaTitle || "Manga");
+
+    // The OCR source language falls back to the book's own language, so a book whose
+    // EPUB/ComicInfo already declares one needs nothing chosen here. Webtoon panels are a
+    // single top-to-bottom column with horizontal text, so the right-to-left hint that
+    // suits a manga page is wrong for them however the book is tagged.
+    const ocrSourceLang = $("manga-ocr-in").value || metaLanguage;
+    const ocrTargetLang = $("manga-ocr-out").value || "en";
+    const ocrPrompt = buildPanelOcrPrompt(ocrSourceLang, ocrTargetLang, rtl && !isWebtoon);
+    if (!noOcr && !ocrSourceLang) {
+      logLine("No text language set, so the model is not told which one to expect. " +
+        "Choosing one in step 4 improves recognition.", "warn");
+    }
 
     const zip = new ZipWriter();
     const idxRecords = [];
@@ -766,7 +929,32 @@ async function runMangaConversion() {
 
       const srcBytes = await page.read();
       let ext = mangaFileExt(page.name);
-      const bitmap = await decodeImage(srcBytes, ext);
+      let bitmap = await decodeImage(srcBytes, ext);
+
+      // Crop the blank paper border (and the page number sitting in it) before anything
+      // else, so every coordinate downstream lives in the trimmed page's space. It fills
+      // the screen, and it measurably improves detection: a page whose margin is gone
+      // gives the detector nothing but artwork to look at.
+      let wasTrimmed = false;
+      if (trimMargins) {
+        const probe = makeCanvas(bitmap.width, bitmap.height);
+        const pctx = probe.getContext("2d", { willReadFrequently: true });
+        pctx.drawImage(bitmap, 0, 0);
+        const gray = grayFromRGBA(pctx.getImageData(0, 0, bitmap.width, bitmap.height).data,
+          bitmap.width, bitmap.height);
+        const box = trimMarginsBox(gray, bitmap.width, bitmap.height);
+        if (box) {
+          const [tx1, ty1, tx2, ty2] = box;
+          const cropped = makeCanvas(tx2 - tx1, ty2 - ty1);
+          const cctx = cropped.getContext("2d");
+          cctx.fillStyle = "#ffffff";
+          cctx.fillRect(0, 0, tx2 - tx1, ty2 - ty1);
+          cctx.drawImage(probe, tx1, ty1, tx2 - tx1, ty2 - ty1, 0, 0, tx2 - tx1, ty2 - ty1);
+          bitmap.close && bitmap.close();
+          bitmap = await createImageBitmap(cropped);
+          wasTrimmed = true;
+        }
+      }
 
       // Downscale FIRST, before panel detection, so every downstream coordinate
       // (panel boxes, crop rects, OCR text boxes, the page dims in panels.idx)
@@ -796,18 +984,25 @@ async function runMangaConversion() {
       const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
 
       let boxes = null;
-      if (yolo) {
-        try {
-          boxes = await detectPanelsYolo(yolo.session, yolo.ort, rgba, imgW, imgH);
-        } catch (e) {
-          logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
+      if (isWebtoon) {
+        // Already one top-to-bottom column, cut at its own gutters. The manga detector
+        // looks for bordered rectangles in a grid and a webtoon has none, and reordering
+        // a single column can only move boxes away from what the cut established.
+        boxes = detectWebtoonPanels(grayFromRGBA(rgba, imgW, imgH), imgW, imgH);
+      } else {
+        if (yolo) {
+          try {
+            boxes = await detectPanelsYolo(yolo.session, yolo.ort, rgba, imgW, imgH);
+          } catch (e) {
+            logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
+          }
         }
+        if (!boxes) {
+          const gray = grayFromRGBA(rgba, imgW, imgH);
+          boxes = detectPanelsGrid(gray, imgW, imgH);
+        }
+        boxes = sortPanelsReadingOrder(boxes, rtl);
       }
-      if (!boxes) {
-        const gray = grayFromRGBA(rgba, imgW, imgH);
-        boxes = detectPanelsGrid(gray, imgW, imgH);
-      }
-      boxes = sortPanelsMangaOrder(boxes);
 
       // Panels-only must not lose anything the detector missed: with no full page behind them,
       // uncovered artwork would simply be unreachable. Measure how much of this page's ink falls
@@ -843,9 +1038,9 @@ async function runMangaConversion() {
         // nothing written for this page
       } else if (mono) {
         zip.addFile(`${folder}/${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH));
-      } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized) {
+      } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized && !wasTrimmed) {
         zip.addFile(`${folder}/${pageBase}${ext}`, srcBytes);
-      } else if (ext === ".png" && wasResized) {
+      } else if (ext === ".png" && (wasResized || wasTrimmed)) {
         zip.addFile(`${folder}/${pageBase}.png`, await canvasToPngBytes(canvas));
       } else {
         const outExt = (ext === ".jpg" || ext === ".jpeg") ? ext : ".jpg";
@@ -973,7 +1168,7 @@ async function runMangaConversion() {
       let ocrResults;
       if (!noOcr) {
         ocrResults = await mapLimit(panelCrops, Math.min(8, Math.max(1, panelCrops.length)),
-          (crop) => crop ? geminiOcrPanel(crop, apiKey, model) : Promise.resolve({ blocks: [], translation: "" }));
+          (crop) => crop ? geminiOcrPanel(crop, apiKey, model, ocrPrompt) : Promise.resolve({ blocks: [], translation: "" }));
       } else {
         ocrResults = panelCrops.map(() => ({ blocks: [], translation: "" }));
       }
@@ -1122,6 +1317,15 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     }
     applyFormatVisibility();
   }
+  $("manga-booktype").value = validBookType(loadSetting("manga-booktype", ""));
+  $("manga-ocr-in").value = loadSetting("manga-ocr-in", "");
+  $("manga-ocr-out").value = loadSetting("manga-ocr-out", "en");
+  // Skip text recognition is the default: it needs no API key, sends nothing anywhere and
+  // is the fast path, so the key field and the language pickers only appear once someone
+  // asks for OCR by unticking it.
+  $("manga-no-ocr").checked = loadSetting("manga-no-ocr", "1") === "1";
+  applyBookTypeUi();
+  applyOcrUi();
   $("manga-res").value = validResChoice(loadSetting("manga-res", ""));
   $("manga-res-w").value = loadSetting("manga-res-w", "");
   $("manga-res-h").value = loadSetting("manga-res-h", "");
@@ -1136,9 +1340,12 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
       clearValidationWarnings();
     }
   });
-  // The API-key warning is fixed by either supplying a key or ticking Skip OCR.
+  // The API-key warning is fixed by either supplying a key or skipping text recognition.
   $("manga-key").addEventListener("input", clearValidationWarnings);
   $("manga-no-ocr").addEventListener("change", clearValidationWarnings);
+  $("manga-no-ocr").addEventListener("change", applyOcrUi);
+  $("manga-booktype").addEventListener("change", clearValidationWarnings);
+  $("manga-booktype").addEventListener("change", applyBookTypeUi);
   $("manga-res").addEventListener("change", clearValidationWarnings);
   $("manga-res").addEventListener("change", applyResChoiceUi);
   $("manga-res-w").addEventListener("input", clearValidationWarnings);

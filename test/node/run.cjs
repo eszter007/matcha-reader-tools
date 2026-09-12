@@ -62,7 +62,7 @@ function testManga() {
     const [w, h] = dims[name];
     const gray = new Uint8Array(fs.readFileSync(path.join(pagesDir, name.replace(".png", ".gray"))));
     let boxes = manga.detectPanelsGrid(gray, w, h);
-    boxes = manga.sortPanelsMangaOrder(boxes);
+    boxes = manga.sortPanelsReadingOrder(boxes);
     const panelsWithText = boxes.map((box) => ({ box, textBlocks: [], translation: "" }));
     const pageData = manga.encodePage(panelsWithText);
     idxRecords.push({ offset: datOffset, length: pageData.length, w: Math.min(w, 0xffff), h: Math.min(h, 0xffff) });
@@ -109,12 +109,134 @@ function testManga() {
   // (the mixed-size layout simple row-clustering gets wrong). The tall right
   // panel reads first, then top-left, then bottom-left.
   const tall = [420, 40, 760, 1160], topLeft = [40, 40, 380, 580], bottomLeft = [40, 640, 380, 1160];
-  const order = manga.sortPanelsMangaOrder([bottomLeft, tall, topLeft]);
+  const order = manga.sortPanelsReadingOrder([bottomLeft, tall, topLeft]);
   check("reading order tall-right first", order[0] === tall && order[1] === topLeft && order[2] === bottomLeft);
   // Plain 2x2 grid reads right-to-left, top-to-bottom.
   const tl = [0, 0, 100, 100], tr = [110, 0, 210, 100], bl = [0, 110, 100, 210], br = [110, 110, 210, 210];
-  const grid = manga.sortPanelsMangaOrder([tl, tr, bl, br]);
+  const grid = manga.sortPanelsReadingOrder([tl, tr, bl, br]);
   check("2x2 grid order", grid[0] === tr && grid[1] === tl && grid[2] === br && grid[3] === bl);
+}
+
+/* ── Manga: book type — reading order, trim, webtoon ──────────── */
+
+/* A webtoon row profile from [artHeight, gutterHeight] pairs. */
+function webtoonStrip(blocks) {
+  const rows = [];
+  for (const [art, gutter] of blocks) {
+    for (let i = 0; i < art; i++) rows.push(false);
+    for (let i = 0; i < gutter; i++) rows.push(true);
+  }
+  return rows;
+}
+
+function testMangaBookType() {
+  console.log("\n== manga book type ==");
+
+  // Left-to-right (western) order on a plain 2x2 grid is the mirror of manga order.
+  const tl = [0, 0, 100, 100], tr = [110, 0, 210, 100], bl = [0, 110, 100, 210], br = [110, 110, 210, 210];
+  const ltr = manga.sortPanelsReadingOrder([br, tl, bl, tr], false);
+  check("2x2 grid LTR order", ltr[0] === tl && ltr[1] === tr && ltr[2] === bl && ltr[3] === br);
+  // Tiers still run top-to-bottom in both conventions.
+  const tall = [420, 40, 760, 1160], topLeft = [40, 40, 380, 580], bottomLeft = [40, 640, 380, 1160];
+  const ltrMixed = manga.sortPanelsReadingOrder([bottomLeft, tall, topLeft], false);
+  check("LTR tall-right last", ltrMixed[0] === topLeft && ltrMixed[1] === bottomLeft && ltrMixed[2] === tall);
+
+  // Margin trim: a 200x200 page with a 40px white border around a dark block.
+  {
+    const w = 200, h = 200;
+    const gray = new Uint8Array(w * h).fill(255);
+    for (let y = 40; y < 160; y++) for (let x = 40; x < 160; x++) gray[y * w + x] = 10;
+    const box = manga.trimMarginsBox(gray, w, h);
+    check("trim finds the artwork box", box && box[0] === 38 && box[1] === 38 && box[2] === 162 && box[3] === 162,
+      JSON.stringify(box));
+    check("trim returns null on a blank page", manga.trimMarginsBox(new Uint8Array(w * h).fill(255), w, h) === null);
+    const full = new Uint8Array(w * h).fill(10);
+    check("trim returns null when there is no margin", manga.trimMarginsBox(full, w, h) === null);
+  }
+
+  // Webtoon cuts: panels a bit shorter than a screen should all break in a gutter.
+  {
+    const rows = webtoonStrip(Array.from({ length: 8 }, () => [700, 40]));
+    const cuts = manga.webtoonCutPoints(rows, 800);
+    check("webtoon cuts land in gutters", cuts.slice(1, -1).every((c) => rows[c]));
+  }
+  // Art taller than the screen has no gutter to find, but the page must still fit.
+  {
+    const cuts = manga.webtoonCutPoints(webtoonStrip([[5000, 30], [900, 30]]), 800);
+    const heights = cuts.slice(1).map((c, i) => c - cuts[i]);
+    check("webtoon page never exceeds the screen", Math.max(...heights) <= 800, String(Math.max(...heights)));
+  }
+  // Every row is covered exactly once, in order.
+  {
+    const rows = webtoonStrip([[613, 25], [1500, 40], [222, 60], [990, 15]]);
+    const cuts = manga.webtoonCutPoints(rows, 800);
+    check("webtoon covers the whole strip", cuts[0] === 0 && cuts[cuts.length - 1] === rows.length);
+    check("webtoon cuts strictly increase", cuts.every((c, i) => i === 0 || c > cuts[i - 1]));
+  }
+  // Two gutters in reach: taking the earlier one would waste half a screen.
+  // Gutters at 400-419 and 750-769; their midpoints are 410 and 760.
+  {
+    const cuts = manga.webtoonCutPoints(webtoonStrip([[400, 20], [330, 20], [900, 0]]), 800);
+    check("webtoon prefers the latest usable gutter", cuts[1] === 760, String(cuts[1]));
+  }
+  {
+    check("webtoon short strip is one page",
+      JSON.stringify(manga.webtoonCutPoints(webtoonStrip([[300, 0]]), 800)) === "[0,300]");
+  }
+
+  // Webtoon panels: the art blocks between the gutters, top to bottom.
+  {
+    const w = 40, h = 300;
+    const gray = new Uint8Array(w * h).fill(255);
+    const paint = (y1, y2) => { for (let y = y1; y < y2; y++) for (let x = 0; x < w; x++) gray[y * w + x] = 10; };
+    paint(0, 100); paint(140, 300);
+    const boxes = manga.detectWebtoonPanels(gray, w, h);
+    check("webtoon panels split at the gutter", boxes.length === 2, JSON.stringify(boxes));
+    check("webtoon panels span the full width and stack",
+      boxes[0][0] === 0 && boxes[0][2] === w && boxes[0][1] === 0 && boxes[0][3] === 100 &&
+      boxes[1][1] === 140 && boxes[1][3] === 300, JSON.stringify(boxes));
+    const blank = manga.detectWebtoonPanels(new Uint8Array(w * h).fill(255), w, h);
+    check("blank webtoon page is one whole-page panel",
+      blank.length === 1 && blank[0][3] === h, JSON.stringify(blank));
+  }
+}
+
+/* ── Manga: language-aware OCR prompt ─────────────────────────── */
+
+function testMangaOcrPrompt() {
+  console.log("\n== manga OCR prompt ==");
+  const ja = manga.buildPanelOcrPrompt("ja", "en", true);
+  check("ja prompt names the language", ja.includes("Japanese manga page") && ja.includes("the Japanese text"));
+  check("ja prompt reads right-to-left", ja.includes("right-to-left"));
+
+  const de = manga.buildPanelOcrPrompt("de", "en", false);
+  check("de prompt names German", de.includes("comic page in German") && de.includes("the German text"));
+  check("de prompt reads left-to-right", de.includes("left-to-right"));
+  check("de prompt never says Japanese or manga", !de.includes("Japanese") && !de.includes("manga"));
+
+  // Source language equal to the target: transcription only, no paraphrase.
+  const enEn = manga.buildPanelOcrPrompt("en", "en", false);
+  check("en->en asks for no translation",
+    enEn.includes("no translation is needed") && enEn.includes('"translation": ""'));
+
+  // A non-English target is what the browser tool adds over the Python one.
+  const jaDe = manga.buildPanelOcrPrompt("ja", "de", true);
+  check("ja->de translates into German", jaDe.includes("natural German translation") && !jaDe.includes("English"));
+
+  // Region subtags and case must not defeat the lookup; manhua/manhwa are not manga.
+  for (const tag of ["JA", "ja-JP", "ja_JP"]) {
+    check(`${tag} resolves to Japanese`, manga.buildPanelOcrPrompt(tag, "en", true).includes("Japanese manga page"));
+  }
+  for (const [tag, name] of [["zh-Hant", "Chinese"], ["ko", "Korean"]]) {
+    const p = manga.buildPanelOcrPrompt(tag, "en", true);
+    check(`${tag} is a ${name} comic, not manga`, p.includes(`comic page in ${name}`) && !p.includes("manga"));
+  }
+  // An unknown or absent tag still yields a usable prompt.
+  for (const tag of ["", "xx", "tlh-Piqd"]) {
+    const p = manga.buildPanelOcrPrompt(tag, "en", false);
+    check(`${tag || "(empty)"} still builds a prompt`,
+      p.includes("bbox_2d") && !p.includes("undefined") && !p.includes("null"));
+  }
 }
 
 /* ── Manga: 1-bit Floyd-Steinberg BMP output (--mono) ─────────── */
@@ -474,7 +596,7 @@ async function testMangaYolo() {
     const [w, h] = dims[name];
     const rgba = new Uint8Array(fs.readFileSync(path.join(pagesDir, name.replace(".png", ".rgba"))));
     let boxes = await yolo.detectPanelsYolo(session, ort, rgba, w, h);
-    boxes = manga.sortPanelsMangaOrder(boxes);
+    boxes = manga.sortPanelsReadingOrder(boxes);
     const expected = ref[name];
     if (boxes.length !== expected.length) {
       check(`${name} panel count`, false, `got ${boxes.length}, reference ${expected.length}`);
@@ -732,6 +854,8 @@ function testXtc() {
 
 (async () => {
   testManga();
+  testMangaBookType();
+  testMangaOcrPrompt();
   testXtc();
   testMangaFolderedSort();
   testXmlUnescape();

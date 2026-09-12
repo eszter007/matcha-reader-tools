@@ -256,3 +256,7 @@ footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid v
   font-size: 0.88rem;
   margin-top: 0.8rem;
 }
+
+/* A choice the current book type makes meaningless: still readable, visibly not in play. */
+.checks label.disabled { opacity: 0.5; }
+.checks label.disabled input { cursor: not-allowed; }
