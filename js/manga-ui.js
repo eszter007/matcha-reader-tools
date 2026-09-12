@@ -559,7 +559,7 @@ const YOLO_HINT_WEBTOON = "Not used for webtoons. Their panels come from the str
 const BOOK_TYPE_WARNINGS = {
   [BOOK_WESTERN]: "The detector is manga-trained and misses panels on dense strip layouts. Reading " +
     "order and full pages are unaffected. For a different result, untick AI panel detection under " +
-    "Advanced: it needs real white gutters between panels, so on strips it usually finds fewer.",
+    "Advanced.",
 };
 
 /* A webtoon's panels come from its gutters, so the AI detector has nothing to find. Disable
