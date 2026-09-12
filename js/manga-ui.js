@@ -538,14 +538,12 @@ function applyResChoiceUi() {
 /* Explain what the chosen book type will actually do, rather than leaving the extra
  * behaviour (margin trimming, strip re-cutting) invisible until it shows up in the log. */
 const BOOK_TYPE_HINTS = {
-  "": "This sets the order panels are walked in, so the reader moves through the page the way " +
-      "the artist drew it.",
-  [BOOK_MANGA]: "Panels are walked right to left within each row, then down the page.",
-  [BOOK_WESTERN]: "Panels are walked left to right within each row, then down the page. The blank " +
-      "paper border and page number are cropped off every page, so the artwork fills the screen.",
-  [BOOK_WEBTOON]: "One long vertical strip. The tiles it was sliced into are reassembled and re-cut " +
-      "at the artwork's own gutters, so no page starts or ends mid-panel, and panels are the blocks " +
-      "between those gutters.",
+  "": "Sets the order panels are read in.",
+  [BOOK_MANGA]: "Panels read right to left within a row, then down the page.",
+  [BOOK_WESTERN]: "Panels read left to right within a row, then down the page. The paper border " +
+      "and page number are cropped off, so the artwork fills the screen.",
+  [BOOK_WEBTOON]: "One long vertical strip. Its tiles are reassembled and re-cut at the artwork's " +
+      "gutters, so no page starts or ends mid-panel. Panels are the blocks between gutters.",
 };
 
 /* A webtoon's panels come from its gutters, so the AI detector has nothing to find and
@@ -821,7 +819,6 @@ async function runMangaConversion() {
   saveSetting("manga-format", [...formats].join(","));
   saveSetting("manga-booktype", bookType);
   saveSetting("manga-no-ocr", $("manga-no-ocr").checked ? "1" : "0");
-  saveSetting("manga-ocr-in", $("manga-ocr-in").value);
   saveSetting("manga-ocr-out", $("manga-ocr-out").value);
   saveSetting("manga-res", resChoice);
   if (resChoice === RES_CUSTOM) {
@@ -894,16 +891,17 @@ async function runMangaConversion() {
     const metaLanguage = $("manga-language").value.trim() || collected.meta.language;
     const folder = sanitizeFolderName(metaTitle || "Manga");
 
-    // The OCR source language falls back to the book's own language, so a book whose
-    // EPUB/ComicInfo already declares one needs nothing chosen here. Webtoon panels are a
-    // single top-to-bottom column with horizontal text, so the right-to-left hint that
-    // suits a manga page is wrong for them however the book is tagged.
-    const ocrSourceLang = $("manga-ocr-in").value || metaLanguage;
+    // The book's own Language (step 5) is what tells the model which language to expect --
+    // there is no second picker for it, since a book that declares one in its EPUB/ComicInfo
+    // fills it in by itself and a duplicate control would only disagree with it. Webtoon
+    // panels are a single top-to-bottom column with horizontal text, so the right-to-left
+    // hint that suits a manga page is wrong for them however the book is tagged.
+    const ocrSourceLang = metaLanguage;
     const ocrTargetLang = $("manga-ocr-out").value || "en";
     const ocrPrompt = buildPanelOcrPrompt(ocrSourceLang, ocrTargetLang, rtl && !isWebtoon);
     if (!noOcr && !ocrSourceLang) {
-      logLine("No text language set, so the model is not told which one to expect. " +
-        "Choosing one in step 4 improves recognition.", "warn");
+      logLine("No book language set, so the model is not told which one to expect. " +
+        "Filling in Language in step 5 improves recognition.", "warn");
     }
 
     const zip = new ZipWriter();
@@ -1318,7 +1316,6 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     applyFormatVisibility();
   }
   $("manga-booktype").value = validBookType(loadSetting("manga-booktype", ""));
-  $("manga-ocr-in").value = loadSetting("manga-ocr-in", "");
   $("manga-ocr-out").value = loadSetting("manga-ocr-out", "en");
   // Skip text recognition is the default: it needs no API key, sends nothing anywhere and
   // is the fast path, so the key field and the language pickers only appear once someone

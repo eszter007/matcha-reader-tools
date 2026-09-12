@@ -97,16 +97,18 @@ These are ports of the firmware's conversion scripts, not reimplementations from
   changes how many pages there are and its page indices no longer point anywhere real. Nothing is
   preselected: reading a western comic in manga order is a silently wrong result, not a default to
   guess at.
-  *Language in the book* and *Translate into* (step 4) shape the OCR prompt. Telling the model which
-  language to expect is what stops it hallucinating Japanese out of a German speech bubble, and
-  picking the same language for both asks for transcription with no pointless same-language
-  translation. Leaving the source blank falls back to the book's *Language* field (step 5) and then
-  to a prompt that names no language, which still works. The target language is Matcha-tools-only:
-  the desktop tool always translates into English.
+  The OCR prompt is built from two things. The language the book is *in* comes from the *Language*
+  field in step 5 — the same one that tags the book for reading stats — because a book declaring one
+  in its EPUB or `ComicInfo.xml` fills it in by itself, and a second picker in step 4 could only
+  disagree with it. Naming that language is what stops the model hallucinating Japanese out of a
+  German speech bubble; left blank, the prompt names no language and still works, and the
+  conversion log says so. *Translate into* (step 4) picks the language the translation comes back
+  in; choose the book's own and you get transcription with no pointless same-language translation.
+  The target language is Matcha-tools-only — the desktop tool always translates into English.
   *Skip text recognition* is ticked by default — it needs no API key, sends nothing anywhere and is
-  much faster, so the key field and the language pickers only appear once it is unticked. The AI
-  detector, panel rotation and the 1-bit BMP option live under *Advanced* in step 3, since the book
-  type and target resolution are the two choices that actually have to be made.
+  much faster, so the key field and the translation picker only appear once it is unticked. The AI
+  detector, panel rotation and the 1-bit BMP option live under *Advanced* at the end of step 3,
+  since the book type and target resolution are the two choices that actually have to be made.
   Tick *1-bit BMP (Floyd–Steinberg dithering)* to write pages and panel crops as black-and-white
   dithered BMP instead of JPEG (the desktop tool's `--mono`). The device paints 1-bit BMP with a
   single fast refresh (no 4-level gray pass), so pages and panels turn noticeably quicker; it's

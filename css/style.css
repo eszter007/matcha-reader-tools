@@ -88,6 +88,11 @@ label .hint { font-weight: 400; color: var(--muted); }
 
 /* Hint under a <select>, swapped in place as the choice changes; .warn is the
  * amber variant used when the chosen value carries a cost worth reading. */
+/* A description under a control, styled like the hint under a checkbox (.checks.stacked
+ * label .hint) so the two read as the same kind of text wherever they sit. Without this a
+ * standalone .hint paragraph fell back to body text: full size and full contrast, louder
+ * than the label it was explaining. */
+p.hint { color: var(--muted); font-size: 0.85rem; line-height: 1.45; font-weight: 400; margin: 0.3rem 0 0; }
 .res-hint { color: var(--muted); font-size: 0.85rem; margin: 0.3rem 0 0; }
 .res-hint.warn { color: var(--warn); }
 
