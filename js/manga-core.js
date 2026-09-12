@@ -397,7 +397,11 @@ function yOverlapFrac(a, b) {
   return Math.max(0, overlap) / Math.max(1, minH);
 }
 
-function sortPanelsMangaOrder(panels) {
+/* Sort panels into reading order. rtl = true is manga order (right-to-left within a
+ * tier); rtl = false is western comics and strips, which read left-to-right. The
+ * direction only affects within-tier ordering: tiers themselves always run
+ * top-to-bottom, in both conventions. Port of sort_panels_reading_order(). */
+function sortPanelsReadingOrder(panels, rtl = true) {
   const n = panels.length;
   if (n <= 1) return panels;
 
@@ -411,7 +415,7 @@ function sortPanelsMangaOrder(panels) {
       const a = panels[i], b = panels[j];
       if (yOverlapFrac(a, b) > OVERLAP_THRESHOLD) {
         const aCx = (a[0] + a[2]) / 2, bCx = (b[0] + b[2]) / 2;
-        if (aCx > bCx) { // same tier: right-to-left
+        if (rtl ? aCx > bCx : aCx < bCx) { // same tier
           edges[i].push(j);
           inDegree[j]++;
         }
@@ -427,7 +431,8 @@ function sortPanelsMangaOrder(panels) {
 
   function tieKey(i) {
     const [x1, y1, x2, y2] = panels[i];
-    return [(y1 + y2) / 2, -(x1 + x2) / 2];
+    const cx = (x1 + x2) / 2;
+    return [(y1 + y2) / 2, rtl ? -cx : cx];
   }
 
   let available = [];
@@ -448,6 +453,202 @@ function sortPanelsMangaOrder(panels) {
 
   if (result.length !== n) return panels; // cyclic constraints: keep original
   return result.map((i) => panels[i]);
+}
+
+/* ── Language-aware OCR prompt ────────────────────────────────── */
+
+/* Names for the language tags, used to tell the OCR model what it is looking at and
+ * what to translate into. Only the primary subtag is looked up ("zh-Hant" -> "zh"), and
+ * an unlisted tag just yields a prompt that doesn't name a language, which reads fine
+ * and still works. Mirrors OCR_LANGUAGE_NAMES in convert_manga.py. */
+const OCR_LANGUAGE_NAMES = {
+  ja: "Japanese", en: "English", de: "German", fr: "French", es: "Spanish",
+  it: "Italian", pt: "Portuguese", nl: "Dutch", sv: "Swedish", fi: "Finnish",
+  da: "Danish", no: "Norwegian", pl: "Polish", cs: "Czech", hu: "Hungarian",
+  ru: "Russian", uk: "Ukrainian", tr: "Turkish", ko: "Korean", zh: "Chinese",
+  ar: "Arabic", he: "Hebrew", th: "Thai", vi: "Vietnamese", id: "Indonesian",
+};
+
+function ocrLanguageName(tag) {
+  const primary = String(tag || "").trim().toLowerCase().replace(/_/g, "-").split("-")[0];
+  return { primary, name: OCR_LANGUAGE_NAMES[primary] || "" };
+}
+
+/* The OCR prompt for a book in `language`, translated into `target`, read right-to-left
+ * or not.
+ *
+ * Telling the model which language to expect matters: asked for "the Japanese text", it
+ * will hallucinate Japanese out of a German speech bubble rather than transcribe what is
+ * there. A book already in the target language gets no translation asked for at all --
+ * the device shows translations as a reading aid, and "Oh no!" rendered into English is
+ * noise. Reading order follows the panel order, not the language: it is a property of
+ * the layout, and the same language appears in books of both conventions.
+ *
+ * Port of build_panel_ocr_prompt(), extended with a chosen target language (the Python
+ * tool always translates into English). */
+function buildPanelOcrPrompt(language = "", target = "en", rtl = true) {
+  const src = ocrLanguageName(language);
+  const dst = ocrLanguageName(target);
+  const targetName = dst.name || "English";
+
+  // "manga" only for Japanese (and for an unset language, where right-to-left panel
+  // order is the strong hint). Chinese and Korean comics are manhua and manhwa; calling
+  // them manga tells the model something false about the page for no gain.
+  let pageDesc;
+  if (src.primary === "ja") pageDesc = "a Japanese manga page";
+  else if (!src.primary && rtl) pageDesc = "a manga page";
+  else if (src.name) pageDesc = `a comic page in ${src.name}`;
+  else pageDesc = "a comic page";
+
+  const readingOrder = rtl ? "top-to-bottom, right-to-left" : "left-to-right, top-to-bottom";
+  const textDesc = src.name ? `${src.name} text` : "text exactly as it appears";
+
+  let translationInstruction, translationField;
+  if (src.name && src.name === targetName) {
+    // Nothing to translate -- say so explicitly, or the model invents a paraphrase.
+    translationInstruction = `The text is already in ${targetName}, so no translation is needed.`;
+    translationField = '""';
+  } else {
+    const targetPhrase = src.name ? `a ${src.name} comic` : "this comic";
+    translationInstruction =
+      `Then give\na single natural ${targetName} translation of all of it combined, in the same\n` +
+      `reading order, as it would read in ${targetName === "English" ? "an" : "a"} ${targetName} localization of ${targetPhrase}.`;
+    translationField =
+      `"<natural ${targetName} translation of all the panel's text combined, in reading order>"`;
+  }
+
+  return `This image is a single panel cropped from ${pageDesc}.
+List every piece of text/dialogue visible in this panel, in the order a
+reader would read them (${readingOrder}). ${translationInstruction}
+
+Return ONLY a JSON object, no other text:
+{"blocks": [{"text": "<the ${textDesc}, line breaks as \\n>",
+             "bbox_2d": [ymin, xmin, ymax, xmax]}, ...],
+ "translation": ${translationField}}
+
+bbox_2d is each text region's bounding box normalized to a 0-1000 scale
+(0,0 = top-left of the panel image, 1000,1000 = bottom-right). If you
+cannot determine a precise box, omit bbox_2d for that entry.
+If there is no text in the panel, return {"blocks": [], "translation": ""}.`;
+}
+
+/* ── Printed-margin trim ──────────────────────────────────────── */
+
+/* Bounding box of the artwork on a page, as [x1, y1, x2, y2], or null when the page
+ * is blank or has no margin to remove. Printed comics carry a white border and a page
+ * number that the device has no reason to render: it eats screen area, and it is the
+ * difference between a page filling the display and floating in the middle of it.
+ * Port of trim_page_margins(); the caller does the actual crop on a canvas. */
+function trimMarginsBox(gray, w, h, threshold = 230, pad = 2) {
+  let x1 = w, y1 = h, x2 = -1, y2 = -1;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      if (gray[row + x] < threshold) {
+        if (x < x1) x1 = x;
+        if (x > x2) x2 = x;
+        if (y < y1) y1 = y;
+        y2 = y;
+      }
+    }
+  }
+  if (x2 < 0) return null;  // page is entirely blank
+  x1 = Math.max(0, x1 - pad);
+  y1 = Math.max(0, y1 - pad);
+  x2 = Math.min(w, x2 + 1 + pad);
+  y2 = Math.min(h, y2 + 1 + pad);
+  if (x1 === 0 && y1 === 0 && x2 === w && y2 === h) return null;  // nothing to trim
+  return [x1, y1, x2, y2];
+}
+
+/* ── Webtoon / manhwa re-pagination ───────────────────────────── */
+//
+// A webtoon is one continuous vertical strip. Distributors ship it pre-sliced into
+// fixed-height tiles, and those cuts land wherever the slicer's counter happened to
+// reach -- straight through a face as often as not. Treating a tile as a page inherits
+// every one of those cuts, so the strip is reassembled and re-cut at its own gutters.
+
+const WEBTOON_BLANK_LEVEL = 244;  // a row this bright across its width is gutter, not art
+const WEBTOON_MIN_GUTTER = 10;    // px; shorter blank runs are spacing inside a panel
+const WEBTOON_MIN_PAGE_FRAC = 0.45;  // never cut earlier than this fraction of a full screen
+
+/* Which rows of a grayscale buffer are blank across their full width. */
+function blankRows(gray, w, h, sampleStep = 8) {
+  const rows = new Array(h);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    let blank = true;
+    for (let x = 0; x < w; x += sampleStep) {
+      if (gray[row + x] <= WEBTOON_BLANK_LEVEL) { blank = false; break; }
+    }
+    rows[y] = blank;
+  }
+  return rows;
+}
+
+/* Cut offsets for a strip whose blank rows are `rows`, one screenful apart.
+ *
+ * Walks down the strip taking the LAST gutter that falls within a screen's reach, so a
+ * page ends on a panel break wherever the art allows one. A stretch of art taller than
+ * the screen has no gutter to find and is cut at the screen height -- unavoidable, and
+ * better than shrinking the page until the whole run fits. Port of
+ * _webtoon_cut_points(). */
+function webtoonCutPoints(rows, pageH) {
+  const height = rows.length;
+  const cuts = [0];
+  let y = 0;
+  while (height - y > pageH) {
+    const lo = y + Math.trunc(pageH * WEBTOON_MIN_PAGE_FRAC);
+    const hi = y + pageH;
+    let best = null;
+    let runStart = null;
+    for (let i = lo; i < hi; i++) {
+      if (rows[i] && runStart === null) {
+        runStart = i;
+      } else if (!rows[i] && runStart !== null) {
+        if (i - runStart >= WEBTOON_MIN_GUTTER) best = Math.floor((runStart + i) / 2);
+        runStart = null;
+      }
+    }
+    // A gutter still open at the window's end reaches past it: cut at the edge, which is
+    // inside that gutter and so still a clean break.
+    if (runStart !== null && hi - runStart >= WEBTOON_MIN_GUTTER) best = hi;
+    y = best === null ? hi : best;
+    cuts.push(y);
+  }
+  cuts.push(height);
+  return cuts;
+}
+
+/* Panels of a re-cut webtoon page: the art blocks between its gutters.
+ *
+ * A webtoon is a single column, so a panel is a band of full-width rows with blank rows
+ * above and below it. That is exactly what the format guarantees, and it needs no model
+ * -- the manga panel detector looks for bordered rectangles in a grid and has nothing to
+ * find here. Port of detect_webtoon_panels(). */
+function detectWebtoonPanels(gray, w, h) {
+  const rows = blankRows(gray, w, h);
+  const blocks = [];
+  let start = null;
+  for (let y = 0; y < h; y++) {
+    if (!rows[y] && start === null) start = y;
+    else if (rows[y] && start !== null) { blocks.push([start, y]); start = null; }
+  }
+  if (start !== null) blocks.push([start, h]);
+
+  // Blocks under a gutter's height are stray specks, not panels: fold them into the
+  // block above so no artwork is left out of every panel.
+  const merged = [];
+  for (const [top, bottom] of blocks) {
+    const prev = merged[merged.length - 1];
+    if (prev && (top - prev[1] < WEBTOON_MIN_GUTTER || bottom - top < WEBTOON_MIN_GUTTER)) {
+      prev[1] = bottom;
+    } else {
+      merged.push([top, bottom]);
+    }
+  }
+  if (!merged.length) return [[0, 0, w, h]];
+  return merged.map(([top, bottom]) => [0, top, w, bottom]);
 }
 
 /* ── 1-bit BMP output (Floyd-Steinberg dithering) ─────────────── */
@@ -848,7 +1049,11 @@ if (typeof module !== "undefined") {
     grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
     floydSteinbergMono, encodeBmp1bit, encodeMonoBmpFromRGBA,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
-    yOverlapFrac, sortPanelsMangaOrder,
+    yOverlapFrac, sortPanelsReadingOrder,
+    OCR_LANGUAGE_NAMES, ocrLanguageName, buildPanelOcrPrompt,
+    trimMarginsBox,
+    WEBTOON_BLANK_LEVEL, WEBTOON_MIN_GUTTER, WEBTOON_MIN_PAGE_FRAC,
+    blankRows, webtoonCutPoints, detectWebtoonPanels,
     encodePage, writePanelsIdx, writeMetaBin, writeTocIdx, normalizeLanguage, PANEL_CROP_SUBDIR,
     encodeXtgPage, encodeXthPage, buildXtcFile,
     pathDirname, pathNorm, pathJoinNorm,

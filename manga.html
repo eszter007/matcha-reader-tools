@@ -55,22 +55,40 @@
 
   <div class="card">
     <h3>3. Panel detection</h3>
-    <div class="checks stacked">
-      <label><input type="checkbox" id="manga-yolo" checked> <span class="opt">AI panel detection</span>
-        <span class="hint">Runs the YOLO26 model in your browser (~21&nbsp;MB once, then cached).
-        Untick for the faster white-gutter heuristic.</span></label>
+    <label for="manga-booktype">Book type</label>
+    <select id="manga-booktype">
+      <option value="">Please select</option>
+      <option value="manga">Manga — read right to left</option>
+      <option value="western">Western comic — read left to right</option>
+      <option value="webtoon">Webtoon / manhwa — one long vertical strip</option>
+    </select>
+    <p class="hint" id="manga-booktype-hint">
+      This sets the order panels are walked in, so the reader moves through the page the way the
+      artist drew it.</p>
+
+    <div class="checks stacked" style="margin-top:0.6rem">
       <label><input type="checkbox" id="manga-panels-only"> <span class="opt">Panels only (no full pages)</span>
         <span class="hint">Panel crops only — much smaller, opens straight into panel reading.
         Nothing is lost: the cover, and any page whose panels miss part of the artwork, keep their
         full page.</span></label>
-      <label id="manga-rotate-row"><input type="checkbox" id="manga-rotate-panels" checked> <span class="opt">Rotate wide panels to portrait</span>
-        <span class="hint">EPUB and XTC/XTCH only — those carry pre-rendered images, so a landscape
-        panel is turned upright to fill a portrait screen. Untick to keep every panel as it was
-        drawn. Matcha Reader format is unaffected: the device rotates panels itself.</span></label>
-      <label id="manga-mono-row"><input type="checkbox" id="manga-mono"> <span class="opt">1-bit BMP (Floyd–Steinberg dithering)</span>
-        <span class="hint">Black-and-white pages that turn noticeably faster on the device. Best
-        for line art; screentone becomes dither patterns.</span></label>
     </div>
+
+    <details id="manga-detect-advanced">
+      <summary>Advanced</summary>
+      <div class="checks stacked">
+        <label id="manga-yolo-row"><input type="checkbox" id="manga-yolo" checked> <span class="opt">AI panel detection</span>
+          <span class="hint">Runs the YOLO26 model in your browser (~21&nbsp;MB once, then cached).
+          Untick for the faster white-gutter heuristic.</span></label>
+        <label id="manga-rotate-row"><input type="checkbox" id="manga-rotate-panels" checked> <span class="opt">Rotate wide panels to portrait</span>
+          <span class="hint">EPUB and XTC/XTCH only — those carry pre-rendered images, so a landscape
+          panel is turned upright to fill a portrait screen. Untick to keep every panel as it was
+          drawn. Matcha Reader format is unaffected: the device rotates panels itself.</span></label>
+        <label id="manga-mono-row"><input type="checkbox" id="manga-mono"> <span class="opt">1-bit BMP (Floyd–Steinberg dithering)</span>
+          <span class="hint">Black-and-white pages that turn noticeably faster on the device. Best
+          for line art; screentone becomes dither patterns.</span></label>
+      </div>
+    </details>
+
     <label for="manga-res" style="margin-top:0.6rem">Target resolution</label>
     <select id="manga-res">
       <option value="">Please select</option>
@@ -92,14 +110,83 @@
 
   <div class="card" id="card-ocr">
     <h3>4. Text recognition (Gemini)</h3>
-    <label for="manga-key">Gemini API key
-      <span class="hint">— free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Stored only in this browser; sent only to Google.</span>
-    </label>
-    <input type="password" id="manga-key" autocomplete="off" placeholder="AIza…">
-    <div class="checks stacked" style="margin-top:0.6rem">
-      <label><input type="checkbox" id="manga-no-ocr"> <span class="opt">Skip OCR</span>
-        <span class="hint">Detect panels but don't call Gemini — no text, no translations.</span></label>
+    <div class="checks stacked">
+      <label><input type="checkbox" id="manga-no-ocr" checked> <span class="opt">Skip text recognition</span>
+        <span class="hint">Find the panels but don't read the text. No API key needed, nothing
+        leaves your browser, and conversion is much faster — you just won't get dictionary lookup
+        or translations on the device. Untick to have Gemini read each panel.</span></label>
     </div>
+
+    <div id="manga-ocr-fields" hidden>
+      <div class="row" style="margin-top:0.6rem">
+        <div>
+          <label for="manga-ocr-in">Language in the book</label>
+          <select id="manga-ocr-in">
+            <option value="">Let Gemini work it out</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="zh">Chinese</option>
+            <option value="en">English</option>
+            <option value="de">German</option>
+            <option value="fr">French</option>
+            <option value="es">Spanish</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="nl">Dutch</option>
+            <option value="sv">Swedish</option>
+            <option value="da">Danish</option>
+            <option value="no">Norwegian</option>
+            <option value="fi">Finnish</option>
+            <option value="pl">Polish</option>
+            <option value="cs">Czech</option>
+            <option value="hu">Hungarian</option>
+            <option value="ru">Russian</option>
+            <option value="uk">Ukrainian</option>
+            <option value="tr">Turkish</option>
+            <option value="ar">Arabic</option>
+            <option value="he">Hebrew</option>
+            <option value="th">Thai</option>
+            <option value="vi">Vietnamese</option>
+            <option value="id">Indonesian</option>
+          </select>
+          <span class="hint">Telling it what to expect makes recognition noticeably better — left
+          to guess, it can read a German speech bubble as Japanese.</span>
+        </div>
+        <div>
+          <label for="manga-ocr-out">Translate into</label>
+          <select id="manga-ocr-out">
+            <option value="en">English</option>
+            <option value="de">German</option>
+            <option value="fr">French</option>
+            <option value="es">Spanish</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="nl">Dutch</option>
+            <option value="sv">Swedish</option>
+            <option value="da">Danish</option>
+            <option value="no">Norwegian</option>
+            <option value="fi">Finnish</option>
+            <option value="pl">Polish</option>
+            <option value="cs">Czech</option>
+            <option value="hu">Hungarian</option>
+            <option value="ru">Russian</option>
+            <option value="uk">Ukrainian</option>
+            <option value="tr">Turkish</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="zh">Chinese</option>
+          </select>
+          <span class="hint">The language you want to read the translation in. Pick the same
+          language as the book and you get the text only, with no translation.</span>
+        </div>
+      </div>
+
+      <label for="manga-key" style="margin-top:0.6rem">Gemini API key
+        <span class="hint">— free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Stored only in this browser; sent only to Google.</span>
+      </label>
+      <input type="password" id="manga-key" autocomplete="off" placeholder="AIza…">
+    </div>
+
     <details>
       <summary>Advanced</summary>
       <label for="manga-model">Gemini model</label>

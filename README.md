@@ -10,12 +10,32 @@ for OCR.
 
 | Tool | Input | Output |
 |---|---|---|
-| 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + English translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.xtc` or `.xtch` |
+| 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.xtc` or `.xtch` |
 | 📚 **Dictionary Converter** | Yomitan `.zip` (Jitendex, JMnedict, grammar) or jmdict-simplified `.json`/`.json.tgz` | `dict/<name>.idx` + `.dat` + `.spx` lookup accelerator |
 | 🔤 **Font Converter** | TTF / OTF (up to 4 styles + fallback font) | `.fonts/<Family>/<Family>_<size>.cpfont` (v4, with kerning + ligatures) |
 
 Each tool downloads a zip already laid out for the SD card: unzip it onto the card, or upload the
 files via the reader's built-in Wi-Fi web file transfer.
+
+## What the panel detection does
+
+Red boxes are the panels the converter found; the number on each is its position in the reading
+order written to `panels.dat`. Pick the **book type** in step 3 and the rest follows from it.
+
+| Book type | Example | What it does |
+|---|---|---|
+| **Manga** | <img src="docs/images/panels-manga.jpg" width="300" alt="A manga page with eight numbered panels, walked right to left"> | Panels are walked right to left within each row, then down the page. A full-width panel separates the rows above and below it, and a tall panel beside two stacked shorter ones resolves correctly — the order comes from a topological sort, not from clustering panels by their vertical centre. |
+| **Western comic** | <img src="docs/images/panels-calvin.jpg" width="300" alt="A Calvin and Hobbes page with eight numbered panels, walked left to right"> | Same layout logic mirrored: left to right within a row, then down. The blank paper border and the page number are cropped off first, so a scan fills the screen instead of floating in the middle of it. |
+| **Western comic**<br>(newspaper strips) | <img src="docs/images/panels-moomin-german.jpg" width="300" alt="A Moomin page of four strips with eleven numbered panels"> | Strip collections work the same way. Trimming the margin before detection is what makes this page come out as all 11 panels — untrimmed it returns 9, with one whole strip left undivided. |
+| **Webtoon / manhwa** | <img src="docs/images/panels-webtoon.jpg" width="600" alt="Six webtoon pages re-cut from a vertical strip, each with numbered panels"> | One continuous vertical strip. The fixed-height tiles it was distributed in are reassembled and re-cut at the artwork's own gutters, so no page starts or ends mid-panel, and panels are the art blocks between those gutters. A 48-tile chapter came out as 42 pages filling 90% of the screen on average. |
+
+<details>
+<summary>One more western example</summary>
+
+<img src="docs/images/panels-moomin-english.jpg" width="420" alt="An English Moomin page with twelve numbered panels across four strips">
+
+Twelve panels across four strips, in reading order.
+</details>
 
 ## Hosting / running
 
@@ -30,8 +50,8 @@ It's a static site with no build step. Any static host works:
 These are ports of the firmware's conversion scripts, not reimplementations from the spec:
 
 - **Manga** ports `tools/manga_convert/convert_manga.py` (AI panel detection, white-gutter grid
-  fallback, reading-order topological sort, Gemini panel OCR with the same prompt/model/retry
-  behaviour, and the same binary writers). Given identical input pixels and the grid detector,
+  fallback, reading-order topological sort, margin trimming, webtoon re-pagination, Gemini panel
+  OCR with the same language-aware prompt/model/retry behaviour, and the same binary writers). Given identical input pixels and the grid detector,
   the binary output is **byte-identical** to the Python tool. AI panel detection runs the *same*
   fine-tuned YOLO26 model as the Python tool
   ([leoxs22/manga-panel-detector-yolo26n](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n),
@@ -65,11 +85,33 @@ These are ports of the firmware's conversion scripts, not reimplementations from
   and the firmware rotates one when it zooms it to the screen, so the option is hidden unless EPUB,
   XTC or XTCH is picked. Full pages are unaffected too — the EPUB never rotates them, and XTC/XTCH
   still turn a landscape spread upright so it fills the fixed page size.
+  The *Book type* dropdown carries the desktop tool's `--ltr`, `--trim-margins` and `--webtoon`
+  flags, as one choice rather than three checkboxes nobody would think to combine. **Manga** is the
+  right-to-left default. **Western comic** walks panels left to right and trims the printed paper
+  border off every page — the Python tool keeps those separate, but a western print scan wants both
+  every time, so the browser tool doesn't ask twice. **Webtoon / manhwa** reassembles the strip from
+  the fixed-height tiles it was sliced into and re-cuts it at the artwork's gutters into
+  screen-shaped pages; its panels come from those gutters rather than the AI detector, which looks
+  for bordered rectangles in a grid and has nothing to find in a webtoon (the checkbox is disabled
+  for that reason). A webtoon's source chapter list is dropped with a warning, since re-cutting
+  changes how many pages there are and its page indices no longer point anywhere real. Nothing is
+  preselected: reading a western comic in manga order is a silently wrong result, not a default to
+  guess at.
+  *Language in the book* and *Translate into* (step 4) shape the OCR prompt. Telling the model which
+  language to expect is what stops it hallucinating Japanese out of a German speech bubble, and
+  picking the same language for both asks for transcription with no pointless same-language
+  translation. Leaving the source blank falls back to the book's *Language* field (step 5) and then
+  to a prompt that names no language, which still works. The target language is Matcha-tools-only:
+  the desktop tool always translates into English.
+  *Skip text recognition* is ticked by default — it needs no API key, sends nothing anywhere and is
+  much faster, so the key field and the language pickers only appear once it is unticked. The AI
+  detector, panel rotation and the 1-bit BMP option live under *Advanced* in step 3, since the book
+  type and target resolution are the two choices that actually have to be made.
   Tick *1-bit BMP (Floyd–Steinberg dithering)* to write pages and panel crops as black-and-white
   dithered BMP instead of JPEG (the desktop tool's `--mono`). The device paints 1-bit BMP with a
   single fast refresh (no 4-level gray pass), so pages and panels turn noticeably quicker; it's
   best for pure line art (screentone gradients become dither patterns) and pairs naturally with
-  *Skip OCR*.
+  *Skip text recognition*.
   The *Language* field (the desktop tool's `--language`) tags the book so the reader can split
   reading stats by language. It is written into `meta.bin` as an optional trailer after the author,
   without a format-version bump — firmware predating the field reads exactly the header, title and
