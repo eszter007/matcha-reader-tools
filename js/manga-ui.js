@@ -546,8 +546,15 @@ const BOOK_TYPE_HINTS = {
       "gutters, so no page starts or ends mid-panel. Panels are the blocks between gutters.",
 };
 
-/* A webtoon's panels come from its gutters, so the AI detector has nothing to find and
- * the choice is meaningless -- disable it rather than leave a tickbox that does nothing. */
+const YOLO_HINT = "Runs the YOLO26 model in your browser, ~21 MB once, then cached. " +
+  "Untick for the faster white-gutter heuristic.";
+const YOLO_HINT_WEBTOON = "Not used for webtoons. Their panels come from the strip's gutters, " +
+  "and the model only finds bordered panels on a page.";
+
+/* A webtoon's panels come from its gutters, so the AI detector has nothing to find. Disable
+ * it rather than leave a tickbox that does nothing, and say why in the hint itself -- a
+ * greyed-out control with its reason hidden in a tooltip reads as broken, and a tooltip is
+ * invisible on touch. */
 function applyBookTypeUi() {
   const type = validBookType($("manga-booktype").value);
   const hint = $("manga-booktype-hint");
@@ -557,7 +564,8 @@ function applyBookTypeUi() {
     const off = type === BOOK_WEBTOON;
     yoloRow.classList.toggle("disabled", off);
     $("manga-yolo").disabled = off;
-    yoloRow.title = off ? "Webtoon panels come from the strip's gutters, not the AI detector." : "";
+    const yoloHint = yoloRow.querySelector(".hint");
+    if (yoloHint) yoloHint.textContent = off ? YOLO_HINT_WEBTOON : YOLO_HINT;
   }
 }
 
