@@ -557,9 +557,9 @@ const YOLO_HINT_WEBTOON = "Not used for webtoons. Their panels come from the str
  * converting a volume. Only for western comics -- a webtoon's panels are cut from the strip's
  * gutters and never go through the model at all, so the same warning there would be false. */
 const BOOK_TYPE_WARNINGS = {
-  [BOOK_WESTERN]: "The panel detector is trained on manga, so western pages are harder for it and " +
-    "it misses panels on dense strip layouts. Reading order and page images are unaffected. If a " +
-    "page comes out short on panels, its full page is still there to read.",
+  [BOOK_WESTERN]: "The detector is manga-trained and misses panels on dense strip layouts. Reading " +
+    "order and full pages are unaffected. For a different result, untick AI panel detection under " +
+    "Advanced: it needs real white gutters between panels, so on strips it usually finds fewer.",
 };
 
 /* A webtoon's panels come from its gutters, so the AI detector has nothing to find. Disable
