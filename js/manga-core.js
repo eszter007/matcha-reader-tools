@@ -661,6 +661,38 @@ function detectWebtoonPanels(gray, w, h) {
  * parity with PIL is not required — page and panel images are re-encoded in the
  * browser exactly like the JPEG path, and only the binary panels.idx/dat/
  * meta.bin/toc.idx files are compared byte-for-byte against the Python tool. */
+/* Dither brightness presets, as gamma exponents applied before dithering.
+ *
+ * Dithering thresholds at 128, so a scan carrying a grey cast or heavy screentone has a
+ * mass of pixels sitting just under it. They all turn black, error diffusion spreads that,
+ * and the page comes out darker than the original (issue #9). A gamma curve is the right
+ * correction: it moves the midtones where the problem is and leaves true black and true
+ * white pinned, so line art keeps its blacks and paper stays paper.
+ *
+ * NORMAL is exactly 1, which skips the transform outright and leaves output byte-identical
+ * to the Python tool. Browser-only: convert_manga.py always dithers at PIL's fixed 128.
+ */
+const DITHER_GAMMAS = { lightest: 0.55, lighter: 0.75, normal: 1, darker: 1.35 };
+
+function validDitherGamma(v) {
+  const g = typeof v === "number" ? v : DITHER_GAMMAS[v];
+  return Number.isFinite(g) && g > 0 ? g : 1;
+}
+
+/* Apply a gamma curve to an 8-bit grayscale buffer. Returns the input untouched at gamma 1
+ * so the default path allocates nothing and cannot drift from the Python output. */
+function applyGrayGamma(gray, gamma) {
+  const g = validDitherGamma(gamma);
+  if (g === 1) return gray;
+  const lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    lut[v] = Math.max(0, Math.min(255, Math.round(255 * Math.pow(v / 255, g))));
+  }
+  const out = new Uint8Array(gray.length);
+  for (let i = 0; i < gray.length; i++) out[i] = lut[gray[i]];
+  return out;
+}
+
 function floydSteinbergMono(gray, w, h) {
   // Signed accumulator so diffused error can push a pixel outside 0..255.
   const acc = new Int32Array(gray.length);
@@ -734,8 +766,9 @@ function encodeBmp1bit(mono, w, h) {
 }
 
 /* Convenience: RGBA pixels → 1-bit Floyd-Steinberg-dithered BMP bytes. */
-function encodeMonoBmpFromRGBA(rgba, w, h) {
-  return encodeBmp1bit(floydSteinbergMono(grayFromRGBA(rgba, w, h), w, h), w, h);
+function encodeMonoBmpFromRGBA(rgba, w, h, gamma = 1) {
+  const gray = applyGrayGamma(grayFromRGBA(rgba, w, h), gamma);
+  return encodeBmp1bit(floydSteinbergMono(gray, w, h), w, h);
 }
 
 /* ── Binary output ────────────────────────────────────────────── */
@@ -1048,6 +1081,7 @@ if (typeof module !== "undefined") {
     naturalSortKey, compareNaturalKeys, naturalSortPaths,
     grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
     floydSteinbergMono, encodeBmp1bit, encodeMonoBmpFromRGBA,
+    DITHER_GAMMAS, validDitherGamma, applyGrayGamma,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
     yOverlapFrac, sortPanelsReadingOrder,
     OCR_LANGUAGE_NAMES, ocrLanguageName, buildPanelOcrPrompt,

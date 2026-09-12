@@ -647,7 +647,7 @@ async function buildMangaEpub({ title, author, epubPages, tocEntries }) {
  * The 1-bit page is dithered (Floyd-Steinberg) rather than hard-thresholded: a plain threshold
  * turns screentone into flat black. XTH additionally needs a height that is a multiple of 8, which
  * every device target already satisfies (800 and 792 both divide by 8). */
-function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = true) {
+function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = true, gamma = 1) {
   const [w, h] = target;
   const page = makeCanvas(w, h);
   const ctx = page.getContext("2d", { willReadFrequently: true });
@@ -661,7 +661,9 @@ function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = tru
   const dh = Math.max(1, Math.round(img.height * scale));
   ctx.drawImage(img, Math.round((w - dw) / 2), Math.round((h - dh) / 2), dw, dh);
 
-  const gray = grayFromRGBA(ctx.getImageData(0, 0, w, h).data, w, h);
+  // Both depths read from the same corrected buffer, so a book exported as XTC and XTCH
+  // gets the same tonality rather than one of the two coming out darker.
+  const gray = applyGrayGamma(grayFromRGBA(ctx.getImageData(0, 0, w, h).data, w, h), gamma);
   const out = {};
   if (wantXtc) {
     const dithered = floydSteinbergMono(gray, w, h);   // 0/1 per pixel, 1 = white
@@ -701,6 +703,10 @@ function applyFormatVisibility() {
   show("card-install", matcha);
   show("card-book", matcha || nothingPicked || f.has("epub") || f.has("xtc") || f.has("xtch"));
   show("manga-mono-row", matcha);
+  // Dither brightness only means something when something is actually dithered: a 1-bit page
+  // in the device folder, or either XTC depth. A JPEG page never goes near it.
+  show("manga-dither-row",
+    nothingPicked || f.has("xtc") || f.has("xtch") || (matcha && $("manga-mono").checked));
   // Panel rotation only exists in the pre-rendered exports; the device folder's crops are rotated
   // by the firmware at display time, so the option would mean nothing there.
   show("manga-rotate-row", nothingPicked || f.has("epub") || f.has("xtc") || f.has("xtch"));
@@ -817,6 +823,9 @@ async function runMangaConversion() {
   // Book type drives panel reading order, margin trimming and webtoon re-cutting.
   // Like the resolution, nothing is preselected -- reading a western comic in manga
   // order is a silent, wrong-looking result, not something to guess at.
+  // Dither brightness only reaches the dithered outputs (1-bit BMP, XTC, XTCH); the JPEG
+  // and PNG paths are untouched by it.
+  const ditherGamma = validDitherGamma($("manga-dither").value);
   const bookType = validBookType($("manga-booktype").value);
   if (!bookType) {
     logValidation("Pick a book type — manga, western comic, or webtoon/manhwa.");
@@ -842,6 +851,7 @@ async function runMangaConversion() {
   saveSetting("manga-rotate-panels", rotatePanels ? "1" : "0");
   saveSetting("manga-format", [...formats].join(","));
   saveSetting("manga-booktype", bookType);
+  saveSetting("manga-dither", $("manga-dither").value);
   saveSetting("manga-no-ocr", $("manga-no-ocr").checked ? "1" : "0");
   saveSetting("manga-ocr-out", $("manga-ocr-out").value);
   saveSetting("manga-res", resChoice);
@@ -1059,7 +1069,7 @@ async function runMangaConversion() {
       if (!matchaFolder || !keepPageImage) {
         // nothing written for this page
       } else if (mono) {
-        zip.addFile(`${folder}/${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH));
+        zip.addFile(`${folder}/${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH, ditherGamma));
       } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized && !wasTrimmed) {
         zip.addFile(`${folder}/${pageBase}${ext}`, srcBytes);
       } else if (ext === ".png" && (wasResized || wasTrimmed)) {
@@ -1086,7 +1096,7 @@ async function runMangaConversion() {
       }
       if (anyXtc) xtcPageMap.set(pageIdx, wantXtc ? xtcPages.length : xtchPages.length);
       if (anyXtc && keepPageImage) {
-        const v = encodeXtcVariants(canvas, wantXtc, wantXtch, deviceTarget);
+        const v = encodeXtcVariants(canvas, wantXtc, wantXtch, deviceTarget, true, ditherGamma);
         if (v.xtc) xtcPages.push(v.xtc);
         if (v.xtch) xtchPages.push(v.xtch);
       }
@@ -1147,7 +1157,7 @@ async function runMangaConversion() {
           if (mono) {
             const cropRgba = cropCtx.getImageData(0, 0, pw, ph).data;
             if (matchaFolder) {
-              zip.addFile(`${folder}/${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph));
+              zip.addFile(`${folder}/${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph, ditherGamma));
             }
             // OCR still reads a full-colour JPEG crop: the dithered BMP would
             // only hurt text recognition (the --mono guidance to pair with
@@ -1173,7 +1183,7 @@ async function runMangaConversion() {
             epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: epw, h: eph });
           }
           if (anyXtc && cropInsteadOfPage) {
-            const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget, rotatePanels);
+            const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget, rotatePanels, ditherGamma);
             if (v.xtc) xtcPages.push(v.xtc);
             if (v.xtch) xtchPages.push(v.xtch);
           }
@@ -1340,6 +1350,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     applyFormatVisibility();
   }
   $("manga-booktype").value = validBookType(loadSetting("manga-booktype", ""));
+  $("manga-dither").value = loadSetting("manga-dither", "normal");
   $("manga-ocr-out").value = loadSetting("manga-ocr-out", "en");
   // Skip text recognition is the default: it needs no API key, sends nothing anywhere and
   // is the fast path, so the key field and the language pickers only appear once someone
@@ -1365,6 +1376,8 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-key").addEventListener("input", clearValidationWarnings);
   $("manga-no-ocr").addEventListener("change", clearValidationWarnings);
   $("manga-no-ocr").addEventListener("change", applyOcrUi);
+  // Ticking 1-bit BMP is what brings a dithered output into play for the device folder.
+  $("manga-mono").addEventListener("change", applyFormatVisibility);
   $("manga-booktype").addEventListener("change", clearValidationWarnings);
   $("manga-booktype").addEventListener("change", applyBookTypeUi);
   $("manga-res").addEventListener("change", clearValidationWarnings);

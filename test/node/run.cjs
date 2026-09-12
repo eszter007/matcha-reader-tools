@@ -201,6 +201,56 @@ function testMangaBookType() {
   }
 }
 
+/* ── Manga: dither brightness (issue #9) ──────────────────────── */
+
+function testMangaDither() {
+  console.log("\n== manga dither brightness ==");
+  const ramp = new Uint8Array([0, 32, 64, 96, 128, 160, 192, 224, 255]);
+
+  // Normal must be a true no-op, or the default output stops matching the Python tool.
+  check("normal returns the same buffer", manga.applyGrayGamma(ramp, "normal") === ramp);
+  check("unknown name falls back to normal", manga.applyGrayGamma(ramp, "nonsense") === ramp);
+  check("gamma 1 is normal", manga.validDitherGamma(1) === 1 && manga.validDitherGamma("normal") === 1);
+  check("a bad gamma is rejected, not applied",
+    manga.validDitherGamma(0) === 1 && manga.validDitherGamma(-2) === 1 && manga.validDitherGamma(NaN) === 1);
+
+  // Endpoints stay pinned: line art keeps its blacks and paper stays paper.
+  for (const name of ["lightest", "lighter", "darker"]) {
+    const out = manga.applyGrayGamma(ramp, name);
+    check(`${name} pins 0 and 255`, out[0] === 0 && out[out.length - 1] === 255, `${out[0]}..${out[out.length-1]}`);
+    check(`${name} is monotonic`, out.every((v, i) => i === 0 || v >= out[i - 1]), [...out].join(","));
+  }
+
+  // Direction: lighter raises midtones, darker lowers them.
+  const mid = 4;  // the 128 entry
+  const lightest = manga.applyGrayGamma(ramp, "lightest");
+  const lighter = manga.applyGrayGamma(ramp, "lighter");
+  const darker = manga.applyGrayGamma(ramp, "darker");
+  check("lightest > lighter > normal > darker at the midpoint",
+    lightest[mid] > lighter[mid] && lighter[mid] > ramp[mid] && ramp[mid] > darker[mid],
+    `${lightest[mid]} ${lighter[mid]} ${ramp[mid]} ${darker[mid]}`);
+
+  // End to end: a mid-grey field dithers to less black when lightened. A flat 120 sits just
+  // under the 128 threshold, which is exactly the case issue #9 describes.
+  const W = 64, H = 64;
+  const rgba = new Uint8Array(W * H * 4);
+  for (let i = 0; i < W * H; i++) { rgba[i*4] = rgba[i*4+1] = rgba[i*4+2] = 120; rgba[i*4+3] = 255; }
+  const blackCount = (name) => {
+    const gray = manga.applyGrayGamma(manga.grayFromRGBA(rgba, W, H), name);
+    return manga.floydSteinbergMono(gray, W, H).reduce((n, v) => n + (v ? 0 : 1), 0);
+  };
+  const nb = blackCount("normal"), lb = blackCount("lightest"), db = blackCount("darker");
+  check("lightening a mid-grey field reduces black", lb < nb, `${lb} vs ${nb}`);
+  check("darkening it increases black", db > nb, `${db} vs ${nb}`);
+
+  // The BMP encoder's default must stay byte-for-byte what it was before the option existed.
+  const a = manga.encodeMonoBmpFromRGBA(rgba, W, H);
+  const b = manga.encodeMonoBmpFromRGBA(rgba, W, H, 1);
+  check("mono BMP default is unchanged", a.length === b.length && a.every((v, i) => v === b[i]));
+  const c = manga.encodeMonoBmpFromRGBA(rgba, W, H, "lightest");
+  check("mono BMP actually changes when lightened", c.length === a.length && !c.every((v, i) => v === a[i]));
+}
+
 /* ── Manga: language-aware OCR prompt ─────────────────────────── */
 
 function testMangaOcrPrompt() {
@@ -855,6 +905,7 @@ function testXtc() {
 (async () => {
   testManga();
   testMangaBookType();
+  testMangaDither();
   testMangaOcrPrompt();
   testXtc();
   testMangaFolderedSort();

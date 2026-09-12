@@ -97,6 +97,7 @@ changed, and 21 MB for the model alone. Bump their paths if one is replaced.
 | **AI panel detection** | — | YOLO26 in-browser. Untick for the white-gutter heuristic, which is also the automatic fallback. Disabled for webtoons, whose panels come from gutters. |
 | **Rotate wide panels** | — | EPUB and XTC/XTCH only: those bake in orientation. The Matcha format rotates on the device instead. |
 | **1-bit BMP** | `--mono` | Dithered black-and-white pages. One fast refresh on the device. Best for line art. |
+| **Dither brightness** | *(browser only)* | Gamma applied before dithering, for scans that come out darker than the original. Affects 1-bit BMP and XTC/XTCH only. |
 
 **EPUB** is fixed-layout EPUB 3, right-to-left, each page followed by its panels, with the chapter
 list carried over. **XTC / XTCH** is Xteink's own format for the stock firmware, 1-bit and 4-level
