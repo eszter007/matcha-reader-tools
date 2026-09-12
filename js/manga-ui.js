@@ -551,6 +551,17 @@ const YOLO_HINT = "Runs the YOLO26 model in your browser, ~21 MB once, then cac
 const YOLO_HINT_WEBTOON = "Not used for webtoons. Their panels come from the strip's gutters, " +
   "and the model only finds bordered panels on a page.";
 
+/* The panel detector is fine-tuned on Manga109, so a western page is out of its training
+ * distribution and it misses panels: on a dense four-panel Moomin strip page it found 10 of
+ * about 16. Say so where the choice is made rather than letting someone discover it after
+ * converting a volume. Only for western comics -- a webtoon's panels are cut from the strip's
+ * gutters and never go through the model at all, so the same warning there would be false. */
+const BOOK_TYPE_WARNINGS = {
+  [BOOK_WESTERN]: "The panel detector is trained on manga, so western pages are harder for it and " +
+    "it misses panels on dense strip layouts. Reading order and page images are unaffected. If a " +
+    "page comes out short on panels, its full page is still there to read.",
+};
+
 /* A webtoon's panels come from its gutters, so the AI detector has nothing to find. Disable
  * it rather than leave a tickbox that does nothing, and say why in the hint itself -- a
  * greyed-out control with its reason hidden in a tooltip reads as broken, and a tooltip is
@@ -559,6 +570,11 @@ function applyBookTypeUi() {
   const type = validBookType($("manga-booktype").value);
   const hint = $("manga-booktype-hint");
   if (hint) hint.textContent = BOOK_TYPE_HINTS[type] || BOOK_TYPE_HINTS[""];
+  const warn = $("notice-booktype");
+  if (warn) {
+    warn.textContent = BOOK_TYPE_WARNINGS[type] || "";
+    warn.hidden = !BOOK_TYPE_WARNINGS[type];
+  }
   const yoloRow = $("manga-yolo-row");
   if (yoloRow) {
     const off = type === BOOK_WEBTOON;
