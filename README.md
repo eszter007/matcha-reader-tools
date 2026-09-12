@@ -45,6 +45,18 @@ It's a static site with no build step. Any static host works:
   The included workflow (`.github/workflows/pages.yml`) deploys on every push to `main`.
 - **Locally**: `python3 -m http.server` in the repo root, then open `http://localhost:8000`.
 
+The deploy workflow rewrites every `css/` and `js/` URL in the HTML to carry the commit SHA
+(`js/manga-ui.js?v=42dd0bbd`). Pages serves each file with a ten-minute max-age, and without
+this a browser could pair a freshly fetched page with a script it still had cached. That is not
+hypothetical: an old `manga-ui.js` once read an element the new `manga.html` no longer had, threw
+during init, and left every control on the page dead. Stamping happens at deploy time rather than
+in the committed HTML, so the URLs cannot go stale through someone forgetting to bump them, and
+local development keeps serving plain paths.
+
+The vendored ONNX Runtime, PDF.js and the YOLO model are loaded from JavaScript by fixed path
+and are deliberately left unstamped — they are pinned, change rarely, and the model alone is
+21 MB, so a long-lived cache entry is the point. Bump their paths if one is ever replaced.
+
 ## Fidelity to the firmware's Python tools
 
 These are ports of the firmware's conversion scripts, not reimplementations from the spec:

@@ -23,6 +23,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # Stamp every local css/js URL with the commit SHA. Pages serves each file with a
+      # ten-minute max-age, so without this a browser can pair a freshly fetched page with a
+      # script it still has cached -- which broke the converter for real: an old manga-ui.js
+      # read an element the new manga.html no longer had, threw during init, and left every
+      # control on the page dead. Stamping is done here rather than committed so the URLs
+      # cannot go stale by someone forgetting to bump them, and local development keeps
+      # serving plain paths.
+      - name: Stamp asset URLs with the commit SHA
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          ver = os.environ["GITHUB_SHA"][:8]
+          # Only same-origin css/js; vendored runtimes are lazy-loaded from JS by pinned path.
+          pat = re.compile(r'\b(href|src)="((?:css|js)/[^"?#]+\.(?:css|js))"')
+          for p in sorted(pathlib.Path(".").glob("*.html")):
+              s = p.read_text(encoding="utf-8")
+              out = pat.sub(lambda m: f'{m.group(1)}="{m.group(2)}?v={ver}"', s)
+              if out != s:
+                  p.write_text(out, encoding="utf-8")
+                  print(f"{p}: {len(pat.findall(s))} asset URL(s) stamped with {ver}")
+          PY
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
