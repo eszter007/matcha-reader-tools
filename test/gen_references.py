@@ -254,10 +254,15 @@ def run_yolo_reference():
     """Reference panel boxes for the AI (YOLO) detection path.
 
     Mirrors js/yolo.js preprocessing/decoding numerically (bilinear letterbox,
-    float32 tensor, conf 0.4, class 0) against the same ONNX model the site
-    ships (models/manga_panel_detector_yolo26n.onnx), then reuses the firmware
-    tool's own is_sliver_panel / _dedupe_boxes / sort_panels_manga_order so
-    post-processing semantics can't drift from convert_manga.py.
+    float32 tensor) against the same ONNX model the site ships
+    (models/manga_panel_detector_yolo26n.onnx), then reuses the firmware tool's
+    own is_sliver_panel / _dedupe_boxes / split_frames_over_subpanels /
+    sort_panels_reading_order / expand_panels_over_text so post-processing
+    semantics can't drift from convert_manga.py.
+
+    Decoding runs at PANEL_WEAK_CONF, not the panel bar: sub-threshold panel
+    boxes are kept as corroboration for splitting a merged frame, and the text
+    class drives the bubble-aware crop expansion. Both mirror js/yolo.js.
 
     Inference backends differ in float rounding, so the JS comparison is
     tolerance-based (±2 px), unlike the byte-exact grid references.
@@ -276,6 +281,7 @@ def run_yolo_reference():
                               "manga_panel_detector_yolo26n.onnx")
     sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
     size, conf_thresh = 640, 0.4
+    weak_conf = convert_manga.PANEL_WEAK_CONF
 
     def letterbox(rgb):
         h, w = rgb.shape[:2]
@@ -305,20 +311,34 @@ def run_yolo_reference():
         inp, scale, padx, pady = letterbox(np.asarray(img))
         rows = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0]
         boxes_with_conf = []
+        candidates = []
+        texts = []
         for x1, y1, x2, y2, conf, cls in rows:
-            if conf < conf_thresh or round(float(cls)) != 0:
+            if conf < weak_conf:
                 continue
             box = [int(max(0, min((x1 - padx) / scale, img.width))),
                    int(max(0, min((y1 - pady) / scale, img.height))),
                    int(max(0, min((x2 - padx) / scale, img.width))),
                    int(max(0, min((y2 - pady) / scale, img.height)))]
+            cls = round(float(cls))
+            if cls == 1:
+                if conf >= conf_thresh:
+                    texts.append(box)
+                continue
+            if cls != 0:
+                continue
             if convert_manga.is_sliver_panel(box, img.width, img.height):
                 continue
-            boxes_with_conf.append((box, float(conf)))
+            candidates.append(box)
+            if conf >= conf_thresh:
+                boxes_with_conf.append((box, float(conf)))
         boxes = convert_manga._dedupe_boxes(boxes_with_conf)
         if not boxes:
             boxes = [[0, 0, img.width, img.height]]
-        result[name] = convert_manga.sort_panels_manga_order(boxes)
+        else:
+            boxes = convert_manga.split_frames_over_subpanels(boxes, candidates)
+        boxes = convert_manga.sort_panels_reading_order(boxes)
+        result[name] = convert_manga.expand_panels_over_text(boxes, texts, img.width, img.height)
     with open(os.path.join(out_dir, "boxes.json"), "w") as f:
         json.dump(result, f, indent=1)
     print(f"yolo reference: {out_dir}")

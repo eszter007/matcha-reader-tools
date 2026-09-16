@@ -13,7 +13,32 @@
 
 const YOLO_INPUT_SIZE = 640;
 const YOLO_CONF_THRESHOLD = 0.4;   // convert_manga.py:_detect_panels_yolo(conf=0.4)
-const YOLO_PANEL_CLASS = 0;        // 0=panel, 1=text — we only want panels
+const YOLO_WEAK_CONF = 0.15;       // convert_manga.py:PANEL_WEAK_CONF
+const YOLO_PANEL_CLASS = 0;        // 0=panel, 1=text
+const YOLO_TEXT_CLASS = 1;
+
+/* convert_manga.py:TEXT_OWNERSHIP_MIN_FRAC — fraction of a text box's area that
+ * must fall inside a panel before that panel is grown to cover it. A bubble
+ * straddling a gutter belongs to whichever panel holds most of it; below this it
+ * is page furniture (page numbers, credits, a title banner in the margin) that no
+ * panel should be stretched to reach. */
+const TEXT_OWNERSHIP_MIN_FRAC = 0.25;
+
+/* convert_manga.py:TEXT_PAD_FRAC_OF_PAGE / TEXT_PAD_MIN — breathing room put
+ * around a text box before a panel is grown over it. The detector boxes the
+ * GLYPHS, not the balloon holding them, so unioning on the bare box lands the
+ * crop edge on the bubble's own outline, which reads as a second cut. */
+const TEXT_PAD_FRAC_OF_PAGE = 0.02;
+const TEXT_PAD_MIN = 6;
+
+/* convert_manga.py:SUBPANEL_* — a frame is replaced by the sub-panels found
+ * inside it only when each child is meaningfully smaller than the frame, sits
+ * almost entirely within it, the children between them account for most of the
+ * frame, and they tile rather than restate each other. */
+const SUBPANEL_MAX_AREA_FRAC = 0.7;
+const SUBPANEL_INSIDE_FRAC = 0.85;
+const SUBPANEL_COVER_FRAC = 0.7;
+const SUBPANEL_SIBLING_OVERLAP_FRAC = 0.3;
 
 /* Letterbox an RGBA image into a 640x640 float32 CHW tensor (RGB, /255),
  * padding with 114-gray like ultralytics' LetterBox(auto=False). Bilinear
@@ -59,23 +84,25 @@ function yoloLetterbox(rgba, w, h, size) {
 
 /* Decode the end-to-end YOLO26 ONNX output — [1, N, 6] rows of
  * (x1, y1, x2, y2, confidence, class) in letterboxed 640x640 pixels — into
- * source-image pixel boxes with confidences, filtered to the panel class
- * and the Python tool's confidence threshold. */
+ * [box, confidence, class] triples in source-image pixels, keeping everything
+ * at or above `conf`. Callers split the classes and apply their own bars;
+ * detectPanelsYolo decodes at YOLO_WEAK_CONF because sub-threshold panel boxes
+ * are still wanted as corroboration (see yoloSplitFramesOverSubpanels). */
 function yoloDecodeOutput(out, rows, lb, imgW, imgH, conf) {
   conf = conf === undefined ? YOLO_CONF_THRESHOLD : conf;
-  const boxesWithConf = [];
+  const decoded = [];
   for (let i = 0; i < rows; i++) {
     const o = i * 6;
     const score = out[o + 4];
     if (score < conf) continue;
-    if (Math.round(out[o + 5]) !== YOLO_PANEL_CLASS) continue;
     const x1 = Math.min(Math.max((out[o] - lb.padX) / lb.scale, 0), imgW);
     const y1 = Math.min(Math.max((out[o + 1] - lb.padY) / lb.scale, 0), imgH);
     const x2 = Math.min(Math.max((out[o + 2] - lb.padX) / lb.scale, 0), imgW);
     const y2 = Math.min(Math.max((out[o + 3] - lb.padY) / lb.scale, 0), imgH);
-    boxesWithConf.push([[Math.trunc(x1), Math.trunc(y1), Math.trunc(x2), Math.trunc(y2)], score]);
+    decoded.push([[Math.trunc(x1), Math.trunc(y1), Math.trunc(x2), Math.trunc(y2)],
+                  score, Math.round(out[o + 5])]);
   }
-  return boxesWithConf;
+  return decoded;
 }
 
 /* ── Post-processing ported from convert_manga.py ─────────────── */
@@ -129,12 +156,105 @@ function isSliverPanel(box, pageW, pageH) {
   return areaFrac < 0.025 && aspect > 4.0;
 }
 
+/* Padding to put around a text box before growing a panel over it, scaled to
+ * the page so it behaves the same on a 290px thumbnail and a 2000px scan.
+ * Port of convert_manga.py:text_pad_px. */
+function yoloTextPadPx(pageW, pageH) {
+  return Math.max(TEXT_PAD_MIN, Math.round(Math.min(pageW, pageH) * TEXT_PAD_FRAC_OF_PAGE));
+}
+
+/* Grow each panel box to cover the speech bubbles and caption boxes that belong
+ * to it. Manga bubbles routinely overhang the frame they are spoken in -- drawn
+ * on top of the border, or pushed out into the gutter -- and cropping on the
+ * detected frame alone slices the text off mid-word.
+ *
+ * Ownership is decided against the ORIGINAL panel boxes and on the UNPADDED text
+ * box, so neither a panel's growth nor the padding can claim a neighbour's
+ * bubbles. Only sides the bubble actually breaches move, so a balloon drawn just
+ * inside the frame leaves the crop exactly where it was.
+ *
+ * Index-preserving: the caller fixes reading order on the frames first, and this
+ * returns the expanded boxes in the same order. Port of
+ * convert_manga.py:expand_panels_over_text. */
+function yoloExpandPanelsOverText(panels, texts, pageW, pageH) {
+  if (!texts || !texts.length) return panels;
+
+  const pad = yoloTextPadPx(pageW, pageH);
+  const expanded = panels.map((p) => p.slice());
+  for (const text of texts) {
+    const textArea = yoloBoxArea(text);
+    if (textArea <= 0) continue;
+    let owner = -1, bestOverlap = 0;
+    for (let i = 0; i < panels.length; i++) {
+      const overlap = yoloOverlapArea(panels[i], text);
+      if (overlap > bestOverlap) { owner = i; bestOverlap = overlap; }
+    }
+    if (owner < 0 || bestOverlap < textArea * TEXT_OWNERSHIP_MIN_FRAC) continue;
+    const base = panels[owner], box = expanded[owner];
+    if (text[0] < base[0]) box[0] = Math.min(box[0], text[0] - pad);
+    if (text[1] < base[1]) box[1] = Math.min(box[1], text[1] - pad);
+    if (text[2] > base[2]) box[2] = Math.max(box[2], text[2] + pad);
+    if (text[3] > base[3]) box[3] = Math.max(box[3], text[3] + pad);
+  }
+
+  for (const box of expanded) {
+    box[0] = Math.max(0, box[0]);
+    box[1] = Math.max(0, box[1]);
+    box[2] = Math.min(pageW, box[2]);
+    box[3] = Math.min(pageH, box[3]);
+  }
+  return expanded;
+}
+
+/* Replace a frame with the sub-panels the model also found inside it.
+ *
+ * Neighbouring panels come back as one frame when their shared border is faint
+ * or their artwork runs across it -- a whole row of a western strip can arrive
+ * as a single box. The model usually does see the individual panels, just below
+ * the confidence bar, and yoloDedupeBoxes() then folds those weaker boxes into
+ * the frame that contains them. This recovers them: a weak box is trusted only
+ * where a set of siblings tiles a confident frame, so nothing is admitted that
+ * the model did not propose and no frame is split on the strength of one stray
+ * box. Port of convert_manga.py:split_frames_over_subpanels. */
+function yoloSplitFramesOverSubpanels(frames, candidates) {
+  const out = [];
+  for (const frame of frames) {
+    const frameArea = yoloBoxArea(frame);
+    const children = candidates.filter((box) => {
+      const area = yoloBoxArea(box);
+      return area > 0 && area <= SUBPANEL_MAX_AREA_FRAC * frameArea &&
+             yoloOverlapArea(box, frame) >= SUBPANEL_INSIDE_FRAC * area;
+    });
+    const covered = children.reduce((sum, c) => sum + yoloBoxArea(c), 0);
+    if (children.length < 2 || covered < SUBPANEL_COVER_FRAC * frameArea) {
+      out.push(frame);
+      continue;
+    }
+    let tiles = true;
+    for (let i = 0; i < children.length && tiles; i++) {
+      for (let j = i + 1; j < children.length; j++) {
+        const smaller = Math.min(yoloBoxArea(children[i]), yoloBoxArea(children[j]));
+        if (yoloOverlapArea(children[i], children[j]) > SUBPANEL_SIBLING_OVERLAP_FRAC * smaller) {
+          tiles = false;
+          break;
+        }
+      }
+    }
+    if (tiles) out.push(...children.map((c) => c.slice()));
+    else out.push(frame);
+  }
+  return out;
+}
+
 /* Full pipeline for one page: letterbox → inference → decode → sliver filter
- * → dedupe, falling back to one full-page box when nothing is detected —
- * mirrors convert_manga.py:_detect_panels_yolo. `session` is an ONNX Runtime
- * InferenceSession for the panel model; `ortApi` is the onnxruntime module
- * (for its Tensor constructor). */
-async function detectPanelsYolo(session, ortApi, rgba, w, h) {
+ * → dedupe → sub-panel recovery, falling back to one full-page box when nothing
+ * is detected — mirrors convert_manga.py:_detect_panels_yolo. Returns
+ * {frames, texts}: the frames as drawn (what reading order must be derived
+ * from) and the text boxes yoloExpandPanelsOverText() then grows the CROP
+ * rectangles over. `session` is an ONNX Runtime InferenceSession for the panel
+ * model; `ortApi` is the onnxruntime module (for its Tensor constructor). */
+async function detectPanelsYolo(session, ortApi, rgba, w, h, conf) {
+  conf = conf === undefined ? YOLO_CONF_THRESHOLD : conf;
   const lb = yoloLetterbox(rgba, w, h);
   const inputName = session.inputNames[0];
   const feeds = {};
@@ -143,17 +263,35 @@ async function detectPanelsYolo(session, ortApi, rgba, w, h) {
   const output = results[session.outputNames[0]];
   const rows = output.dims[output.dims.length - 2];
 
-  const raw = yoloDecodeOutput(output.data, rows, lb, w, h);
-  const filtered = raw.filter(([box]) => !isSliverPanel(box, w, h));
-  const boxes = yoloDedupeBoxes(filtered);
-  if (!boxes.length) return [[0, 0, w, h]];
-  return boxes;
+  const decoded = yoloDecodeOutput(output.data, rows, lb, w, h, YOLO_WEAK_CONF);
+  const strong = [];
+  const candidates = [];
+  const texts = [];
+  for (const [box, score, cls] of decoded) {
+    if (cls === YOLO_TEXT_CLASS) {
+      if (score >= conf) texts.push(box);  // a weak text box must not grow a crop
+      continue;
+    }
+    if (cls !== YOLO_PANEL_CLASS) continue;
+    if (isSliverPanel(box, w, h)) continue;
+    candidates.push(box);
+    if (score >= conf) strong.push([box, score]);
+  }
+
+  const boxes = yoloDedupeBoxes(strong);
+  if (!boxes.length) return { frames: [[0, 0, w, h]], texts };
+  return { frames: yoloSplitFramesOverSubpanels(boxes, candidates), texts };
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
-    YOLO_INPUT_SIZE, YOLO_CONF_THRESHOLD, YOLO_PANEL_CLASS,
+    YOLO_INPUT_SIZE, YOLO_CONF_THRESHOLD, YOLO_WEAK_CONF,
+    YOLO_PANEL_CLASS, YOLO_TEXT_CLASS,
+    TEXT_OWNERSHIP_MIN_FRAC, TEXT_PAD_FRAC_OF_PAGE, TEXT_PAD_MIN,
+    SUBPANEL_MAX_AREA_FRAC, SUBPANEL_INSIDE_FRAC, SUBPANEL_COVER_FRAC,
+    SUBPANEL_SIBLING_OVERLAP_FRAC,
     yoloLetterbox, yoloDecodeOutput, yoloDedupeBoxes, isSliverPanel,
-    yoloBoxArea, yoloOverlapArea, detectPanelsYolo,
+    yoloBoxArea, yoloOverlapArea, yoloTextPadPx, yoloExpandPanelsOverText,
+    yoloSplitFramesOverSubpanels, detectPanelsYolo,
   };
 }

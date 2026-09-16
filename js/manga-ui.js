@@ -1022,18 +1022,26 @@ async function runMangaConversion() {
         // a single column can only move boxes away from what the cut established.
         boxes = detectWebtoonPanels(grayFromRGBA(rgba, imgW, imgH), imgW, imgH);
       } else {
+        let textBoxes = [];
         if (yolo) {
           try {
-            boxes = await detectPanelsYolo(yolo.session, yolo.ort, rgba, imgW, imgH);
+            const detected = await detectPanelsYolo(yolo.session, yolo.ort, rgba, imgW, imgH);
+            boxes = detected.frames;
+            textBoxes = detected.texts;
           } catch (e) {
             logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
           }
         }
         if (!boxes) {
+          // The grid heuristic has no text detection, so nothing grows over bubbles here.
           const gray = grayFromRGBA(rgba, imgW, imgH);
           boxes = detectPanelsGrid(gray, imgW, imgH);
         }
+        // Order on the frames as drawn -- growing a box moves its centre, which
+        // sortPanelsReadingOrder() tiers and orders on -- then grow the crops over the
+        // bubbles. yoloExpandPanelsOverText() is index-preserving, so the order survives.
         boxes = sortPanelsReadingOrder(boxes, rtl);
+        boxes = yoloExpandPanelsOverText(boxes, textBoxes, imgW, imgH);
       }
 
       // Panels-only must not lose anything the detector missed: with no full page behind them,

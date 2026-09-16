@@ -614,6 +614,65 @@ async function testMangaEpub() {
   check("identifier varies with title", epub.epubIdentifier("Other", "Test Author", spine.length) !== identifier);
 }
 
+/* ── Manga: bubble-aware panel crops (vs convert_manga.py) ────── */
+
+function testMangaBubbleCrops() {
+  console.log("manga bubble-aware panel crops:");
+  const yolo = require("../../js/yolo.js");
+  const { yoloExpandPanelsOverText: expand, yoloSplitFramesOverSubpanels: split,
+          yoloTextPadPx: padPx } = yolo;
+  const pad = padPx(800, 800);
+
+  // A caption drawn above the frame border must not be sliced off, and the crop
+  // edge must clear its outline rather than land on it.
+  check("overhanging caption grows the crop",
+        JSON.stringify(expand([[100, 100, 500, 500]], [[120, 60, 300, 140]], 800, 800)) ===
+        JSON.stringify([[100, 60 - pad, 500, 500]]));
+
+  // Padding is breathing room for a breached border, not a blanket inset.
+  check("a bubble inside the panel never moves the crop",
+        JSON.stringify(expand([[100, 100, 500, 500]], [[104, 104, 300, 180]], 800, 800)) ===
+        JSON.stringify([[100, 100, 500, 500]]));
+
+  // A bubble straddling two panels belongs to one of them, not both.
+  check("gutter bubble goes to the panel holding most of it",
+        JSON.stringify(expand([[0, 100, 300, 500], [320, 100, 620, 500]],
+                              [[250, 200, 420, 260]], 800, 800)) ===
+        JSON.stringify([[0, 100, 300, 500], [250 - pad, 100, 620, 500]]));
+
+  // A page number in the margin must not stretch the nearest panel to it.
+  check("text outside every panel is ignored",
+        JSON.stringify(expand([[100, 100, 500, 500]], [[470, 700, 520, 740]], 800, 800)) ===
+        JSON.stringify([[100, 100, 500, 500]]));
+
+  check("growth never leaves the page",
+        JSON.stringify(expand([[10, 100, 500, 500]], [[-40, 60, 300, 200]], 800, 800)) ===
+        JSON.stringify([[0, 60 - pad, 500, 500]]));
+
+  check("pad scales with the page",
+        padPx(290, 420) < padPx(1024, 1449) && padPx(1024, 1449) < padPx(1364, 2000));
+
+  // A strip the model returned as one frame, but also saw three panels in.
+  const frame = [0, 0, 900, 300];
+  const kids = [[0, 0, 290, 300], [300, 0, 590, 300], [600, 0, 900, 300]];
+  check("a merged row is split into its subpanels",
+        JSON.stringify(split([frame], kids.concat([frame]))) === JSON.stringify(kids));
+
+  check("a frame seen twice at two scales is not split",
+        JSON.stringify(split([frame], [frame, [4, 3, 896, 297]])) === JSON.stringify([frame]));
+
+  check("one stray box never splits a frame",
+        JSON.stringify(split([frame], [frame, [100, 60, 300, 240]])) === JSON.stringify([frame]));
+
+  check("subpanels must account for the frame",
+        JSON.stringify(split([frame], [[0, 0, 150, 100], [160, 0, 310, 100], frame])) ===
+        JSON.stringify([frame]));
+
+  check("overlapping subpanels are rejected",
+        JSON.stringify(split([frame], [[0, 0, 600, 300], [100, 0, 700, 300], frame])) ===
+        JSON.stringify([frame]));
+}
+
 /* ── Manga: YOLO panel detection vs Python reference ──────────── */
 
 async function testMangaYolo() {
@@ -645,8 +704,9 @@ async function testMangaYolo() {
   for (const name of Object.keys(ref)) {
     const [w, h] = dims[name];
     const rgba = new Uint8Array(fs.readFileSync(path.join(pagesDir, name.replace(".png", ".rgba"))));
-    let boxes = await yolo.detectPanelsYolo(session, ort, rgba, w, h);
-    boxes = manga.sortPanelsReadingOrder(boxes);
+    const detected = await yolo.detectPanelsYolo(session, ort, rgba, w, h);
+    let boxes = manga.sortPanelsReadingOrder(detected.frames);
+    boxes = yolo.yoloExpandPanelsOverText(boxes, detected.texts, w, h);
     const expected = ref[name];
     if (boxes.length !== expected.length) {
       check(`${name} panel count`, false, `got ${boxes.length}, reference ${expected.length}`);
@@ -916,6 +976,7 @@ function testXtc() {
   testMangaMono();
   testMangaFit();
   await testMangaEpub();
+  testMangaBubbleCrops();
   await testMangaYolo();
   await testDictYomitan();
   testDictJmdict();
