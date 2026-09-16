@@ -12,6 +12,7 @@
 "use strict";
 
 const YOLO_INPUT_SIZE = 640;
+const YOLO_STRIDE = 32;            // ultralytics LetterBox(auto=True) pads to this multiple
 const YOLO_CONF_THRESHOLD = 0.4;   // convert_manga.py:_detect_panels_yolo(conf=0.4)
 const YOLO_WEAK_CONF = 0.15;       // convert_manga.py:PANEL_WEAK_CONF
 const YOLO_PANEL_CLASS = 0;        // 0=panel, 1=text
@@ -40,20 +41,36 @@ const SUBPANEL_INSIDE_FRAC = 0.85;
 const SUBPANEL_COVER_FRAC = 0.7;
 const SUBPANEL_SIBLING_OVERLAP_FRAC = 0.3;
 
-/* Letterbox an RGBA image into a 640x640 float32 CHW tensor (RGB, /255),
- * padding with 114-gray like ultralytics' LetterBox(auto=False). Bilinear
- * resample. Returns {data, scale, padX, padY} — scale/pad are needed to map
- * detected boxes back to source-image pixels. */
-function yoloLetterbox(rgba, w, h, size) {
+/* Letterbox an RGBA image into a float32 CHW tensor (RGB, /255), padding with
+ * 114-gray. Reproduces ultralytics' LetterBox(new_shape=640, auto=True,
+ * stride=32) — the preprocessing `model.predict()` applies — which is
+ * RECTANGULAR: the long side is scaled to 640 and the short side is padded only
+ * up to the next multiple of 32, not out to a square. Squaring the input
+ * instead changes the apparent scale of everything in the page and moves the
+ * model's confidences enough to gain and lose whole panels, so this has to
+ * match the Python tool exactly.
+ *
+ * Returns {data, netW, netH, scale, padX, padY}; netW/netH are the tensor's
+ * spatial dims and scale/pad map detected boxes back to source pixels. */
+function yoloLetterbox(rgba, w, h, size, stride) {
   size = size || YOLO_INPUT_SIZE;
+  stride = stride || YOLO_STRIDE;
   const scale = Math.min(size / w, size / h);
   const newW = Math.round(w * scale);
   const newH = Math.round(h * scale);
-  const padX = Math.trunc((size - newW) / 2);
-  const padY = Math.trunc((size - newH) / 2);
 
-  const data = new Float32Array(3 * size * size).fill(114 / 255);
-  const plane = size * size;
+  // ultralytics: dw/dh are the leftover padding modulo the stride, halved, then
+  // split with its round(x-0.1) / round(x+0.1) rule so odd padding favours the
+  // bottom/right edge.
+  const dw = ((size - newW) % stride) / 2;
+  const dh = ((size - newH) % stride) / 2;
+  const padX = Math.max(0, Math.round(dw - 0.1));
+  const padY = Math.max(0, Math.round(dh - 0.1));
+  const netW = newW + padX + Math.max(0, Math.round(dw + 0.1));
+  const netH = newH + padY + Math.max(0, Math.round(dh + 0.1));
+
+  const plane = netW * netH;
+  const data = new Float32Array(3 * plane).fill(114 / 255);
 
   for (let y = 0; y < newH; y++) {
     // Bilinear sample positions (align pixel centers, cv2.INTER_LINEAR style).
@@ -61,7 +78,7 @@ function yoloLetterbox(rgba, w, h, size) {
     const y0 = Math.floor(sy);
     const y1 = Math.min(y0 + 1, h - 1);
     const fy = sy - y0;
-    const row = (padY + y) * size + padX;
+    const row = (padY + y) * netW + padX;
     for (let x = 0; x < newW; x++) {
       const sx = Math.min(Math.max((x + 0.5) / scale - 0.5, 0), w - 1);
       const x0 = Math.floor(sx);
@@ -79,7 +96,7 @@ function yoloLetterbox(rgba, w, h, size) {
       }
     }
   }
-  return { data, scale, padX, padY };
+  return { data, netW, netH, scale, padX, padY };
 }
 
 /* Decode the end-to-end YOLO26 ONNX output — [1, N, 6] rows of
@@ -258,7 +275,9 @@ async function detectPanelsYolo(session, ortApi, rgba, w, h, conf) {
   const lb = yoloLetterbox(rgba, w, h);
   const inputName = session.inputNames[0];
   const feeds = {};
-  feeds[inputName] = new ortApi.Tensor("float32", lb.data, [1, 3, YOLO_INPUT_SIZE, YOLO_INPUT_SIZE]);
+  // The model is exported with dynamic height/width so the rectangular
+  // letterbox above can be fed as-is, exactly as ultralytics does.
+  feeds[inputName] = new ortApi.Tensor("float32", lb.data, [1, 3, lb.netH, lb.netW]);
   const results = await session.run(feeds);
   const output = results[session.outputNames[0]];
   const rows = output.dims[output.dims.length - 2];
@@ -285,7 +304,7 @@ async function detectPanelsYolo(session, ortApi, rgba, w, h, conf) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    YOLO_INPUT_SIZE, YOLO_CONF_THRESHOLD, YOLO_WEAK_CONF,
+    YOLO_INPUT_SIZE, YOLO_STRIDE, YOLO_CONF_THRESHOLD, YOLO_WEAK_CONF,
     YOLO_PANEL_CLASS, YOLO_TEXT_CLASS,
     TEXT_OWNERSHIP_MIN_FRAC, TEXT_PAD_FRAC_OF_PAGE, TEXT_PAD_MIN,
     SUBPANEL_MAX_AREA_FRAC, SUBPANEL_INSIDE_FRAC, SUBPANEL_COVER_FRAC,

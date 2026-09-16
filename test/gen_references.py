@@ -280,15 +280,22 @@ def run_yolo_reference():
     model_path = os.path.join(os.path.dirname(__file__), "..", "models",
                               "manga_panel_detector_yolo26n.onnx")
     sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
-    size, conf_thresh = 640, 0.4
+    size, stride, conf_thresh = 640, 32, 0.4
     weak_conf = convert_manga.PANEL_WEAK_CONF
 
     def letterbox(rgb):
+        # ultralytics LetterBox(new_shape=640, auto=True, stride=32): the long side
+        # is scaled to 640 and the short side padded only to the next multiple of
+        # 32, NOT out to a square. js/yolo.js:yoloLetterbox does the same, and the
+        # model is exported with dynamic height/width so both can feed it.
         h, w = rgb.shape[:2]
         scale = min(size / w, size / h)
         nw, nh = round(w * scale), round(h * scale)
-        padx, pady = (size - nw) // 2, (size - nh) // 2
-        out = np.full((3, size, size), np.float32(114 / 255), dtype=np.float32)
+        dw, dh = ((size - nw) % stride) / 2, ((size - nh) % stride) / 2
+        padx, pady = max(0, round(dw - 0.1)), max(0, round(dh - 0.1))
+        net_w = nw + padx + max(0, round(dw + 0.1))
+        net_h = nh + pady + max(0, round(dh + 0.1))
+        out = np.full((3, net_h, net_w), np.float32(114 / 255), dtype=np.float32)
         ys = np.clip((np.arange(nh) + 0.5) / scale - 0.5, 0, h - 1)
         xs = np.clip((np.arange(nw) + 0.5) / scale - 0.5, 0, w - 1)
         y0 = np.floor(ys).astype(int); y1 = np.minimum(y0 + 1, h - 1)
