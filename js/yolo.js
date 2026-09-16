@@ -72,15 +72,23 @@ function yoloLetterbox(rgba, w, h, size, stride) {
   const plane = netW * netH;
   const data = new Float32Array(3 * plane).fill(114 / 255);
 
+  // cv2.resize maps each axis by its OWN ratio, not by the single letterbox
+  // gain: newW is a rounded value, so newW/w and newH/h differ slightly and
+  // sampling both axes at `scale` walks up to a third of a pixel off by the far
+  // edge. On line art that is the difference between landing on a hairline and
+  // beside it -- measured 134/255 peak error against cv2, versus 0.8/255 here.
+  const scaleX = newW / w;
+  const scaleY = newH / h;
+
   for (let y = 0; y < newH; y++) {
     // Bilinear sample positions (align pixel centers, cv2.INTER_LINEAR style).
-    const sy = Math.min(Math.max((y + 0.5) / scale - 0.5, 0), h - 1);
+    const sy = Math.min(Math.max((y + 0.5) / scaleY - 0.5, 0), h - 1);
     const y0 = Math.floor(sy);
     const y1 = Math.min(y0 + 1, h - 1);
     const fy = sy - y0;
     const row = (padY + y) * netW + padX;
     for (let x = 0; x < newW; x++) {
-      const sx = Math.min(Math.max((x + 0.5) / scale - 0.5, 0), w - 1);
+      const sx = Math.min(Math.max((x + 0.5) / scaleX - 0.5, 0), w - 1);
       const x0 = Math.floor(sx);
       const x1 = Math.min(x0 + 1, w - 1);
       const fx = sx - x0;

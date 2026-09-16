@@ -296,8 +296,11 @@ def run_yolo_reference():
         net_w = nw + padx + max(0, round(dw + 0.1))
         net_h = nh + pady + max(0, round(dh + 0.1))
         out = np.full((3, net_h, net_w), np.float32(114 / 255), dtype=np.float32)
-        ys = np.clip((np.arange(nh) + 0.5) / scale - 0.5, 0, h - 1)
-        xs = np.clip((np.arange(nw) + 0.5) / scale - 0.5, 0, w - 1)
+        # Each axis maps by its own ratio, as cv2.resize does: nw is rounded, so
+        # nw/w and nh/h differ slightly and sampling both at `scale` drifts by up
+        # to a third of a pixel. js/yolo.js:yoloLetterbox does the same.
+        ys = np.clip((np.arange(nh) + 0.5) / (nh / h) - 0.5, 0, h - 1)
+        xs = np.clip((np.arange(nw) + 0.5) / (nw / w) - 0.5, 0, w - 1)
         y0 = np.floor(ys).astype(int); y1 = np.minimum(y0 + 1, h - 1)
         x0 = np.floor(xs).astype(int); x1 = np.minimum(x0 + 1, w - 1)
         fy = (ys - y0)[:, None, None]; fx = (xs - x0)[None, :, None]
