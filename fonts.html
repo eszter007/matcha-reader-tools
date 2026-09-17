@@ -67,14 +67,24 @@
     <label>Unicode coverage</label>
     <div class="checks">
       <label><input type="checkbox" class="font-preset" value="latin-ext" checked> Latin (extended)</label>
-      <label><input type="checkbox" class="font-preset" value="cjk"> Japanese (CJK)</label>
-      <label><input type="checkbox" class="font-preset" value="cjk-ext"> Japanese symbols (CJK extras)</label>
+      <label><input type="checkbox" class="font-preset" value="cjk-ext"> Japanese — full <span class="hint">(kana, all kanji, symbols, rare kanji; what the reader's own Japanese fonts use)</span></label>
+      <label><input type="checkbox" class="font-preset" value="cjk"> Japanese — basic <span class="hint">(kana and common kanji only)</span></label>
       <label><input type="checkbox" class="font-preset" value="greek"> Greek</label>
       <label><input type="checkbox" class="font-preset" value="cyrillic"> Cyrillic</label>
+      <label><input type="checkbox" class="font-preset" value="arabic"> Arabic</label>
       <label><input type="checkbox" class="font-preset" value="hangul"> Hangul</label>
       <label><input type="checkbox" class="font-preset" value="symbols"> Symbols</label>
-      <label><input type="checkbox" class="font-preset" value="all"> Everything in the font</label>
+      <label><input type="checkbox" class="font-preset" value="all"> Everything in the font <span class="hint">— not recommended</span></label>
     </div>
+    <p class="hint" id="font-all-warning" hidden>
+      <strong>&ldquo;Everything in the font&rdquo; costs device RAM.</strong> It takes every glyph
+      present in the file and records one interval per contiguous run &mdash; for a Japanese font
+      that is thousands of intervals instead of a few dozen, and the reader keeps that table in
+      RAM for as long as the font is loaded. Measured on a Noto Sans JP build: 26,592 bytes
+      against 390 for the same coverage via <em>Japanese &mdash; full</em>, on a device whose
+      largest free block is often under 32&nbsp;KB. Prefer the script presets; reach for this only
+      when you know the font is narrowly subset already.
+    </p>
     <details>
       <summary>Custom coverage</summary>
       <label for="font-intervals-custom">Presets / hex ranges <span class="hint">— comma-separated, e.g. <code>reading,(0x2100-0x214F)</code>. Presets: ascii, latin1, latin-ext, greek, cyrillic, hebrew, georgian, armenian, ethiopic, vietnamese, punctuation, cjk, cjk-ext, hangul, cherokee, tifinagh, symbols, reading, builtin, all</span></label>

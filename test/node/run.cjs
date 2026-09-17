@@ -723,7 +723,15 @@ async function testMangaYolo() {
 async function testDictYomitan() {
   console.log("dictionary converter, Yomitan (vs convert_jmdict.py):");
   const refDir = path.join(FIXTURES, "ref_dict_yomitan");
-  const zr = new zip.ZipReader(new Uint8Array(fs.readFileSync(path.join(FIXTURES, "yomitan.zip"))));
+  const zipPath = path.join(FIXTURES, "yomitan.zip");
+  // Guard like every other fixture-backed case: a missing fixture must skip this one test, not
+  // abort the run. Without it a fresh clone -- where no fixture has been generated yet -- died
+  // here on ENOENT and reported nothing at all about the cases that could have run.
+  if (!fs.existsSync(zipPath) || !fs.existsSync(refDir)) {
+    console.log("  skip (no yomitan fixtures — run test/gen_references.py)");
+    return;
+  }
+  const zr = new zip.ZipReader(new Uint8Array(fs.readFileSync(zipPath)));
   const bankEntries = zr.entries
     .filter((e) => /^term_bank_\d+\.json$/.test(e.name))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
