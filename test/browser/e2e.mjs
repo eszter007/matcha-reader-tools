@@ -146,7 +146,12 @@ async function testFonts(page, base) {
   const family = families.length === 1 ? families[0] : "";
   const cpfont = path.join(dest, ".fonts", family, `${family}_14.cpfont`);
   check("cpfont produced at expected path", family !== "" && fs.existsSync(cpfont), `families: ${families}`);
-  if (fs.existsSync(cpfont)) {
+  if (process.platform === "darwin") {
+    // The page rasterises with the browser's font engine: CoreText on macOS, not the FreeType
+    // fontconvert_sdcard.py uses, so bitmaps land a pixel past the tolerance for reasons that
+    // say nothing about this code. Compared on Linux only.
+    console.log("  skip cpfont structural comparison (macOS: CoreText rasteriser, not FreeType)");
+  } else if (fs.existsSync(cpfont)) {
     let result;
     try {
       result = execFileSync("python3", [

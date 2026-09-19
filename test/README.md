@@ -59,9 +59,9 @@ The browser is launched with GPU canvas off, so the no-`OffscreenCanvas` compari
 byte-exact on desktop browsers too (a GPU-rasterised `<canvas>` scales images a few grey
 levels differently from `OffscreenCanvas`).
 
-`cpfont structural comparison` fails on macOS by design: `fonts.html` rasterises glyphs
-with the browser's font engine, which is CoreText there rather than FreeType, and bitmap
-metrics land 3px from `fontconvert_sdcard.py` against the 2px the check allows on Linux.
+`cpfont structural comparison` is skipped on macOS: `fonts.html` rasterises glyphs with the
+browser's font engine, which is CoreText there rather than FreeType, and bitmap metrics land
+3px from `fontconvert_sdcard.py` against the 2px the check allows. It runs on Linux.
 
 The node suite needs **no npm packages at all** (the YOLO comparison skips without
 `onnxruntime-web`). The browser suite needs `playwright`.
