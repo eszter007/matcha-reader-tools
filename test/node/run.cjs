@@ -45,6 +45,60 @@ function compareFile(name, actual, refPath) {
   check(name, true);
 }
 
+/* ── Manga: v3 line boxes (convert_manga.py:block_lines_from_ocr + encode_page) ── */
+
+function testMangaLineBoxes() {
+  console.log("manga v3 line boxes:");
+  const L = manga.blockLinesFromOcr;
+  // A vertical speech bubble from a real Gemini response (the Animal Crossing test cover), panel
+  // origin (0,0), panel 920x1380: two columns, right to left.
+  const bubble = {
+    text: "重要なのは\n実用性だね。", vertical: true,
+    lines: [
+      { text: "重要なのは", bbox_2d: [38, 856, 196, 912] },
+      { text: "実用性だね。", bbox_2d: [37, 781, 200, 840] },
+    ],
+  };
+  const r = L(bubble, 0, 0, 920, 1380);
+  check("vertical flag from the model", r.vertical === true);
+  check("text rebuilt from the lines", r.text === "重要なのは\n実用性だね。");
+  check("line boxes in page pixels", JSON.stringify(r.lines) === JSON.stringify([[787, 52, 839, 270], [718, 51, 772, 276]]),
+        JSON.stringify(r.lines));
+  check("offset by the margin-crop origin",
+        JSON.stringify(L(bubble, 10, 20, 920, 1380).lines[0]) === JSON.stringify([797, 72, 849, 290]));
+
+  // A partial set would put later lines on the wrong text segment: all or nothing.
+  const partial = { text: "a\nb", lines: [{ text: "a", bbox_2d: [0, 0, 10, 10] }, { text: "b" }] };
+  check("line without a box drops them all", L(partial, 0, 0, 100, 100).lines.length === 0);
+  check("empty line text drops them all",
+        L({ lines: [{ text: " ", bbox_2d: [0, 0, 10, 10] }] }, 0, 0, 100, 100).lines.length === 0);
+  check("inverted box drops them all",
+        L({ lines: [{ text: "x", bbox_2d: [10, 0, 5, 10] }] }, 0, 0, 100, 100).lines.length === 0);
+  check("no lines keeps the block text", L({ text: "x" }, 0, 0, 100, 100).text === null);
+
+  // No flag from the model: the shape of the lines decides, as in Python.
+  const tall = { lines: [{ text: "縦", bbox_2d: [0, 0, 500, 50] }] };
+  const wide = { lines: [{ text: "横", bbox_2d: [0, 0, 50, 500] }] };
+  check("tall lines infer vertical", L(tall, 0, 0, 100, 100).vertical === true);
+  check("wide lines infer horizontal", L(wide, 0, 0, 100, 100).vertical === false);
+
+  // Encoder: block size (not its second corner), the line record, and the panel crop rect.
+  const page = manga.encodePage([{
+    box: [0, 0, 920, 1380], crop: [0, 0, 920, 1380], translation: "",
+    textBlocks: [{ box: [718, 51, 841, 280], text: r.text, lines: r.lines, vertical: true }],
+  }]);
+  const dv = new DataView(page.buffer, page.byteOffset, page.byteLength);
+  // panelCount u8 + pad u8, panel box 12, translation 0, crop 8 -> block at 22.
+  check("crop rect after the panel header", dv.getUint16(14, true) === 0 && dv.getUint16(18, true) === 920);
+  check("block stores width and height", dv.getUint16(26, true) === 123 && dv.getUint16(28, true) === 229,
+        `${dv.getUint16(26, true)}x${dv.getUint16(28, true)}`);
+  const textLen = dv.getUint16(30, true);
+  const lineHdr = 32 + textLen;
+  check("line count and vertical flag", page[lineHdr] === 2 && page[lineHdr + 1] === 1);
+  check("first line as x, y, w, h", dv.getUint16(lineHdr + 2, true) === 787 && dv.getUint16(lineHdr + 6, true) === 52);
+  check("record ends after its lines", page.length === lineHdr + 2 + 2 * 8, `${page.length} vs ${lineHdr + 18}`);
+}
+
 /* ── Manga: grid detection + binary output vs convert_manga.py ── */
 
 function testManga() {
@@ -63,7 +117,14 @@ function testManga() {
     const gray = new Uint8Array(fs.readFileSync(path.join(pagesDir, name.replace(".png", ".gray"))));
     let boxes = manga.detectPanelsGrid(gray, w, h);
     boxes = manga.sortPanelsReadingOrder(boxes);
-    const panelsWithText = boxes.map((box) => ({ box, textBlocks: [], translation: "" }));
+    // v3 stores each panel's crop rect: the panel plus convert_manga.py's default 10px margin,
+    // clamped to the page -- the same rect the converter crops and OCRs.
+    const panelsWithText = boxes.map((box) => ({
+      box,
+      crop: [Math.max(0, box[0] - 10), Math.max(0, box[1] - 10), Math.min(w, box[2] + 10), Math.min(h, box[3] + 10)],
+      textBlocks: [],
+      translation: "",
+    }));
     const pageData = manga.encodePage(panelsWithText);
     idxRecords.push({ offset: datOffset, length: pageData.length, w: Math.min(w, 0xffff), h: Math.min(h, 0xffff) });
     datChunks.push(pageData);
@@ -975,6 +1036,7 @@ function testXtc() {
   testMangaBookType();
   testMangaDither();
   testMangaOcrPrompt();
+  testMangaLineBoxes();
   testXtc();
   testMangaFolderedSort();
   testXmlUnescape();

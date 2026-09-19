@@ -1131,7 +1131,8 @@ async function runMangaConversion() {
         sctx.fillStyle = "#ffffff"; sctx.fillRect(0, 0, origW, origH);
         sctx.drawImage(bitmap, 0, 0);
       }
-      bitmap.close();
+      // bitmap stays open through the crop loop: a full-page panel has no sourceCanvas, and its
+      // OCR crop is drawn from the decoded page directly (closed after the loop).
 
       // Crop panels (fast, local) before dispatching OCR calls concurrently.
       const panelCrops = [];  // Uint8Array | null (null = full-page panel)
@@ -1144,11 +1145,11 @@ async function runMangaConversion() {
         const my2 = Math.min(imgH, y2 + margin);
         let cropBytes = null;  // full-colour JPEG crop for OCR (null = no crop / no OCR)
         const fullPagePanel = isFullPagePanel(boxes[panelIdx], imgW, imgH);
-        if (needsCrop(boxes[panelIdx])) {
-          // Map the detected rect into full-resolution page coordinates, then draw
-          // that region straight into a device-fitted panel canvas (one drawImage
-          // crops + scales). fitToDeviceSize fits a landscape panel against the
-          // rotated box — the size the firmware zooms it to, and dithers it at.
+        // Map the detected rect (plus margin) into full-resolution page coordinates, then draw
+        // that region straight into a device-fitted panel canvas (one drawImage crops + scales).
+        // fitToDeviceSize fits a landscape panel against the rotated box — the size the firmware
+        // zooms it to, and dithers it at.
+        const drawMarginCrop = () => {
           const fx1 = Math.max(0, Math.round(mx1 * panelScaleX));
           const fy1 = Math.max(0, Math.round(my1 * panelScaleY));
           const fx2 = Math.min(origW, Math.round(mx2 * panelScaleX));
@@ -1158,10 +1159,15 @@ async function runMangaConversion() {
           // zero and makeCanvas/drawImage can't throw on a 0-size crop.
           const fw = Math.max(1, fx2 - fx1), fh = Math.max(1, fy2 - fy1);
           const pf = fitToDeviceSize(fw, fh, deviceTarget);
-          const pw = pf.w, ph = pf.h;
-          const cropCanvas = makeCanvas(pw, ph);
-          const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
-          cropCtx.drawImage(sourceCanvas, fx1, fy1, fw, fh, 0, 0, pw, ph);
+          const canvas = makeCanvas(pf.w, pf.h);
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          // White under the draw, as sourceCanvas has: the bitmap fallback may carry transparency.
+          ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, pf.w, pf.h);
+          ctx.drawImage(sourceCanvas || bitmap, fx1, fy1, fw, fh, 0, 0, pf.w, pf.h);
+          return { canvas, ctx, w: pf.w, h: pf.h };
+        };
+        if (needsCrop(boxes[panelIdx])) {
+          const { canvas: cropCanvas, ctx: cropCtx, w: pw, h: ph } = drawMarginCrop();
           if (mono) {
             const cropRgba = cropCtx.getImageData(0, 0, pw, ph).data;
             if (matchaFolder) {
@@ -1196,12 +1202,18 @@ async function runMangaConversion() {
             if (v.xtch) xtchPages.push(v.xtch);
           }
         }
-        // OCR semantics stay as the Python tool's: a full-page panel gets an empty result even
-        // when panels-only forced its crop to be written, so enabling the option cannot silently
-        // multiply Gemini calls.
-        panelCrops.push(fullPagePanel ? null : cropBytes);
+        if (!cropBytes && !noOcr) {
+          // A full-page panel has no crop, but its text still needs reading: a splash page, or
+          // every page when detection finds no borders (the grid fallback without the AI model),
+          // used to come through with no text and so no word lookup at all. OCR the same margin
+          // rect a crop would have covered; the JPEG goes to Gemini only, never into the output.
+          // Matches convert_manga.py, which OCRs a temp copy of that rect.
+          cropBytes = await canvasToJpegBytes(drawMarginCrop().canvas, 0.90);
+        }
+        panelCrops.push(cropBytes);
         panelRects.push([mx1, my1, mx2, my2]);
       }
+      bitmap.close();
 
       if (epub) epubPages.push({ pageIdx, images: epubImages });
 
@@ -1242,9 +1254,12 @@ async function runMangaConversion() {
           } else {
             tb = [x1, y1, x2, y2];
           }
-          textBlocks.push({ box: tb, text });
+          const lined = blockLinesFromOcr(b, mx1, my1, panelW, panelH);
+          textBlocks.push({ box: tb, text: lined.text || text, lines: lined.lines, vertical: lined.vertical });
         }
-        panelsWithText.push({ box: boxes[panelIdx], textBlocks, translation: ocr.translation || "" });
+        panelsWithText.push({
+          box: boxes[panelIdx], crop: [mx1, my1, mx2, my2], textBlocks, translation: ocr.translation || "",
+        });
         totalPanels += 1;
         totalTextBlocks += textBlocks.length;
       }

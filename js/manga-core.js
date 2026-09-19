@@ -8,7 +8,7 @@
  */
 "use strict";
 
-const MANGA_FORMAT_VERSION = 2;   // v2 adds a per-panel translation string
+const MANGA_FORMAT_VERSION = 3;   // v2: per-panel translation string. v3: per-block line boxes + flags, per-panel crop rect
 const TOC_FORMAT_VERSION = 1;
 const META_FORMAT_VERSION = 1;
 /* Panel crops live in their own subfolder so the book folder holds only page images: the device
@@ -521,9 +521,16 @@ function buildPanelOcrPrompt(language = "", target = "en", rtl = true) {
 List every piece of text/dialogue visible in this panel, in the order a
 reader would read them (${readingOrder}). ${translationInstruction}
 
+Also give every printed line inside each block separately -- for vertical text
+each column is one line -- with its own tight box around just that line's
+glyphs. Exclude furigana (small reading aids beside kanji) from text and boxes.
+
 Return ONLY a JSON object, no other text:
-{"blocks": [{"text": "<the ${textDesc}, line breaks as \\n>",
-             "bbox_2d": [ymin, xmin, ymax, xmax]}, ...],
+{"blocks": [{"text": "<the ${textDesc}, its lines joined by \\n>",
+             "bbox_2d": [ymin, xmin, ymax, xmax],
+             "vertical": <true if the lines are vertical columns>,
+             "lines": [{"text": "<one printed line>",
+                        "bbox_2d": [ymin, xmin, ymax, xmax]}, ...]}, ...],
  "translation": ${translationField}}
 
 bbox_2d is each text region's bounding box normalized to a 0-1000 scale
@@ -773,10 +780,49 @@ function encodeMonoBmpFromRGBA(rgba, w, h, gamma = 1) {
 
 /* ── Binary output ────────────────────────────────────────────── */
 
-/* panelsWithText: [{box:[x1,y1,x2,y2], textBlocks:[{box:[x1,y1,x2,y2], text}],
- * translation}] — encodes one page's data (convert_manga.py:encode_page).
- * Note: text block boxes are stored as raw corner coordinates, matching the
- * Python tool byte-for-byte. */
+/* Page-pixel line boxes for one OCR block, or none when they cannot be trusted
+ * (convert_manga.py:block_lines_from_ocr). Returns {text, lines, vertical}: `text` is the
+ * block text rebuilt from its lines -- so line i is exactly the i-th "\n" segment, which is
+ * how the device finds a line's characters -- or null to keep the block's own text. Lines
+ * are kept only when every one has a box and a non-empty text: a partial set would shift
+ * every later line onto the wrong segment, which is worse than none (the device then looks
+ * the whole block up). */
+function blockLinesFromOcr(block, originX, originY, panelW, panelH) {
+  const none = { text: null, lines: [], vertical: false };
+  const raw = block.lines;
+  if (!Array.isArray(raw) || raw.length === 0) return none;
+  const lines = [];
+  const texts = [];
+  for (const line of raw) {
+    if (line === null || typeof line !== "object" || Array.isArray(line)) return none;
+    const text = String(line.text ?? "").trim();
+    const box = line.bbox_2d;
+    if (!text || text.includes("\n") || !(Array.isArray(box) && box.length === 4)) return none;
+    const v = box.map((n) => (typeof n === "number" || typeof n === "string") && String(n).trim() !== "" ? Number(n) : NaN);
+    if (v.some((n) => !Number.isFinite(n))) return none;
+    const [ymin, xmin, ymax, xmax] = v;
+    if (ymax <= ymin || xmax <= xmin) return none;
+    lines.push([
+      originX + Math.trunc((xmin / 1000) * panelW), originY + Math.trunc((ymin / 1000) * panelH),
+      originX + Math.trunc((xmax / 1000) * panelW), originY + Math.trunc((ymax / 1000) * panelH),
+    ]);
+    texts.push(text);
+  }
+  // Trust the model's flag when it gave one; otherwise the shape of the lines decides.
+  let vertical = block.vertical;
+  if (typeof vertical !== "boolean") {
+    const tall = lines.filter(([x1, y1, x2, y2]) => y2 - y1 > x2 - x1).length;
+    vertical = tall * 2 >= lines.length;
+  }
+  return { text: texts.join("\n"), lines: lines.slice(0, 255), vertical };
+}
+
+const LINE_FLAG_VERTICAL = 0x01;
+
+/* panelsWithText: [{box:[x1,y1,x2,y2], crop:[x1,y1,x2,y2],
+ * textBlocks:[{box:[x1,y1,x2,y2], text, lines:[[x1,y1,x2,y2]...], vertical}], translation}]
+ * — encodes one page's data (convert_manga.py:encode_page), byte for byte. `crop` is the page
+ * region the panel's crop image shows (panel plus margin); it defaults to the panel box. */
 function encodePage(panelsWithText) {
   const buf = new ByteWriter(256);
   const panelCount = Math.min(panelsWithText.length, 255);
@@ -800,17 +846,35 @@ function encodePage(panelsWithText) {
     buf.u8(0);
     buf.u16(translationBytes.length);
     buf.bytes(translationBytes);
+    // v3: the page region the panel's crop image shows, so a point on a zoomed panel maps back.
+    const [cx1, cy1, cx2, cy2] = panel.crop || panel.box;
+    buf.u16(Math.max(0, cx1));
+    buf.u16(Math.max(0, cy1));
+    buf.u16(Math.max(0, cx2 - cx1));
+    buf.u16(Math.max(0, cy2 - cy1));
 
     for (const tb of textBlocks.slice(0, textCount)) {
-      const [tx, ty, tw, th] = tb.box;
+      // Blocks carry corners (x1, y1, x2, y2); the format stores x, y, w, h. Before v3 the
+      // corners were written straight into the w/h fields -- harmless while nothing on the
+      // device read block boxes, but v3's line hit test does, so write the size.
+      const [tx, ty, tx2, ty2] = tb.box;
       let textBytes = mangaEncoder.encode(tb.text);
       if (textBytes.length > 0xffff) textBytes = textBytes.subarray(0, 0xffff);
       buf.u16(Math.max(0, tx));
       buf.u16(Math.max(0, ty));
-      buf.u16(Math.max(0, tw));
-      buf.u16(Math.max(0, th));
+      buf.u16(Math.max(0, tx2 - tx));
+      buf.u16(Math.max(0, ty2 - ty));
       buf.u16(textBytes.length);
       buf.bytes(textBytes);
+      const lines = (tb.lines || []).slice(0, 255);
+      buf.u8(lines.length);
+      buf.u8(tb.vertical ? LINE_FLAG_VERTICAL : 0);
+      for (const [lx1, ly1, lx2, ly2] of lines) {
+        buf.u16(Math.max(0, lx1));
+        buf.u16(Math.max(0, ly1));
+        buf.u16(Math.max(0, lx2 - lx1));
+        buf.u16(Math.max(0, ly2 - ly1));
+      }
     }
   }
 
@@ -1088,7 +1152,7 @@ if (typeof module !== "undefined") {
     trimMarginsBox,
     WEBTOON_BLANK_LEVEL, WEBTOON_MIN_GUTTER, WEBTOON_MIN_PAGE_FRAC,
     blankRows, webtoonCutPoints, detectWebtoonPanels,
-    encodePage, writePanelsIdx, writeMetaBin, writeTocIdx, normalizeLanguage, PANEL_CROP_SUBDIR,
+    encodePage, blockLinesFromOcr, writePanelsIdx, writeMetaBin, writeTocIdx, normalizeLanguage, PANEL_CROP_SUBDIR,
     encodeXtgPage, encodeXthPage, buildXtcFile,
     pathDirname, pathNorm, pathJoinNorm,
     epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo, xmlUnescape,
