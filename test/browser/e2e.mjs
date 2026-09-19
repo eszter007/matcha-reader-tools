@@ -69,7 +69,17 @@ with zipfile.ZipFile(sys.argv[1]) as z: z.extractall(sys.argv[2])
  * page rejects an empty choice rather than guessing one. */
 const MANGA_FORMATS = ["matcha", "epub", "xtc", "xtch"];
 
-async function setMangaForm(page, { formats = ["matcha"], res = "full", panelsOnly = false }) {
+/* manga.html with every collapsible section open. The detection and output options sit in
+ * <details> blocks that start closed, and Playwright will not operate a control it cannot see. */
+async function gotoManga(page, base) {
+  await page.goto(`${base}/manga.html`);
+  await page.$$eval("details", (ds) => ds.forEach((d) => { d.open = true; }));
+}
+
+/* bookType: the page refuses to run until one is picked. "manga" (right to left) is what the
+ * references are generated with -- convert_manga.py's default order. */
+async function setMangaForm(page, { formats = ["matcha"], res = "full", panelsOnly = false, bookType = "manga" }) {
+  await page.selectOption("#manga-booktype", bookType);
   for (const f of MANGA_FORMATS) {
     const sel = `#manga-format .fmt[value="${f}"]`;
     if (formats.includes(f)) await page.check(sel); else await page.uncheck(sel);
@@ -130,8 +140,12 @@ async function testFonts(page, base) {
   const zipFile = await downloadFromPage(page, () => page.click("#font-run"));
   const dest = path.join(OUT, "font");
   unzipTo(zipFile, dest);
-  const cpfont = path.join(dest, ".fonts", "DejaVuSans", "DejaVuSans_14.cpfont");
-  check("cpfont produced at expected path", fs.existsSync(cpfont));
+  // <Family>/<Family>_14.cpfont, with the family the tool read from the font -- DejaVuSans in
+  // CI, whatever TEST_FONT points at elsewhere.
+  const families = fs.existsSync(path.join(dest, ".fonts")) ? fs.readdirSync(path.join(dest, ".fonts")) : [];
+  const family = families.length === 1 ? families[0] : "";
+  const cpfont = path.join(dest, ".fonts", family, `${family}_14.cpfont`);
+  check("cpfont produced at expected path", family !== "" && fs.existsSync(cpfont), `families: ${families}`);
   if (fs.existsSync(cpfont)) {
     let result;
     try {
@@ -149,7 +163,7 @@ async function testFonts(page, base) {
 
 async function testManga(page, base) {
   console.log("manga.html end-to-end (CBZ, no OCR, grid detection):");
-  await page.goto(`${base}/manga.html`);
+  await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo"); // byte-exact references use the grid path
@@ -172,27 +186,9 @@ async function testManga(page, base) {
   }
 }
 
-/* Parse the panel rectangles back out of panels.idx/panels.dat (no-OCR
- * layout: per page u8 count, u8 pad, then 12-byte panel records). */
+/* Panel rectangles per page, via parsePanelsDat below. */
 function parsePanelBoxes(dir) {
-  const idx = fs.readFileSync(path.join(dir, "panels.idx"));
-  const dat = fs.readFileSync(path.join(dir, "panels.dat"));
-  const pageCount = idx.readUInt32LE(4);
-  const pages = [];
-  for (let p = 0; p < pageCount; p++) {
-    let off = idx.readUInt32LE(8 + p * 12);
-    const count = dat.readUInt8(off);
-    off += 2;
-    const boxes = [];
-    for (let i = 0; i < count; i++) {
-      const x = dat.readUInt16LE(off), y = dat.readUInt16LE(off + 2);
-      const w = dat.readUInt16LE(off + 4), h = dat.readUInt16LE(off + 6);
-      boxes.push([x, y, x + w, y + h]);
-      off += 12;
-    }
-    pages.push(boxes);
-  }
-  return pages;
+  return parsePanelsDat(dir).map((pg) => pg.panels.map((p) => p.box));
 }
 
 async function testMangaYolo(page, base) {
@@ -203,7 +199,7 @@ async function testMangaYolo(page, base) {
     return;
   }
   const ref = JSON.parse(fs.readFileSync(refPath, "utf-8"));
-  await page.goto(`${base}/manga.html`);
+  await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
   await page.check("#manga-no-ocr");
   await page.check("#manga-yolo");
@@ -230,7 +226,7 @@ async function testMangaYolo(page, base) {
 
 async function testMangaEpub(page, base) {
   console.log("manga.html end-to-end (EPUB with nav TOC, no OCR):");
-  await page.goto(`${base}/manga.html`);
+  await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.epub"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
@@ -253,7 +249,7 @@ async function testMangaPdf(page, base) {
     console.log("  skip (no ref_manga_pdf fixtures — rerun gen_references.py with pymupdf installed)");
     return;
   }
-  await page.goto(`${base}/manga.html`);
+  await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.pdf"));
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
@@ -298,9 +294,11 @@ async function testMangaPdf(page, base) {
 function parsePanelsDat(dir) {
   const idx = fs.readFileSync(path.join(dir, "panels.idx"));
   const dat = fs.readFileSync(path.join(dir, "panels.dat"));
+  const version = idx.readUInt32LE(0);
   const pages = [];
   for (let p = 0; p < idx.readUInt32LE(4); p++) {
     let off = idx.readUInt32LE(8 + p * 12);
+    const end = off + idx.readUInt32LE(8 + p * 12 + 4);
     const w = idx.readUInt16LE(8 + p * 12 + 8), h = idx.readUInt16LE(8 + p * 12 + 10);
     const count = dat.readUInt8(off);
     off += 2;
@@ -313,19 +311,38 @@ function parsePanelsDat(dir) {
       off += 12;
       const translation = dat.subarray(off, off + trLen).toString("utf-8");
       off += trLen;
+      let crop = null;
+      if (version >= 3) {  // the page region the panel's crop image shows
+        const cx = dat.readUInt16LE(off), cy = dat.readUInt16LE(off + 2);
+        crop = [cx, cy, cx + dat.readUInt16LE(off + 4), cy + dat.readUInt16LE(off + 6)];
+        off += 8;
+      }
       const texts = [];
       for (let t = 0; t < textCount; t++) {
-        // Text-block boxes are raw corners (x1,y1,x2,y2), unlike the panel's x,y,w,h --
-        // the Python tool writes them that way and this port matches it byte-for-byte.
-        const box = [dat.readUInt16LE(off), dat.readUInt16LE(off + 2),
-                     dat.readUInt16LE(off + 4), dat.readUInt16LE(off + 6)];
+        // Stored as x, y, w, h since v3 (raw corners before); returned as corners.
+        const bx = dat.readUInt16LE(off), by = dat.readUInt16LE(off + 2);
+        const box = [bx, by, bx + dat.readUInt16LE(off + 4), by + dat.readUInt16LE(off + 6)];
         const len = dat.readUInt16LE(off + 8);
         off += 10;
-        texts.push({ box, text: dat.subarray(off, off + len).toString("utf-8") });
+        const text = dat.subarray(off, off + len).toString("utf-8");
         off += len;
+        const lines = [];
+        let vertical = false;
+        if (version >= 3) {
+          const lineCount = dat.readUInt8(off);
+          vertical = (dat.readUInt8(off + 1) & 1) !== 0;
+          off += 2;
+          for (let l = 0; l < lineCount; l++) {
+            const lx = dat.readUInt16LE(off), ly = dat.readUInt16LE(off + 2);
+            lines.push([lx, ly, lx + dat.readUInt16LE(off + 4), ly + dat.readUInt16LE(off + 6)]);
+            off += 8;
+          }
+        }
+        texts.push({ box, text, lines, vertical });
       }
-      panels.push({ box: [x, y, x + pw, y + ph], translation, texts });
+      panels.push({ box: [x, y, x + pw, y + ph], crop, translation, texts });
     }
+    if (off !== end) throw new Error(`panels.dat page ${p}: ${end - off} byte(s) not consumed`);
     pages.push({ w, h, panels });
   }
   return pages;
@@ -353,7 +370,7 @@ async function testMangaFolderedCbz(page, base) {
     console.log("  skip (no manga_foldered.cbz — rerun gen_references.py)");
     return;
   }
-  await page.goto(`${base}/manga.html`);
+  await gotoManga(page, base);
   await page.setInputFiles("#manga-file", cbz);
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
@@ -389,12 +406,14 @@ async function testMangaGeminiOcr(page, base) {
     await route.fulfill({
       status: 200, contentType: "application/json",
       body: JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({
-        blocks: [{ text: JP, bbox_2d: [0, 0, 1000, 1000] }], translation: TRANSLATION,
+        blocks: [{ text: JP, bbox_2d: [0, 0, 1000, 1000], vertical: true,
+                   lines: [{ text: JP, bbox_2d: [0, 500, 1000, 1000] }] }],
+        translation: TRANSLATION,
       }) }] } }] }),
     });
   });
   try {
-    await page.goto(`${base}/manga.html`);
+    await gotoManga(page, base);
     await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
     await page.uncheck("#manga-no-ocr");
     await page.uncheck("#manga-yolo");
@@ -423,41 +442,42 @@ async function testMangaGeminiOcr(page, base) {
 
     // What came back, as written to disk.
     const pages = parsePanelsDat(path.join(dest, "Ocr Manga"));
-    // A panel covering essentially the whole page is deliberately never sent to Gemini --
-    // the page image already shows it, and OCRing both would double the calls. So the two
-    // kinds of panel are checked against opposite expectations.
+    // Every panel is read, a full-page one included (from a crop of the page that is not kept):
+    // a cover or an unsplittable page would otherwise get no text and so no word lookup.
     const isFullPage = (b, w, h) =>
       (b[2] - b[0]) / w >= 0.95 && (b[3] - b[1]) / h >= 0.95;
-    let ocred = 0, fullPage = 0, badBox = 0, badText = 0, outside = 0, leaked = 0;
+    let ocred = 0, fullPage = 0, badBox = 0, badText = 0, outside = 0, badCrop = 0, badLine = 0;
     for (const pg of pages) {
       for (const panel of pg.panels) {
         const [x1, y1, x2, y2] = panel.box;
-        if (isFullPage(panel.box, pg.w, pg.h)) {
-          fullPage++;
-          if (panel.translation !== "" || panel.texts.length) leaked++;
-          continue;
-        }
+        if (isFullPage(panel.box, pg.w, pg.h)) fullPage++;
         ocred++;
         if (panel.translation !== TRANSLATION) badText++;
-        // The crop handed to the model, in page space.
+        // The crop handed to the model, in page space -- also what v3 records as the panel's crop.
         const want = [Math.max(0, x1 - MARGIN), Math.max(0, y1 - MARGIN),
                       Math.min(pg.w, x2 + MARGIN), Math.min(pg.h, y2 + MARGIN)];
+        if (!panel.crop || panel.crop.some((v, i) => v !== want[i])) badCrop++;
         if (panel.texts.length !== 1) badText++;
         for (const t of panel.texts) {
           if (t.text !== JP) badText++;
           if (t.box.some((v, i) => v !== want[i])) badBox++;
           if (t.box[2] > pg.w || t.box[3] > pg.h) outside++;
+          // One vertical line: the right half of that crop, as the stub answered.
+          const cw = want[2] - want[0];
+          const line = [want[0] + Math.trunc(0.5 * cw), want[1], want[2], want[3]];
+          if (!t.vertical || t.lines.length !== 1 || t.lines[0].some((v, i) => v !== line[i])) badLine++;
         }
       }
     }
-    check("every OCRed panel got its translation and text", ocred > 0 && badText === 0,
+    check("every panel got its translation and text", ocred > 0 && badText === 0,
           `${ocred} panels, ${badText} wrong`);
     check("text boxes land on the crop the model was shown", badBox === 0, `${badBox} misplaced`);
     check("no text box runs past the page edge", outside === 0, `${outside} outside`);
-    check("one Gemini call per OCRed panel", requests.length === ocred,
+    check("v3 records each panel's crop rect", badCrop === 0, `${badCrop} wrong`);
+    check("v3 line boxes and vertical flag reach panels.dat", badLine === 0, `${badLine} wrong`);
+    check("one Gemini call per panel", requests.length === ocred,
           `${requests.length} calls, ${ocred} panels`);
-    check("full-page panels are not sent to Gemini", fullPage > 0 && leaked === 0,
-          `${fullPage} full-page, ${leaked} with text`);
+    check("full-page panels are read too", fullPage > 0, `${fullPage} full-page panels in the fixture`);
   } finally {
     await page.unroute(GEMINI);
   }
@@ -471,7 +491,7 @@ async function testMangaPanelsOnly(page, base) {
     return;
   }
   const pageCount = 3;  // full01..full03, one full-page panel each
-  await page.goto(`${base}/manga.html`);
+  await gotoManga(page, base);
   await page.setInputFiles("#manga-file", cbz);
   await page.check("#manga-no-ocr");
   await page.uncheck("#manga-yolo");
@@ -517,7 +537,7 @@ async function testMangaPanelsOnly(page, base) {
 async function testMangaNoOffscreenCanvas(browser, base) {
   console.log("manga.html end-to-end (no OffscreenCanvas — the older-Safari path):");
   const setup = async (pg) => {
-    await pg.goto(`${base}/manga.html`);
+    await gotoManga(pg, base);
     await pg.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
     await pg.check("#manga-no-ocr");
     await pg.uncheck("#manga-yolo");
@@ -593,8 +613,13 @@ async function testDict(page, base) {
   const base = `http://127.0.0.1:${server.address().port}`;
   // Playwright's own managed Chromium by default (npx playwright install chromium).
   // CHROMIUM_PATH overrides it for environments that ship a browser elsewhere.
+  // GPU canvas off: the no-OffscreenCanvas test compares an on-screen <canvas> with an
+  // OffscreenCanvas byte for byte, and on a desktop browser the first is GPU-rasterised and
+  // scales images a few grey levels differently from the CPU path. Headless CI Chromium is
+  // CPU-only already; this makes a local run (macOS Chrome, say) agree with it.
+  const args = ["--disable-gpu", "--disable-accelerated-2d-canvas"];
   const browser = await chromium.launch(
-    process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+    process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH, args } : { args });
   const page = await browser.newPage();
   page.on("pageerror", (e) => { console.error("  page error:", e.message); failures++; });
 

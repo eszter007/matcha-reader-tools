@@ -363,6 +363,9 @@ def make_manga_pdf():
     pages_dir = os.path.join(FIXTURES, "manga_pages")
     imgs = [Image.open(os.path.join(pages_dir, n)).convert("RGB")
             for n in sorted(os.listdir(pages_dir)) if n.endswith(".png")]
+    # The PDF writer embeds pages as JPEG but does not register that encoder itself; on
+    # Pillow 12 a save before anything else loaded it fails with KeyError('JPEG').
+    Image.init()
     imgs[0].save(path, save_all=True, append_images=imgs[1:],
                  title="Pdf Test Manga", author="Pdf Author")
     print(f"manga pdf: {path}")
