@@ -11,7 +11,8 @@ const GEMINI_DEFAULT_MODEL = "gemini-3.6-flash";
 const BOOK_MANGA = "manga";
 const BOOK_WESTERN = "western";
 const BOOK_WEBTOON = "webtoon";
-const BOOK_TYPES = [BOOK_MANGA, BOOK_WESTERN, BOOK_WEBTOON];
+const BOOK_YONKOMA = "yonkoma";
+const BOOK_TYPES = [BOOK_MANGA, BOOK_WESTERN, BOOK_WEBTOON, BOOK_YONKOMA];
 
 function validBookType(v) { return BOOK_TYPES.includes(v) ? v : ""; }
 
@@ -544,6 +545,8 @@ const BOOK_TYPE_HINTS = {
       "and page number are cropped off, so the artwork fills the screen.",
   [BOOK_WEBTOON]: "One long vertical strip. Its tiles are reassembled and re-cut at the artwork's " +
       "gutters, so no page starts or ends mid-panel. Panels are the blocks between gutters.",
+  [BOOK_YONKOMA]: "Each column is read top to bottom, then the column to its left — a 4-koma page " +
+      "is two strips side by side, not rows across the page.",
 };
 
 const YOLO_HINT = "Runs the YOLO26 model in your browser, ~21 MB once, then cached. " +
@@ -831,8 +834,10 @@ async function runMangaConversion() {
     logValidation("Pick a book type — manga, western comic, or webtoon/manhwa.");
     return;
   }
-  const rtl = bookType === BOOK_MANGA;
+  // Yonkoma is Japanese too: its columns run right to left, like manga's tiers.
+  const rtl = bookType === BOOK_MANGA || bookType === BOOK_YONKOMA;
   const isWebtoon = bookType === BOOK_WEBTOON;
+  const columnMajor = bookType === BOOK_YONKOMA;
   // Western print comics are scans with a paper border; trimming it is always wanted, so
   // it rides on the book type rather than being one more checkbox to find.
   const trimMargins = bookType === BOOK_WESTERN;
@@ -1040,7 +1045,7 @@ async function runMangaConversion() {
         // Order on the frames as drawn -- growing a box moves its centre, which
         // sortPanelsReadingOrder() tiers and orders on -- then grow the crops over the
         // bubbles. yoloExpandPanelsOverText() is index-preserving, so the order survives.
-        boxes = sortPanelsReadingOrder(boxes, rtl);
+        boxes = sortPanelsReadingOrder(boxes, rtl, columnMajor);
         boxes = yoloExpandPanelsOverText(boxes, textBoxes, imgW, imgH);
       }
 

@@ -397,11 +397,27 @@ function yOverlapFrac(a, b) {
   return Math.max(0, overlap) / Math.max(1, minH);
 }
 
+function xOverlapFrac(a, b) {
+  const overlap = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+  const minW = Math.min(a[2] - a[0], b[2] - b[0]);
+  return Math.max(0, overlap) / Math.max(1, minW);
+}
+
 /* Sort panels into reading order. rtl = true is manga order (right-to-left within a
  * tier); rtl = false is western comics and strips, which read left-to-right. The
  * direction only affects within-tier ordering: tiers themselves always run
- * top-to-bottom, in both conventions. Port of sort_panels_reading_order(). */
-function sortPanelsReadingOrder(panels, rtl = true) {
+ * top-to-bottom, in both conventions.
+ *
+ * columnMajor = true is yonkoma (4-koma): the same rule with the axes swapped. A tier
+ * becomes a COLUMN -- panels whose horizontal extents overlap -- read top to bottom,
+ * and the columns run right to left, or left to right when rtl is false. A strip page
+ * is read down one column and then down the next, never across, which is what the
+ * row-major rule would do. A column whose panels differ in height (a title page's
+ * full-height illustration beside four short ones) falls out of the same overlap test
+ * that makes the row-major case robust.
+ *
+ * Port of sort_panels_reading_order(). */
+function sortPanelsReadingOrder(panels, rtl = true, columnMajor = false) {
   const n = panels.length;
   if (n <= 1) return panels;
 
@@ -413,26 +429,30 @@ function sortPanelsReadingOrder(panels, rtl = true) {
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
       const a = panels[i], b = panels[j];
-      if (yOverlapFrac(a, b) > OVERLAP_THRESHOLD) {
-        const aCx = (a[0] + a[2]) / 2, bCx = (b[0] + b[2]) / 2;
-        if (rtl ? aCx > bCx : aCx < bCx) { // same tier
-          edges[i].push(j);
-          inDegree[j]++;
-        }
+      const aCx = (a[0] + a[2]) / 2, bCx = (b[0] + b[2]) / 2;
+      const aCy = (a[1] + a[3]) / 2, bCy = (b[1] + b[3]) / 2;
+      let readsFirst;
+      if (columnMajor) {
+        readsFirst = xOverlapFrac(a, b) > OVERLAP_THRESHOLD
+          ? aCy < bCy                          // same column: down it
+          : (rtl ? aCx > bCx : aCx < bCx);     // different columns
+      } else if (yOverlapFrac(a, b) > OVERLAP_THRESHOLD) {
+        readsFirst = rtl ? aCx > bCx : aCx < bCx;  // same tier
       } else {
-        const aCy = (a[1] + a[3]) / 2, bCy = (b[1] + b[3]) / 2;
-        if (aCy < bCy) { // different tiers: top-to-bottom
-          edges[i].push(j);
-          inDegree[j]++;
-        }
+        readsFirst = aCy < bCy;                    // different tiers: top-to-bottom
+      }
+      if (readsFirst) {
+        edges[i].push(j);
+        inDegree[j]++;
       }
     }
   }
 
   function tieKey(i) {
     const [x1, y1, x2, y2] = panels[i];
-    const cx = (x1 + x2) / 2;
-    return [(y1 + y2) / 2, rtl ? -cx : cx];
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    if (columnMajor) return [rtl ? -cx : cx, cy];
+    return [cy, rtl ? -cx : cx];
   }
 
   let available = [];
@@ -1147,7 +1167,7 @@ if (typeof module !== "undefined") {
     floydSteinbergMono, encodeBmp1bit, encodeMonoBmpFromRGBA,
     DITHER_GAMMAS, validDitherGamma, applyGrayGamma,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
-    yOverlapFrac, sortPanelsReadingOrder,
+    yOverlapFrac, xOverlapFrac, sortPanelsReadingOrder,
     OCR_LANGUAGE_NAMES, ocrLanguageName, buildPanelOcrPrompt,
     trimMarginsBox,
     WEBTOON_BLANK_LEVEL, WEBTOON_MIN_GUTTER, WEBTOON_MIN_PAGE_FRAC,

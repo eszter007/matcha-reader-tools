@@ -202,6 +202,39 @@ function testMangaBookType() {
   const ltrMixed = manga.sortPanelsReadingOrder([bottomLeft, tall, topLeft], false);
   check("LTR tall-right last", ltrMixed[0] === topLeft && ltrMixed[1] === bottomLeft && ltrMixed[2] === tall);
 
+  // Yonkoma: two columns of four, read down the right column then down the left.
+  {
+    const named = {};
+    for (let col = 0; col < 2; col++) {
+      for (let row = 0; row < 4; row++) {
+        named[`c${col}r${row}`] = [col * 450 + 60, row * 330 + 60, col * 450 + 420, row * 330 + 300];
+      }
+    }
+    const byBox = new Map(Object.entries(named).map(([n, b]) => [b.join(), n]));
+    const names = (boxes) => boxes.map((b) => byBox.get(b.join()));
+    const panels = Object.values(named).reverse();
+    check("4-koma reads down the right column, then the left",
+      names(manga.sortPanelsReadingOrder(panels, true, true)).join() ===
+      "c1r0,c1r1,c1r2,c1r3,c0r0,c0r1,c0r2,c0r3");
+    check("4-koma LTR reads the columns the other way, still downwards",
+      names(manga.sortPanelsReadingOrder(panels, false, true)).join() ===
+      "c0r0,c0r1,c0r2,c0r3,c1r0,c1r1,c1r2,c1r3");
+    // Pins the default: the same page row-major interleaves the two strips.
+    check("without the flag the same page interleaves the strips",
+      names(manga.sortPanelsReadingOrder(panels, true, false)).join() ===
+      "c1r0,c0r0,c1r1,c0r1,c1r2,c0r2,c1r3,c0r3");
+  }
+
+  // A 4-koma title page: a full-height illustration beside a strip of four. The
+  // illustration is a column of its own and reads last.
+  {
+    const art = [30, 90, 500, 1500];
+    const strip = [[520, 90, 1000, 430], [520, 440, 1000, 780], [520, 790, 1000, 1140], [520, 1150, 1000, 1500]];
+    const out = manga.sortPanelsReadingOrder([art, strip[2], strip[0], strip[3], strip[1]], true, true);
+    check("4-koma title page: strip first, full-height art last",
+      out[0] === strip[0] && out[1] === strip[1] && out[2] === strip[2] && out[3] === strip[3] && out[4] === art);
+  }
+
   // Margin trim: a 200x200 page with a 40px white border around a dark block.
   {
     const w = 200, h = 200;
