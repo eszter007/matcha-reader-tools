@@ -15,6 +15,17 @@ const YOLO_INPUT_SIZE = 640;
 const YOLO_STRIDE = 32;            // ultralytics LetterBox(auto=True) pads to this multiple
 const YOLO_CONF_THRESHOLD = 0.4;   // convert_manga.py:_detect_panels_yolo(conf=0.4)
 const YOLO_WEAK_CONF = 0.15;       // convert_manga.py:PANEL_WEAK_CONF
+
+/* A second pass at a larger input when the first one barely finds anything.
+ * The model's panel head is scale-sensitive: a small, sparsely inked page (a
+ * hand-drawn 4-koma, say) letterboxed into 640 can yield a single box covering
+ * a tenth of the page, while the same page at 1600 comes back fully panelled --
+ * measured 1 panel at 9% against 8 panels at 77%. Pages it already reads well
+ * (75-97% on every sample here, fixtures included) never reach the retry, and a
+ * genuine full-page splash keeps its single box, since one panel covering the
+ * page is high coverage, not low. convert_manga.py:PANEL_RETRY_*. */
+const YOLO_RETRY_COVER_FRAC = 0.5;
+const YOLO_RETRY_INPUT_SIZE = 1600;
 const YOLO_PANEL_CLASS = 0;        // 0=panel, 1=text
 const YOLO_TEXT_CLASS = 1;
 
@@ -271,6 +282,16 @@ function yoloSplitFramesOverSubpanels(frames, candidates) {
   return out;
 }
 
+/* Fraction of the page the given boxes cover, overlaps counted twice. Only ever compared
+ * against a threshold to judge whether a detection pass saw the page at all, so
+ * double-counting an overlap is not worth the cost of a union. Port of
+ * convert_manga.py:_panel_cover_frac. */
+function yoloPanelCoverFrac(boxes, w, h) {
+  let area = 0;
+  for (const b of boxes) area += (b[2] - b[0]) * (b[3] - b[1]);
+  return area / Math.max(1, w * h);
+}
+
 /* Full pipeline for one page: letterbox → inference → decode → sliver filter
  * → dedupe → sub-panel recovery, falling back to one full-page box when nothing
  * is detected — mirrors convert_manga.py:_detect_panels_yolo. Returns
@@ -278,9 +299,8 @@ function yoloSplitFramesOverSubpanels(frames, candidates) {
  * from) and the text boxes yoloExpandPanelsOverText() then grows the CROP
  * rectangles over. `session` is an ONNX Runtime InferenceSession for the panel
  * model; `ortApi` is the onnxruntime module (for its Tensor constructor). */
-async function detectPanelsYolo(session, ortApi, rgba, w, h, conf) {
-  conf = conf === undefined ? YOLO_CONF_THRESHOLD : conf;
-  const lb = yoloLetterbox(rgba, w, h);
+async function detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, size) {
+  const lb = yoloLetterbox(rgba, w, h, size);
   const inputName = session.inputNames[0];
   const feeds = {};
   // The model is exported with dynamic height/width so the rectangular
@@ -306,8 +326,26 @@ async function detectPanelsYolo(session, ortApi, rgba, w, h, conf) {
   }
 
   const boxes = yoloDedupeBoxes(strong);
-  if (!boxes.length) return { frames: [[0, 0, w, h]], texts };
-  return { frames: yoloSplitFramesOverSubpanels(boxes, candidates), texts };
+  // Measured on the CONFIDENT boxes, not on the full-page fallback frame below: that frame
+  // covers the page by construction and would mask a failed pass.
+  const cover = yoloPanelCoverFrac(boxes, w, h);
+  if (!boxes.length) return { frames: [[0, 0, w, h]], texts, cover };
+  return { frames: yoloSplitFramesOverSubpanels(boxes, candidates), texts, cover };
+}
+
+/* One page through the model, retrying at a larger input when the first pass barely covers
+ * it and keeping whichever pass saw more. The model's panel head is scale-sensitive: a small,
+ * sparsely inked page (a hand-drawn 4-koma, say) letterboxed into the default 640 can come
+ * back as a single box covering a tenth of the page, while the same page at 1600 is fully
+ * panelled. Pages the model already reads well never reach the retry, and a genuine full-page
+ * splash keeps its single box: one panel covering the page is high coverage, not low.
+ * Port of convert_manga.py:_detect_panels_yolo. */
+async function detectPanelsYolo(session, ortApi, rgba, w, h, conf) {
+  conf = conf === undefined ? YOLO_CONF_THRESHOLD : conf;
+  const first = await detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, YOLO_INPUT_SIZE);
+  if (first.cover >= YOLO_RETRY_COVER_FRAC) return first;
+  const retry = await detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, YOLO_RETRY_INPUT_SIZE);
+  return retry.cover > first.cover ? retry : first;
 }
 
 if (typeof module !== "undefined") {
@@ -316,7 +354,8 @@ if (typeof module !== "undefined") {
     YOLO_PANEL_CLASS, YOLO_TEXT_CLASS,
     TEXT_OWNERSHIP_MIN_FRAC, TEXT_PAD_FRAC_OF_PAGE, TEXT_PAD_MIN,
     SUBPANEL_MAX_AREA_FRAC, SUBPANEL_INSIDE_FRAC, SUBPANEL_COVER_FRAC,
-    SUBPANEL_SIBLING_OVERLAP_FRAC,
+    SUBPANEL_SIBLING_OVERLAP_FRAC, YOLO_RETRY_COVER_FRAC, YOLO_RETRY_INPUT_SIZE,
+    yoloPanelCoverFrac,
     yoloLetterbox, yoloDecodeOutput, yoloDedupeBoxes, isSliverPanel,
     yoloBoxArea, yoloOverlapArea, yoloTextPadPx, yoloExpandPanelsOverText,
     yoloSplitFramesOverSubpanels, detectPanelsYolo,

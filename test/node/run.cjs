@@ -708,6 +708,21 @@ async function testMangaEpub() {
   check("identifier varies with title", epub.epubIdentifier("Other", "Test Author", spine.length) !== identifier);
 }
 
+/* ── Manga: detection-retry gate (vs convert_manga.py) ────── */
+
+function testMangaCoverGate() {
+  console.log("manga detection-retry coverage gate:");
+  const { yoloPanelCoverFrac: cover, YOLO_RETRY_COVER_FRAC: gate } = require("../../js/yolo.js");
+
+  // One banner-sized box on a whole page: what a failed detection pass looks like.
+  check("a sparse page falls under the gate", cover([[0, 0, 600, 100]], 1200, 1700) < gate);
+  // A genuine single-panel splash covers the page, so it must not be retried.
+  check("a full-page splash stays above the gate", cover([[0, 0, 1200, 1700]], 1200, 1700) >= gate);
+  check("a panelled page stays above the gate",
+        cover([0, 420, 840, 1260].map(y => [0, y, 1200, y + 400]), 1200, 1700) >= gate);
+  check("no boxes cover nothing", cover([], 1200, 1700) === 0);
+}
+
 /* ── Manga: bubble-aware panel crops (vs convert_manga.py) ────── */
 
 function testMangaBubbleCrops() {
@@ -1079,6 +1094,7 @@ function testXtc() {
   testMangaMono();
   testMangaFit();
   await testMangaEpub();
+  testMangaCoverGate();
   testMangaBubbleCrops();
   await testMangaYolo();
   await testDictYomitan();
