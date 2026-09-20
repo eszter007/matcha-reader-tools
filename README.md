@@ -35,12 +35,18 @@ vertical centre.
 <summary><b>4-koma</b> — each column top to bottom, then the next column</summary>
 
 A 4-koma page is two strips side by side, not rows across the page, so it reads down one column
-and then down the next. The row-major order would interleave the two gags. It is the same rule
+and then down the next; the row-major order would interleave the two gags. It is the same rule
 with the axes swapped, so a title page whose left half is one full-height illustration beside a
-strip of four still works: the illustration is a column of its own and reads last. Pick the
-left-to-right variant for a strip page that reads that way, as this English one does.
+strip of four still works — the illustration is a column of its own and reads last.
 
-<img src="docs/images/panels-yonkoma.jpg" width="360" alt="An English 4-koma page: the left strip numbered 1 to 4, the right strip 5 to 8">
+Japanese pages read the right column first. A banner across the top reads before both, being a
+tier of its own.
+
+<img src="docs/images/panels-yonkoma-rtl.jpg" width="360" alt="A Japanese 4-koma page: the banner numbered 1, the right strip 2 to 5, the left strip 6 to 9">
+
+Pick the left-to-right variant for a strip page that reads that way, as this English one does.
+
+<img src="docs/images/panels-yonkoma-ltr.jpg" width="360" alt="An English 4-koma page: the left strip numbered 1 to 4, the right strip 5 to 8">
 </details>
 
 <details>
