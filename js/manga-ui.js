@@ -641,6 +641,26 @@ async function buildMangaEpub({ title, author, epubPages, tocEntries }) {
   return new Uint8Array(await zw.toBlob().arrayBuffer());
 }
 
+/* The EPUB's images as a PDF. The PDF embeds JPEG only, so PNG pages (and the odd CMYK JPEG)
+ * are re-encoded; everything else goes in byte for byte. */
+async function buildMangaPdf({ title, author, epubPages }) {
+  const images = [];
+  for (const pg of epubPages) {
+    for (const im of pg.images) {
+      let bytes = im.bytes;
+      if (im.mime !== "image/jpeg" || ![1, 3].includes(jpegComponents(bytes))) {
+        const bmp = await createImageBitmap(new Blob([bytes], { type: im.mime }));
+        const c = makeCanvas(bmp.width, bmp.height);
+        c.getContext("2d").drawImage(bmp, 0, 0);
+        bmp.close();
+        bytes = await canvasToJpegBytes(c, 0.92);
+      }
+      images.push({ bytes, w: im.w, h: im.h });
+    }
+  }
+  return buildPdf({ title, author, images });
+}
+
 /* Encode one image as an XTC (1-bit) and/or XTCH (2-bit) page, laid out for the device screen.
  *
  * Every page in a book is rendered onto the SAME canvas size, because the reader allocates one
@@ -707,7 +727,7 @@ function applyFormatVisibility() {
   show("card-ocr", matcha);
   show("notice-ocr", matcha);
   show("card-install", matcha);
-  show("card-book", matcha || nothingPicked || f.has("epub") || f.has("xtc") || f.has("xtch"));
+  show("card-book", matcha || nothingPicked || f.has("epub") || f.has("pdf") || f.has("xtc") || f.has("xtch"));
   show("manga-mono-row", matcha);
   // Dither brightness only means something when something is actually dithered: a 1-bit page
   // in the device folder, or either XTC depth. A JPEG page never goes near it.
@@ -715,7 +735,7 @@ function applyFormatVisibility() {
     nothingPicked || f.has("xtc") || f.has("xtch") || (matcha && $("manga-mono").checked));
   // Panel rotation only exists in the pre-rendered exports; the device folder's crops are rotated
   // by the firmware at display time, so the option would mean nothing there.
-  show("manga-rotate-row", nothingPicked || f.has("epub") || f.has("xtc") || f.has("xtch"));
+  show("manga-rotate-row", nothingPicked || f.has("epub") || f.has("pdf") || f.has("xtc") || f.has("xtch"));
   renumberSteps();
 }
 
@@ -772,7 +792,9 @@ async function runMangaConversion() {
   // output that would be discarded. (The OCR section is hidden in that case too.)
   const noOcr = $("manga-no-ocr").checked || !formats.has("matcha");
   const mono = $("manga-mono").checked;
-  const epub = formats.has("epub");
+  const pdf = formats.has("pdf");
+  // The PDF is built from the same page/panel images as the EPUB, so either one collects them.
+  const epub = formats.has("epub") || pdf;
   const matchaFolder = formats.has("matcha");
   const wantXtc = formats.has("xtc");
   const wantXtch = formats.has("xtch");
@@ -1293,14 +1315,20 @@ async function runMangaConversion() {
       if (tocEntries.length) zip.addFile(`${folder}/toc.idx`, writeTocIdx(tocEntries));
     }
 
-    // Extra single-file outputs (EPUB / XTC / XTCH). They ride inside the zip when the device
+    // Extra single-file outputs (EPUB / PDF / XTC / XTCH). They ride inside the zip when the device
     // folder is also being exported, otherwise they are the download themselves.
     const extras = [];
-    if (epub && epubPages.length) {
+    if (formats.has("epub") && epubPages.length) {
       setProgress(pagesDone, pages.length, "Building EPUB…");
       const epubBytes = await buildMangaEpub({ title: metaTitle, author: metaAuthor, epubPages, tocEntries });
       extras.push({ name: `${folder}.epub`, bytes: epubBytes, type: "application/epub+zip" });
       logLine(`Built ${folder}.epub (${epubPages.reduce((n, p) => n + p.images.length, 0)} images).`);
+    }
+    if (pdf && epubPages.length) {
+      setProgress(pagesDone, pages.length, "Building PDF…");
+      const pdfBytes = await buildMangaPdf({ title: metaTitle, author: metaAuthor, epubPages });
+      extras.push({ name: `${folder}.pdf`, bytes: pdfBytes, type: "application/pdf" });
+      logLine(`Built ${folder}.pdf (${epubPages.reduce((n, p) => n + p.images.length, 0)} pages).`);
     }
     // The chapter list indexes the EXPORTED page sequence (each page followed by its panels),
     // not the source page numbers, so a chapter starting at source page N lands on that page's

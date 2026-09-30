@@ -21,7 +21,7 @@
 <main>
   <h2>📖 Manga Converter</h2>
   <p class="lede">AI panel detection for manga, in your browser. Finds the panels, optionally reads
-  and translates their text with Gemini, and exports for the Matcha Reader, as EPUB, or as XTC.</p>
+  and translates their text with Gemini, and exports for the Matcha Reader, as EPUB, PDF, or XTC.</p>
 
   <div class="card">
     <h3>1. Choose your manga</h3>
@@ -44,6 +44,9 @@
       <label><input type="checkbox" class="fmt" value="epub"> <span class="opt">EPUB</span>
         <span class="hint">Fixed-layout <code>.epub</code>. Reads panel by panel on any e-reader,
         without dictionary, translations or panel zoom.</span></label>
+      <label><input type="checkbox" class="fmt" value="pdf"> <span class="opt">PDF</span>
+        <span class="hint">Same pages and panels as the EPUB, one per PDF page, for any PDF
+        viewer.</span></label>
       <label><input type="checkbox" class="fmt" value="xtc"> <span class="opt">XTC</span>
         <span class="hint">Xteink's own format for the stock firmware, black-and-white. Pages are
         pre-rendered, so pick a target resolution below.</span></label>
@@ -99,7 +102,7 @@
           <span class="hint">Runs the YOLO26 model in your browser, ~21&nbsp;MB once, then cached.
           Untick for the faster white-gutter heuristic.</span></label>
         <label id="manga-rotate-row"><input type="checkbox" id="manga-rotate-panels" checked> <span class="opt">Rotate wide panels to portrait</span>
-          <span class="hint">EPUB and XTC/XTCH only. Those carry pre-rendered images, so a wide
+          <span class="hint">EPUB, PDF and XTC/XTCH only. Those carry pre-rendered images, so a wide
           panel is turned upright to fill the screen. Untick to keep panels as drawn. Matcha Reader
           format rotates them on the device instead.</span></label>
         <label id="manga-mono-row"><input type="checkbox" id="manga-mono"> <span class="opt">1-bit BMP (Floyd–Steinberg dithering)</span>
@@ -264,6 +267,7 @@
 <script src="js/common.js"></script>
 <script src="js/manga-core.js"></script>
 <script src="js/manga-epub.js"></script>
+<script src="js/manga-pdf.js"></script>
 <script src="js/yolo.js"></script>
 <script src="js/manga-ui.js"></script>
 </body>

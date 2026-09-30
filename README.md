@@ -9,7 +9,7 @@ to Gemini when you supply your own API key.
 
 | Tool | Input | Output |
 |---|---|---|
-| 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.xtc` or `.xtch` |
+| 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.pdf`, `.xtc` or `.xtch` |
 | 📚 **Dictionary Converter** | Yomitan `.zip` (Jitendex, JMnedict, grammar) or jmdict-simplified `.json`/`.json.tgz` | `dict/<name>.idx` + `.dat` + `.spx` lookup accelerator |
 | 🔤 **Font Converter** | TTF / OTF (up to 4 styles + fallback font) | `.fonts/<Family>/<Family>_<size>.cpfont` (v4, with kerning + ligatures) |
 
@@ -106,20 +106,20 @@ changed, and 21 MB for the model alone. Bump their paths if one is replaced.
 
 | Control | Desktop flag | Effect |
 |---|---|---|
-| **Export format** | — | Any combination of Matcha Reader folder, EPUB, XTC, XTCH. Nothing preselected. Later steps adapt to the pick. |
+| **Export format** | — | Any combination of Matcha Reader folder, EPUB, PDF, XTC, XTCH. Nothing preselected. Later steps adapt to the pick. |
 | **Book type** | `--ltr` `--trim-margins` `--webtoon` | Manga reads right to left. Western comic reads left to right and trims the paper border; the detector is manga-trained, so it misses panels on dense strip layouts and the page warns about it. Webtoon reassembles the strip and re-cuts it at the artwork's gutters, no model involved. Nothing preselected. |
 | **Panels only** | *(browser only)* | Ships panel crops without full pages. A page whose panels miss artwork keeps its full page; so does the cover. |
 | **Target resolution** | `--x3` `--x4` | Downscales before detection. X4 480×800, X3 528×792, or a custom 1–4096 px size. Never upscales. Full resolution warns: the Xteink firmware struggles with it. |
 | **Translate into** | *(browser only)* | Language the translations come back in. The desktop tool always uses English. |
 | **Language** (step 5) | `--language` | Splits reading stats by language, and tells OCR what to expect. `jp`→`ja`, `cn`→`zh`, `kr`→`ko`; `zh-Hant` kept intact. |
 | **AI panel detection** | — | YOLO26 in-browser. Untick for the white-gutter heuristic, which is also the automatic fallback. Disabled for webtoons, whose panels come from gutters. |
-| **Rotate wide panels** | — | EPUB and XTC/XTCH only: those bake in orientation. The Matcha format rotates on the device instead. |
+| **Rotate wide panels** | — | EPUB, PDF and XTC/XTCH only: those bake in orientation. The Matcha format rotates on the device instead. |
 | **1-bit BMP** | `--mono` | Dithered black-and-white pages. One fast refresh on the device. Best for line art. |
 | **Dither brightness** | *(browser only)* | Gamma applied before dithering, for scans that come out darker than the original. Affects 1-bit BMP and XTC/XTCH only. |
 
 **EPUB** is fixed-layout EPUB 3, right-to-left, each page followed by its panels, with the chapter
-list carried over. **XTC / XTCH** is Xteink's own format for the stock firmware, 1-bit and 4-level
-grayscale; XTCH needs a page height divisible by 8. Both are browser-only, as is Panels only.
+list carried over. **PDF** holds the same images, one per page, for any PDF viewer. **XTC / XTCH** is Xteink's own format for the stock firmware, 1-bit and 4-level
+grayscale; XTCH needs a page height divisible by 8. All are browser-only, as is Panels only.
 
 Panel crops go in a `panels/` subfolder so the device does not walk a crop per panel when opening
 the book. The older flat layout still works; re-convert for the faster open.
