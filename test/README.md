@@ -84,15 +84,16 @@ filenames — export `LANG=C.UTF-8` if you hit that.
 panel detection and reading-order sort, the manga binary formats
 (`panels.idx`/`panels.dat`/`meta.bin`/`toc.idx`), XTC/XTCH encoding decoded back the way
 the firmware's reader does, 1-bit BMP output, device downscaling, EPUB assembly, the
-dictionary converters and their POS flags (Japanese, Chinese and Cantonese), pinyin ruby, and
-the zip writer.
+dictionary converters and their POS flags (Japanese, Chinese and Cantonese), pinyin and
+furigana (dictionary and AI paths, the AI fed fixed answers), and the zip writer.
 
 **`test/browser/e2e.mjs`** — the actual pages in Chromium, end to end: a file goes into
 the picker, the download that comes out is unzipped and compared. Covers `manga.html`
 (CBZ, EPUB, PDF and chapter-foldered input; grid and AI panel detection; panels-only;
 XTC/XTCH; the Gemini OCR path with the API stubbed, so it needs no key and no network;
 and the no-`OffscreenCanvas` fallback older Safari takes), `dictionary.html`
-(Yomitan and MDict), and `fonts.html`.
+(Yomitan, MDict, Chinese and Cantonese), `ruby.html` (pinyin from the dictionary, pinyin and
+furigana with Gemini stubbed to the reference answers), and `fonts.html`.
 
 ## Fixtures
 
@@ -107,7 +108,8 @@ and the no-`OffscreenCanvas` fallback older Safari takes), `dictionary.html`
 | `manga_foldered.cbz` | synthetic | page order through chapter subfolders |
 | `ref_manga*/`, `ref_dict_*/` | `convert_manga.py`, `convert_jmdict.py` | byte comparison |
 | `zh/`, `ref_dict_zh*/`, `ref_dict_yue/` | synthetic, `convert_jmdict.py --lang zh/yue` | the Chinese paths, every option at once |
-| `zh/book.epub`, `ref_pinyin/` | synthetic, `add_pinyin_ruby.py` | pinyin ruby, XHTML comparison |
+| `zh/book.epub`, `ref_pinyin/` | synthetic, `add_pinyin_ruby.py` | pinyin from the dictionary, XHTML comparison |
+| `zh/ai_*.xhtml`, `zh/ai_*_answers.json`, `ref_ruby_ai/` | synthetic, `add_pinyin_ruby.py` / `add_furigana_ruby.py` with the answers file standing in for Gemini | AI pinyin and furigana, XHTML comparison; some answers are wrong on purpose |
 | `ref_yolo/boxes.json` | the shipped ONNX model | panel boxes, ±2px |
 | `ref_font/` | the firmware's `fontconvert_sdcard.py` | `.cpfont` structure |
 

@@ -24,7 +24,10 @@ global.pinyinSyllableToMarks = zh.pinyinSyllableToMarks;
 global.pinyinSyllableToZhuyin = zh.pinyinSyllableToZhuyin;
 global.ZipReader = zip.ZipReader;
 global.ZipWriter = zip.ZipWriter;
+const rubyCommon = require("../../js/ruby-common.js");
+Object.assign(global, rubyCommon);
 const ruby = require("../../js/pinyin-ruby.js");
+const furigana = require("../../js/furigana-ruby.js");
 const manga = require("../../js/manga-core.js");
 const epub = require("../../js/manga-epub.js");
 
@@ -855,6 +858,7 @@ function convertChineseFixture(inputs, opts = {}) {
   let records = [];
   let names = [];
   const titles = [];
+  const bilingual = new Set();
   for (const input of inputs) {
     const fmt = zh.detectDictFormat(input, lang);
     let title = zh.DEFAULT_DICT_TITLES[fmt] || "";
@@ -862,6 +866,7 @@ function convertChineseFixture(inputs, opts = {}) {
       const r = zh.convertCedict(zhText(input), zhOpts);
       records = records.concat(r.records);
       names = names.concat(r.names);
+      for (const rec of r.records) bilingual.add(zh.headwordKey(rec.hw));
       if (input.toLowerCase().includes("canto")) title = "CC-Canto";
     } else if (fmt === "moedict") {
       records = records.concat(zh.convertMoedict(JSON.parse(zhText(input))).records);
@@ -873,6 +878,7 @@ function convertChineseFixture(inputs, opts = {}) {
     }
     if (title) titles.push(title);
   }
+  if (names.length) ({ records, names } = zh.keepNamesTogether(records, names, bilingual));
   if (opts.frequency) {
     const { priorities } = zh.loadFrequency(zhText(opts.frequency), opts.frequencyKind || "auto");
     records = zh.applyFrequency(records, priorities, twins);
@@ -965,11 +971,55 @@ async function testPinyinRuby() {
     const want = new TextDecoder().decode(await ref.readEntry(ref.findEntry("c1.xhtml")));
     check(`${refName} c1.xhtml`, got === want, got === want ? "" : `\n    got  ${got}\n    want ${want}`);
     // The whole EPUB round-trips with every member and the mimetype first.
-    const out = await ruby.annotateEpub(new Uint8Array(fs.readFileSync(path.join(ZH, "book.epub"))), words, skip, zhuyin);
+    const out = await rubyCommon.rewriteEpub(new Uint8Array(fs.readFileSync(path.join(ZH, "book.epub"))),
+                                             async (name, d) => ruby.annotateXhtml(d, words, skip, zhuyin));
     const outZip = new zip.ZipReader(new Uint8Array(await out.blob.arrayBuffer()));
     check(`${refName} members`, outZip.entries.map((e) => e.name).join(",") === input.entries.map((e) => e.name).join(","));
-    check(`${refName} annotated count`, out.annotated === 1, `${out.annotated}`);
+    check(`${refName} annotated count`, out.changed === 1, `${out.changed}`);
   }
+}
+
+/* The AI paths, against the firmware's scripts run on the same fixed model answers. */
+async function testRubyAi() {
+  console.log("AI furigana and pinyin (vs add_furigana_ruby.py / add_pinyin_ruby.py, fixed answers):");
+  const refDir = path.join(FIXTURES, "ref_ruby_ai");
+  if (!fs.existsSync(path.join(ZH, "ai_zh.xhtml")) || !fs.existsSync(refDir)) {
+    console.log("  skip (no ruby AI fixtures — run test/gen_references.py)");
+    return;
+  }
+  const fake = (answers) => async (batch) => (batch.every((t) => t in answers) ? batch.map((t) => answers[t]) : null);
+  const zhDoc = zhText("ai_zh.xhtml");
+  const charReadings = new Map();
+  const words = ruby.loadCedictReadings(zhText("cedict.u8"), charReadings);
+  const contextual = await ruby.contextualReadings(documentPassages(zhDoc), charReadings,
+                                                   fake(JSON.parse(zhText("ai_zh_answers.json"))));
+  for (const [name, zhuyin] of [["zh-pinyin.xhtml", false], ["zh-zhuyin.xhtml", true]]) {
+    const got = ruby.annotateXhtml(zhDoc, words, new Set(), zhuyin, contextual);
+    const want = fs.readFileSync(path.join(refDir, name), "utf-8");
+    check(name, got === want, got === want ? "" : `\n    got  ${got}\n    want ${want}`);
+  }
+  const jaDoc = zhText("ai_ja.xhtml");
+  const spans = await furigana.contextualFurigana(documentPassages(jaDoc), fake(JSON.parse(zhText("ai_ja_answers.json"))));
+  const got = furigana.annotateFurigana(jaDoc, spans);
+  const want = fs.readFileSync(path.join(refDir, "ja.xhtml"), "utf-8");
+  check("ja.xhtml", got === want, got === want ? "" : `\n    got  ${got}\n    want ${want}`);
+
+  // A model that gives no usable answer changes nothing.
+  const none = async () => null;
+  check("no answer: furigana leaves the document alone",
+        furigana.annotateFurigana(jaDoc, await furigana.contextualFurigana(documentPassages(jaDoc), none)) === jaDoc);
+  check("no answer: pinyin falls back to the dictionary",
+        ruby.annotateXhtml(zhDoc, words, new Set(), false, await ruby.contextualReadings(documentPassages(zhDoc), charReadings, none))
+        === ruby.annotateXhtml(zhDoc, words, new Set(), false));
+  // The firmware's own alignment cases (tools/furigana_ruby/test_add_furigana_ruby.py).
+  const A = (w, r) => JSON.stringify(furigana.alignReading(w, r));
+  check("align: okurigana stays bare", A("食べる", "たべる") === JSON.stringify([[0, 1, "た"]]));
+  check("align: kana inside the word anchor it", A("取り引き", "とりひき") === JSON.stringify([[0, 1, "と"], [2, 3, "ひ"]]));
+  check("align: katakana reading", A("東京", "トウキョウ") === JSON.stringify([[0, 2, "とうきょう"]]));
+  check("align: refusals", ["のむ", "taberu"].every((r) => furigana.alignReading("食べる", r) === null)
+        && furigana.alignReading("ひらがな", "ひらがな") === null && furigana.alignReading("木", "あいうえおかきくけこ") === null);
+  check("sentence split", JSON.stringify(rubyCommon.splitSentences(Array.from("「はい。」と言った。次"))) ===
+        JSON.stringify([[0, "「はい。」"], [5, "と言った。"], [10, "次"]]));
 }
 
 /* ── Dictionary: vs convert_jmdict.py + gen_dict_spx.py ───────── */
@@ -1248,6 +1298,7 @@ function testXtc() {
   testDictPos();
   await testDictChinese();
   await testPinyinRuby();
+  await testRubyAi();
   await testZipRoundTrip();
   if (failures) {
     console.error(`\n${failures} failure(s)`);

@@ -673,6 +673,18 @@ CEDICT_LINES = """# CC-CEDICT test fixture
 綠 绿 [lu:4] /green/
 一不做，二不休 一不做，二不休 [yi1 bu4 zuo4 , er4 bu4 xiu1] /don't do it, or don't rest (idiom)/
 這是一個很長很長很長很長的詞條 这是一个很长很长很长很长的词条 [zhe4 shi4] /too long/
+石 石 [shi2] /stone/
+石 石 [dan4] /dry measure for grain/
+石頭 石头 [shi2 tou5] /stone/
+很 很 [hen3] /very/
+重 重 [zhong4] /heavy/
+重 重 [chong2] /to repeat/again/
+米 米 [mi3] /rice/
+一 一 [yi1] /one/
+他 他 [ta1] /he/
+這 这 [zhe4] /this/
+好 好 [hao3] /good/
+好 好 [hao4] /to be fond of/
 malformed line without brackets
 """
 
@@ -680,6 +692,7 @@ CANTO_LINES = """# CC-Canto test fixture
 你好 你好 [ni3 hao3] {nei5 hou2} /hello/
 唔係 唔系 [m2 xi4] {m4 hai6} /is not (Cantonese)/
 佢哋 佢哋 [qu2 di4] {keoi5 dei6} /they (Cantonese)/
+唔 唔 [wu2] {m4} /(phrase / adverb / noun) no, not./
 """
 
 CANTO_READINGS = """# cccedict-canto-readings test fixture
@@ -746,6 +759,9 @@ MOE_JSON = [
         {"type": "名", "def": "排列的行伍。{[8e4f]}", "example": ["如：「行列整齊」。"]}]}]},
     {"title": "說話", "heteronyms": [{"bopomofo": "ㄕㄨㄛ ㄏㄨㄚˋ", "pinyin": "shuō huà", "definitions": [
         {"type": "動", "def": "發言、講話。"}, {"type": "動", "def": "閒談。"}]}]},
+    # A name in CC-CEDICT: its monolingual entry must follow it into the names slot.
+    {"title": "北京", "heteronyms": [{"bopomofo": "ㄅㄟˇ ㄐㄧㄥ", "pinyin": "Běijīng", "definitions": [
+        {"type": "名", "def": "中華人民共和國的首都。"}]}]},
 ]
 
 BOOK_XHTML = (
@@ -753,6 +769,46 @@ BOOK_XHTML = (
     '<body><p>我不是中国人。花儿很好看。他&amp;她在說話。<ruby>東<rt>dōng</rt></ruby>西</p>'
     '<SCRIPT>var x = "中国";</SCRIPT><p>Saturday 星期六 研究生命 &lt;綠&gt;</p></body></html>'
 )
+
+
+# AI furigana / pinyin: documents plus the answers a model gives for each sentence, so the
+# firmware's scripts and the JS port can be run on the same answers without calling Gemini.
+# Some answers are wrong on purpose: a syllable count that does not match (dropped whole), a
+# reading CC-CEDICT does not list (dictionary kept), a word not in the sentence, a reading that
+# does not fit the word.
+AI_ZH_XHTML = ('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>石</title></head><body>'
+               '<p>石头很重。一石米。他說話。</p><p>这是&lt;好&gt;的。</p></body></html>')
+AI_ZH_ANSWERS = {
+    "石头很重。": ["shi2", "tou5", "hen4", "zhong4"],
+    "一石米。": ["yi1", "dan4", "mi3"],
+    "他說話。": ["ta1", "shuo1", "hua4", "x"],
+    "这是<好>的。": ["zhe4", "shi4", "hao4", "de5"],
+}
+AI_JA_XHTML = ('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>本</title></head><body>'
+               '<p>今日は本を読む。<ruby>林<rt>はやし</rt></ruby>さんの本。</p>'
+               '<p class="a&gt;b">取り引きを食べる。</p></body></html>')
+AI_JA_ANSWERS = {
+    "今日は本を読む。": [["今日", "きょう"], ["本", "ほん"], ["読む", "よむ"]],
+    "さんの本。": [["猫", "ねこ"], ["本", "ほん"]],
+    "取り引きを食べる。": [["取り引き", "トリヒキ"], ["食べる", "のむ"]],
+}
+
+
+def write_test_epub(path, xhtml, lang):
+    """A one-chapter EPUB around xhtml (as c1.xhtml), for the browser tests of the ruby page."""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" '
+                   'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                   '<rootfile full-path="book.opf" media-type="application/oebps-package+xml"/>'
+                   '</rootfiles></container>', compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("book.opf", '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
+                   'unique-identifier="u"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                   f'<dc:identifier id="u">ruby-test-{lang}</dc:identifier><dc:title>test</dc:title>'
+                   f'<dc:language>{lang}</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" '
+                   'media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>',
+                   compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("c1.xhtml", xhtml, compress_type=zipfile.ZIP_DEFLATED)
 
 
 def make_zh_fixtures():
@@ -765,6 +821,13 @@ def make_zh_fixtures():
             f.write(text)
     with open(os.path.join(ZH, "moe.json"), "w", encoding="utf-8") as f:
         json.dump(MOE_JSON, f, ensure_ascii=False)
+    for name, doc, answers in [("ai_zh", AI_ZH_XHTML, AI_ZH_ANSWERS), ("ai_ja", AI_JA_XHTML, AI_JA_ANSWERS)]:
+        with open(os.path.join(ZH, f"{name}.xhtml"), "w", encoding="utf-8") as f:
+            f.write(doc)
+        with open(os.path.join(ZH, f"{name}_answers.json"), "w", encoding="utf-8") as f:
+            json.dump(answers, f, ensure_ascii=False)
+    write_test_epub(os.path.join(ZH, "ai_zh.epub"), AI_ZH_XHTML, "zh")
+    write_test_epub(os.path.join(ZH, "ai_ja.epub"), AI_JA_XHTML, "ja")
     path = os.path.join(ZH, "book.epub")
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
@@ -818,6 +881,34 @@ def run_zh_references():
     subprocess.run([sys.executable, ruby, "--cedict", f("cedict.u8"), "--zhuyin",
                     f("book.epub"), os.path.join(out, "book-zhuyin.epub")], check=True)
     print(f"pinyin reference: {out}")
+
+    # The AI paths, with the fixed answers above standing in for Gemini.
+    tools = os.path.join(FIRMWARE, "tools")
+    for sub in ("pinyin_ruby", "furigana_ruby", "ruby_common", "dict_convert"):
+        sys.path.insert(0, os.path.join(tools, sub))
+    import html as html_mod
+    import add_furigana_ruby
+    import add_pinyin_ruby
+    import ruby_epub
+
+    def fake(answers):
+        return lambda batch: [answers[t] for t in batch] if all(t in answers for t in batch) else None
+
+    out = os.path.join(FIXTURES, "ref_ruby_ai")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out, exist_ok=True)
+    char_readings = {}
+    words = add_pinyin_ruby.load_cedict(f("cedict.u8"), char_readings)
+    passages = [html_mod.unescape(p) for p, is_text in ruby_epub.text_pieces(AI_ZH_XHTML) if is_text]
+    contextual = add_pinyin_ruby.contextual_readings(passages, char_readings, fake(AI_ZH_ANSWERS))
+    for zhuyin in (False, True):
+        with open(os.path.join(out, "zh-zhuyin.xhtml" if zhuyin else "zh-pinyin.xhtml"), "w", encoding="utf-8") as fh:
+            fh.write(add_pinyin_ruby.annotate_xhtml(AI_ZH_XHTML, words, set(), zhuyin, contextual))
+    passages = [html_mod.unescape(p) for p, is_text in ruby_epub.text_pieces(AI_JA_XHTML) if is_text]
+    furigana = add_furigana_ruby.contextual_furigana(passages, fake(AI_JA_ANSWERS))
+    with open(os.path.join(out, "ja.xhtml"), "w", encoding="utf-8") as fh:
+        fh.write(add_furigana_ruby.annotate_xhtml(AI_JA_XHTML, furigana))
+    print(f"ruby AI reference: {out}")
 
 
 if __name__ == "__main__":

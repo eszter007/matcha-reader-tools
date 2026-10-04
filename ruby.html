@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Furigana &amp; Pinyin — Matcha Reader Tools</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍵</text></svg>">
+</head>
+<body>
+<header>
+  <div class="inner">
+    <h1><a href="./">🍵 Matcha Reader Tools</a></h1>
+    <nav>
+      <a href="manga.html">Manga</a>
+      <a href="dictionary.html">Dictionary</a>
+      <a href="fonts.html">Fonts</a>
+      <a href="ruby.html" class="active">Furigana &amp; Pinyin</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h2>🈷 Furigana &amp; Pinyin</h2>
+  <p class="lede">Adds readings above the text of an EPUB: furigana over the kanji of a Japanese
+  book, pinyin or zhuyin over the characters of a Chinese one. The reader shows them from the book
+  itself, and its <strong>Furigana</strong> or <strong>Pinyin / Zhuyin</strong> toggle hides them.
+  Readings the book already carries are kept.</p>
+
+  <div class="card">
+    <h3>1. The book</h3>
+    <label for="ruby-lang">Language</label>
+    <select id="ruby-lang">
+      <option value="ja">Japanese — furigana</option>
+      <option value="zh">Chinese — pinyin or zhuyin</option>
+    </select>
+    <label for="ruby-epub">EPUB</label>
+    <input type="file" id="ruby-epub" accept=".epub">
+  </div>
+
+  <div class="card">
+    <h3>2. Where the readings come from</h3>
+    <label for="ruby-method">Method</label>
+    <select id="ruby-method">
+      <option value="dict">Dictionary — on this device, nothing uploaded</option>
+      <option value="ai">AI (Gemini) — more accurate; the book's text is sent to Google</option>
+    </select>
+    <p class="hint" id="ruby-method-hint"></p>
+
+    <div id="ruby-ai-fields">
+      <p class="hint"><strong>AI sends the whole text of the book</strong> to Google's Gemini API,
+      sentence by sentence, under your own key. Pictures and the file itself stay here. A novel takes
+      a few hundred requests, so the free tier may slow it down; the page retries and keeps the screen
+      awake.</p>
+      <label for="ruby-key">Gemini API key
+        <span class="hint">— free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Stored only in this browser (shared with the Manga page); sent only to Google.</span>
+      </label>
+      <input type="password" id="ruby-key" autocomplete="off" placeholder="AIza…">
+      <details>
+        <summary>Advanced</summary>
+        <label for="ruby-model">Gemini model</label>
+        <input type="text" id="ruby-model" value="gemini-3.6-flash">
+      </details>
+    </div>
+  </div>
+
+  <div class="card" id="ruby-zh-fields">
+    <h3>3. Chinese options</h3>
+    <label for="ruby-cedict">CC-CEDICT <span class="hint">— <a href="https://www.mdbg.net/chinese/dictionary?page=cc-cedict" target="_blank" rel="noopener">cedict_1_0_ts_utf-8_mdbg.txt</a>, plain or .gz. It splits the text into words and supplies the readings; with AI, a reading the model picks is used only when CC-CEDICT lists it for that character.</span></label>
+    <input type="file" id="ruby-cedict" accept=".txt,.u8,.gz">
+    <label><input type="checkbox" id="ruby-zhuyin"> Zhuyin (bopomofo) instead of pinyin</label>
+    <div class="row">
+      <div>
+        <label for="ruby-frequency">Word frequency list <span class="hint">— optional, e.g. jieba's dict.txt; needed for the skip beside it</span></label>
+        <input type="file" id="ruby-frequency" accept=".txt,.tsv,.csv,.big,.gz">
+      </div>
+      <div>
+        <label for="ruby-skip-top">Leave the commonest words bare <span class="hint">— how many, by the list; 0 annotates everything</span></label>
+        <input type="number" id="ruby-skip-top" value="0" min="0" step="100">
+      </div>
+    </div>
+  </div>
+
+  <button class="primary" id="ruby-run">Add readings</button>
+
+  <div id="progress" hidden><div id="progress-bar"></div><div id="progress-text"></div></div>
+  <div id="log" hidden></div>
+
+  <div class="card">
+    <h3>Dictionary or AI?</h3>
+    <p><strong>Chinese, dictionary:</strong> each character takes the reading of the dictionary word
+    it belongs to. Most are right, but a character with several readings standing alone takes its
+    first one: 石 comes out as <em>dàn</em> rather than <em>shí</em>, 說 as <em>shuì</em> rather than
+    <em>shuō</em>. <strong>Chinese, AI:</strong> Gemini reads each sentence and picks the reading meant
+    there, checked against CC-CEDICT.</p>
+    <p><strong>Japanese</strong> is AI only. A kanji's reading depends on the word and the sentence
+    (今日 is <em>きょう</em> or <em>こんにち</em>, 行った is <em>いった</em> or <em>おこなった</em>), which
+    a word list cannot settle. A reading is added only when it is kana and fits the word as written,
+    so okurigana stays bare and anything doubtful is left without furigana rather than guessed.</p>
+  </div>
+</main>
+<footer>
+  Output matches <code>tools/furigana_ruby/add_furigana_ruby.py</code> and
+  <code>tools/pinyin_ruby/add_pinyin_ruby.py</code> from the
+  <a href="https://github.com/eszter007/matcha-reader">matcha-reader</a> firmware.
+  <p class="legal"><a href="legal.html">Imprint</a> · <a href="legal.html#privacy">Privacy Policy</a></p>
+</footer>
+<script src="js/binary.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/common.js"></script>
+<script src="js/dict-zh.js"></script>
+<script src="js/ruby-common.js"></script>
+<script src="js/pinyin-ruby.js"></script>
+<script src="js/furigana-ruby.js"></script>
+<script src="js/ruby-ui.js"></script>
+</body>
+</html>

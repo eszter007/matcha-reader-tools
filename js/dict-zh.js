@@ -102,10 +102,18 @@ function pinyinToZhuyin(numbered) {
 }
 
 const BRACKETED_PINYIN_RE = /\[([A-Za-z0-9:üÜ ,]+)\]/g;
+// A word given in both scripts inside a gloss: 個|个, 237號房間|237号房间, 對…|对…. Not every bar:
+// only one that touches a CJK character.
+const SCRIPT_PAIR_BAR_RE = /(?<=[\u3400-\u9fff\uf900-\ufaff])\||\|(?=[\u3400-\u9fff\uf900-\ufaff])/g;
+const CLASSIFIER_RE = /\bCL:(?=\S)/g;
 
-/* CEDICT glosses embed numbered pinyin in brackets (CL:個|个[ge4], see 你好[ni3 hao3]). */
+/* CEDICT glosses carry their own markup for cross-references: both scripts joined by a bar and
+ * numbered pinyin in brackets (CL:個|个[ge4], see 你好[ni3 hao3]). Written out for a reader:
+ * "CL: 個/个 (gè)", "see 你好 (nǐ hǎo)". */
 function prettifyCedictGloss(gloss) {
-  return gloss.replace(BRACKETED_PINYIN_RE, (_, inner) => "[" + pinyinToMarks(inner) + "]");
+  gloss = gloss.replace(BRACKETED_PINYIN_RE, (_, inner) => " (" + pinyinToMarks(inner) + ")");
+  gloss = gloss.replace(SCRIPT_PAIR_BAR_RE, "/");
+  return gloss.replace(CLASSIFIER_RE, "CL: ");
 }
 
 /* ── Frequency ranking ────────────────────────────────────────── */
@@ -334,8 +342,29 @@ function isUpper(ch) { return ch !== ch.toLowerCase() && ch === ch.toUpperCase()
 function isProperNounPinyin(pinyin, glosses = null) {
   const syllables = pinyin.split(" ").filter((p) => p && isAlpha(p[0]));
   if (!syllables.length || !isUpper(syllables[0][0])) return false;
-  const first = glosses && glosses.length ? glosses[0] : "";
+  // "People's Republic of China" in a place's gloss is not the common noun "people".
+  const first = (glosses && glosses.length ? glosses[0] : "").replace(/people['\u2019]s/gi, "");
   return !COMMON_NOUN_GLOSS_RE.test(first);
+}
+
+/* Split an entry's "/gloss/gloss/" body into glosses. A slash inside parentheses belongs to the
+ * gloss: CC-Canto writes "(phrase / adverb / noun) no, not." as one. */
+function splitCedictGlosses(body) {
+  const glosses = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of body) {
+    if (ch === "(") depth++;
+    else if (ch === ")" && depth > 0) depth--;
+    if (ch === "/" && depth === 0) {
+      glosses.push(pyStrip(current));
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  glosses.push(pyStrip(current));
+  return glosses;
 }
 
 function cantoKey(trad, simp, pinyin) { return `${trad}\t${simp}\t${pinyin}`; }
@@ -373,7 +402,7 @@ function convertCedict(text, opts = {}) {
     if (!m) { skipped++; continue; }
     const [, trad, simp, pinyin, canto, body] = m;
     const idx = parsed.length;
-    const glosses = body.split("/").map(pyStrip);
+    const glosses = splitCedictGlosses(body);
     parsed.push({ trad, simp, pinyin, canto: canto || "", glosses });
     // Examples go to the everyday entry of a form: 周 the week over the surname, and among
     // lowercase readings the one with more senses (東西 "thing" over "east and west").
@@ -511,7 +540,8 @@ function formatDefinitionsMoedict(entry) {
   const out = [];
   for (const heteronym of (entry.heteronyms || []).slice(0, 3)) {
     const parts = [];
-    const reading = [moeText(heteronym.bopomofo), moeText(heteronym.pinyin)].filter((x) => x).join(" · ");
+    // Pinyin first, then zhuyin: the order a CC-CEDICT entry built with zhuyin uses.
+    const reading = [moeText(heteronym.pinyin), moeText(heteronym.bopomofo)].filter((x) => x).join(" ");
     if (reading) parts.push("【" + reading + "】");
     for (const d of (heteronym.definitions || []).slice(0, 6)) {
       // One bullet per sense (the device numbers them), the part of speech inside it.
@@ -564,7 +594,34 @@ function detectDictFormat(fileName, lang = "ja") {
   return "jmdict";
 }
 
-const DEFAULT_DICT_TITLES = { cedict: "CC-CEDICT", moedict: "MoE 國語辭典", jmdict: "", tsv: "" };
+// Latin only: the panel footer is set in the 8 pt UI font, and the CJK cuts start at 12 pt, so a
+// title with hanzi in it is drawn half as large again as every other footer.
+const DEFAULT_DICT_TITLES = { cedict: "CC-CEDICT", moedict: "MoE", jmdict: "", tsv: "" };
+
+/* A byte-for-byte string key for a record's headword. */
+function headwordKey(hw) {
+  let s = "";
+  for (let i = 0; i < hw.length; i++) s += String.fromCharCode(hw[i]);
+  return s;
+}
+
+/* With proper nouns split off, CC-CEDICT's 中國 "China" goes to the names slot while the
+ * monolingual entry for 中國 from a second dictionary stays in the vocabulary -- and the device
+ * asks the vocabulary first, so the reader would get the Chinese definition and never the
+ * English one. A headword CC-CEDICT holds only as a name takes its other entries along to the
+ * names slot. bilingualHeadwords: Set of headwordKey()s CC-CEDICT left in the vocabulary.
+ * Returns {records, names}. */
+function keepNamesTogether(records, nameRecords, bilingualHeadwords) {
+  const nameHeadwords = new Set(nameRecords.map((r) => headwordKey(r.hw)));
+  const kept = [];
+  const moved = nameRecords.slice();
+  for (const record of records) {
+    const key = headwordKey(record.hw);
+    if (nameHeadwords.has(key) && !bilingualHeadwords.has(key)) moved.push(record);
+    else kept.push(record);
+  }
+  return { records: kept, names: moved };
+}
 
 /* The footer title the Chinese converter settles on: the inputs' titles joined, or the first
  * when the join would not fit the device's 36-byte field. */
@@ -600,7 +657,7 @@ if (typeof module !== "undefined") {
     HAN_RE, UNRANKED_PRIORITY, splitVariants, rankToPriority, loadFrequency, applyFrequency,
     CEDICT_LINE_RE, formatDefinitionCedict, sentenceScript, loadSentencePairs, attachExamples,
     isProperNounPinyin, loadCantoReadings, convertCedict, loadLevels, convertTsv,
-    stripHtml, moeText, formatDefinitionsMoedict, convertMoedict,
-    detectDictFormat, DEFAULT_DICT_TITLES, joinDictTitles, encodeDictTitle,
+    stripHtml, moeText, formatDefinitionsMoedict, convertMoedict, splitCedictGlosses,
+    detectDictFormat, DEFAULT_DICT_TITLES, joinDictTitles, encodeDictTitle, headwordKey, keepNamesTogether,
   };
 }

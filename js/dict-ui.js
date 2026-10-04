@@ -148,6 +148,7 @@ async function convertChineseFile(file, lang, zhOpts) {
   logLine(`Processed ${r.entryCount} CC-CEDICT entries (${r.skipped} skipped) → ${r.records.length} vocab records`
           + (zhOpts.splitNames ? `, ${r.names.length} name records` : ""));
   const title = file.name.toLowerCase().includes("canto") ? "CC-Canto" : DEFAULT_DICT_TITLES.cedict;
+  for (const rec of r.records) zhOpts.bilingualHeadwords.add(headwordKey(rec.hw));
   return { records: r.records, names: r.names, title };
 }
 
@@ -160,6 +161,7 @@ async function readChineseOptions() {
     jyutping: new Map(),
     sentencePairs: null,
     twins: new Map(),
+    bilingualHeadwords: new Set(),  // what CC-CEDICT left in the vocabulary; see keepNamesTogether
     examplesScript: $("dict-examples-script").value,
     frequency: null,
     frequencyKind: $("dict-frequency-kind").value,
@@ -242,6 +244,9 @@ async function runDictConversion() {
 
     let title = "";
     if (chinese) {
+      if (nameRecords.length) {
+        ({ records, names: nameRecords } = keepNamesTogether(records, nameRecords, zhOpts.bilingualHeadwords));
+      }
       if (zhOpts.frequency && zhOpts.frequency.size) {
         records = applyFrequency(records, zhOpts.frequency, zhOpts.twins);
         nameRecords = applyFrequency(nameRecords, zhOpts.frequency, zhOpts.twins);

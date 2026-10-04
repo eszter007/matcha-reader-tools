@@ -3,7 +3,7 @@
 Browser-based converters for the [Matcha Reader](https://github.com/eszter007/matcha-reader)
 e-reader firmware, a CrossPoint Reader fork with Japanese and Chinese learning features. Everything runs
 client-side: **no installs, no uploads**. Files never leave your device, except panel images sent
-to Gemini when you supply your own API key.
+to Gemini when you supply your own API key, and a book's text when you choose AI furigana or pinyin.
 
 **Four tools:**
 
@@ -12,7 +12,7 @@ to Gemini when you supply your own API key.
 | 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.pdf`, `.xtc` or `.xtch` |
 | 📚 **Dictionary Converter** | Japanese: Yomitan `.zip` (Jitendex, JMnedict, grammar), jmdict-simplified `.json`/`.json.tgz`, MDict `.mdx`. Chinese and Cantonese: CC-CEDICT / CC-Canto text, the MoE `dict-revised.json`, Yomitan, MDict, a `headword<TAB>definition` TSV, with optional frequency, level, example-sentence and jyutping lists | `dict/<name>.idx` + `.dat` + `.spx` for Japanese; `dictionaries/zh/` or `dictionaries/yue/` with `vocab.*`, `names.*` and `.title` files for Chinese |
 | 🔤 **Font Converter** | TTF / OTF (up to 4 styles + fallback font) | `.fonts/<Family>/<Family>_<size>.cpfont` (v4, with kerning + ligatures) |
-| 🈷 **Pinyin Ruby** | A Chinese EPUB + CC-CEDICT (+ optional frequency list) | The same EPUB with pinyin or zhuyin `<ruby>` over every dictionary word |
+| 🈷 **Furigana & Pinyin** | A Japanese EPUB, or a Chinese EPUB + CC-CEDICT (+ optional frequency list) | The same EPUB with furigana, or pinyin / zhuyin, as `<ruby>` over the text |
 
 Each tool downloads a zip already laid out for the SD card: unzip it onto the card, or upload the
 files via the reader's built-in Wi-Fi web file transfer.
@@ -141,15 +141,25 @@ Cantonese. Japanese keeps `dict/`.
 | **Cantonese readings** | `--jyutping` | `cccedict-canto-readings`: jyutping after the pinyin of every CC-CEDICT entry it covers. |
 | **Zhuyin** | `--zhuyin` | Bopomofo beside the pinyin. |
 | **Proper nouns to names** | `--split-names` | Capitalised CC-CEDICT entries (places, people, dynasties) go to `names.*` and show as Name entries; languages, nationalities, weekdays, months and festivals stay in the vocabulary. |
-| **Dictionary name** | `--title` | The footer label, `vocab.title`; default is the sources joined (`CC-CEDICT + MoE 國語辭典`). |
+| **Dictionary name** | `--title` | The footer label, `vocab.title`; default is the sources joined (`CC-CEDICT + MoE`). |
 
 The ready-made simplified and traditional packs on the firmware's `dictionaries-zh` release are
 built by the same converter with these inputs, so the page reproduces them from the raw files.
 
-**Pinyin Ruby** ports `tools/pinyin_ruby/add_pinyin_ruby.py`: longest-match segmentation
-against CC-CEDICT, one `<rt>` per character, the everyday reading of a word over a surname's,
-existing ruby, scripts, styles and the head left alone, and optionally the N commonest words
-of a frequency list left bare so only the words a learner needs are annotated.
+## Furigana & Pinyin
+
+Adds readings above the text of an EPUB, the way the reader shows a book's own ruby, with its
+Furigana or Pinyin / Zhuyin toggle to hide them. Existing ruby, scripts, styles and the head are
+left alone.
+
+| | Dictionary | AI (Gemini) |
+|---|---|---|
+| **Chinese** — `tools/pinyin_ruby/add_pinyin_ruby.py` | Longest-match segmentation against CC-CEDICT, one `<rt>` per character, the everyday reading of a word over a surname's. Nothing leaves the device. | `--ai`: Gemini reads each sentence and picks the reading meant there (石 *shí* or *dàn*); a reading is used only when CC-CEDICT lists it for that character. |
+| **Japanese** — `tools/furigana_ruby/add_furigana_ruby.py` | — Readings depend on context, so the firmware's tool has no dictionary mode, and neither does the page. | Gemini lists each word with its reading; a reading is used only when it is kana and fits the word as written, so okurigana stays bare. |
+
+The AI method sends the book's text to Google, sentence by sentence, under your own key (shared
+with the Manga page, kept in `localStorage`). Chinese can also leave the N commonest words of a
+frequency list bare, and write zhuyin instead of pinyin.
 
 ## Fidelity to the firmware's Python tools
 
@@ -159,7 +169,7 @@ Ports of the firmware's scripts, not reimplementations from the spec.
 |---|---|---|
 | Manga | `tools/manga_convert/convert_manga.py` | Byte-identical, given the same input pixels |
 | Dictionary | `tools/dict_convert/convert_jmdict.py` (Japanese, Chinese and Cantonese paths), `scripts/gen_dict_spx.py` | Byte-identical |
-| Pinyin Ruby | `tools/pinyin_ruby/add_pinyin_ruby.py` | Identical XHTML; the zip is stored rather than deflated |
+| Furigana & Pinyin | `tools/furigana_ruby/add_furigana_ruby.py`, `tools/pinyin_ruby/add_pinyin_ruby.py`, `tools/ruby_common/ruby_epub.py` | Identical XHTML for the same model answers; the zip is stored rather than deflated |
 | Fonts | `lib/EpdFont/scripts/fontconvert_sdcard.py` | Byte-identical except glyph bitmaps |
 
 Three places where pixels differ, each verified within ±2 px: AI detection (same

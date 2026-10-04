@@ -6,6 +6,9 @@
  *   - manga.html: convert a CBZ of the synthetic pages with OCR skipped and
  *     byte-compare panels.idx/panels.dat against the Python reference.
  *
+ *   - dictionary.html (Chinese, Cantonese) and ruby.html (furigana, pinyin; Gemini stubbed):
+ *     byte-compare against the firmware tools' output for the same inputs and model answers.
+ *
  * Prereqs: `python3 test/gen_references.py` has been run, and the reference
  * .cpfont exists (see test/README.md).
  */
@@ -611,6 +614,122 @@ async function testDict(page, base) {
   }
 }
 
+function zipMember(zipFile, member) {
+  return execFileSync("python3", ["-c", `
+import sys, zipfile
+sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))
+`, zipFile, member]).toString("utf-8");
+}
+
+async function testDictChinese(page, base) {
+  console.log("dictionary.html end-to-end (Chinese and Cantonese):");
+  const zh = (n) => path.join(FIXTURES, "zh", n);
+  if (!fs.existsSync(zh("cedict.u8")) || !fs.existsSync(path.join(FIXTURES, "ref_dict_zh"))) {
+    console.log("  skip (no zh fixtures — run test/gen_references.py)");
+    return;
+  }
+  // Every option at once, as the reference was built: CC-CEDICT + MoE merged, frequency, HSK,
+  // simplified examples, names split off, zhuyin.
+  await page.goto(`${base}/dictionary.html`);
+  await page.selectOption("#dict-lang", "zh");
+  await page.setInputFiles("#dict-file", [zh("cedict.u8"), zh("moe.json")]);
+  await page.setInputFiles("#dict-frequency", zh("freq.txt"));
+  await page.setInputFiles("#dict-levels", zh("hsk.csv"));
+  await page.fill("#dict-level-name", "HSK");
+  await page.setInputFiles("#dict-examples", zh("pairs.tsv"));
+  await page.selectOption("#dict-examples-script", "simplified");
+  await page.check("#dict-zhuyin");
+  await page.check("#dict-split-names");
+  let zipFile = await downloadFromPage(page, () => page.click("#dict-run"));
+  let dest = path.join(OUT, "dict_zh");
+  unzipTo(zipFile, dest);
+  for (const name of ["vocab", "names"]) {
+    for (const ext of ["idx", "dat", "spx", "title"]) {
+      const got = path.join(dest, "dictionaries", "zh", `${name}.${ext}`);
+      check(`zh ${name}.${ext} matches Python reference`,
+            fs.existsSync(got) && filesEqual(path.join(FIXTURES, "ref_dict_zh", `${name}.${ext}`), got));
+    }
+  }
+  // Cantonese: CC-Canto + CC-CEDICT with the readings file, into dictionaries/yue.
+  await page.goto(`${base}/dictionary.html`);
+  await page.selectOption("#dict-lang", "yue");
+  await page.setInputFiles("#dict-file", [zh("canto.u8"), zh("cedict.u8")]);
+  await page.setInputFiles("#dict-jyutping", zh("canto-readings.txt"));
+  await page.uncheck("#dict-split-names");
+  await page.uncheck("#dict-zhuyin");
+  zipFile = await downloadFromPage(page, () => page.click("#dict-run"));
+  dest = path.join(OUT, "dict_yue");
+  unzipTo(zipFile, dest);
+  for (const ext of ["idx", "dat", "spx", "title"]) {
+    const got = path.join(dest, "dictionaries", "yue", `vocab.${ext}`);
+    check(`yue vocab.${ext} matches Python reference`,
+          fs.existsSync(got) && filesEqual(path.join(FIXTURES, "ref_dict_yue", `vocab.${ext}`), got));
+  }
+}
+
+async function testRuby(page, base) {
+  console.log("ruby.html end-to-end (furigana and pinyin; Gemini stubbed with the references' answers):");
+  const zh = (n) => path.join(FIXTURES, "zh", n);
+  if (!fs.existsSync(zh("ai_zh.epub")) || !fs.existsSync(path.join(FIXTURES, "ref_ruby_ai"))) {
+    console.log("  skip (no ruby fixtures — run test/gen_references.py)");
+    return;
+  }
+  // Chinese from the dictionary: no network at all.
+  const calls = [];
+  await page.route("https://generativelanguage.googleapis.com/**", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    calls.push({ url: route.request().url(), headers: route.request().headers(), body });
+    const prompt = body.contents[0].parts[0].text;
+    const answers = JSON.parse(fs.readFileSync(prompt.includes("Japanese") ? zh("ai_ja_answers.json") : zh("ai_zh_answers.json"), "utf-8"));
+    const sentences = prompt.split("\n").map((l) => /^\d+\. (.*)$/.exec(l)).filter((m) => m).map((m) => m[1]);
+    await route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(sentences.map((t) => answers[t])) }] } }] }) });
+  });
+  try {
+    await page.goto(`${base}/ruby.html`);
+    await page.selectOption("#ruby-lang", "zh");
+    await page.selectOption("#ruby-method", "dict");
+    await page.setInputFiles("#ruby-epub", zh("book.epub"));
+    await page.setInputFiles("#ruby-cedict", zh("cedict.u8"));
+    await page.setInputFiles("#ruby-frequency", zh("freq.txt"));
+    await page.fill("#ruby-skip-top", "2");
+    await page.uncheck("#ruby-zhuyin");
+    let out = await downloadFromPage(page, () => page.click("#ruby-run"));
+    check("pinyin from the dictionary matches add_pinyin_ruby.py",
+          zipMember(out, "c1.xhtml") === zipMember(path.join(FIXTURES, "ref_pinyin", "book-pinyin.epub"), "c1.xhtml"));
+    check("the dictionary method calls nothing", calls.length === 0, `${calls.length} request(s)`);
+
+    // Chinese with AI.
+    await page.goto(`${base}/ruby.html`);
+    await page.selectOption("#ruby-lang", "zh");
+    await page.selectOption("#ruby-method", "ai");
+    await page.fill("#ruby-key", "stub-key-not-a-real-credential");
+    await page.setInputFiles("#ruby-epub", zh("ai_zh.epub"));
+    await page.setInputFiles("#ruby-cedict", zh("cedict.u8"));
+    await page.fill("#ruby-skip-top", "0");
+    out = await downloadFromPage(page, () => page.click("#ruby-run"));
+    check("pinyin with AI matches add_pinyin_ruby.py --ai",
+          zipMember(out, "c1.xhtml") === fs.readFileSync(path.join(FIXTURES, "ref_ruby_ai", "zh-pinyin.xhtml"), "utf-8"));
+    check("the key goes in the header, not the URL", calls.length > 0
+          && calls.every((c) => c.headers["x-goog-api-key"] === "stub-key-not-a-real-credential" && !c.url.includes("stub-key")));
+    check("deterministic answers asked for", calls.every((c) => c.body.generationConfig.temperature === 0));
+
+    // Japanese: AI only, the dictionary method cannot be picked.
+    await page.goto(`${base}/ruby.html`);
+    await page.selectOption("#ruby-lang", "ja");
+    check("Japanese offers no dictionary method",
+          await page.$eval('#ruby-method option[value="dict"]', (o) => o.disabled)
+          && (await page.$eval("#ruby-method", (s) => s.value)) === "ai");
+    await page.setInputFiles("#ruby-epub", zh("ai_ja.epub"));
+    out = await downloadFromPage(page, () => page.click("#ruby-run"));
+    check("furigana matches add_furigana_ruby.py --ai",
+          zipMember(out, "c1.xhtml") === fs.readFileSync(path.join(FIXTURES, "ref_ruby_ai", "ja.xhtml"), "utf-8"));
+    check("output named for what it carries", path.basename(out) === "ai_ja-furigana.epub", path.basename(out));
+  } finally {
+    await page.unroute("https://generativelanguage.googleapis.com/**");
+  }
+}
+
 (async () => {
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
@@ -639,6 +758,8 @@ async function testDict(page, base) {
     await testMangaNoOffscreenCanvas(browser, base);
     await testDict(page, base);
     await testDictMdx(page, base);
+    await testDictChinese(page, base);
+    await testRuby(page, base);
     await testFonts(page, base);
   } finally {
     await browser.close();
