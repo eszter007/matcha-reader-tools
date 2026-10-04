@@ -436,7 +436,7 @@ async function testMangaGeminiOcr(page, base) {
     check("Gemini was called", requests.length > 0, `got ${requests.length}`);
     const r = requests[0] || { url: "", headers: {}, body: {} };
     check("calls generateContent for the chosen model",
-          r.url.endsWith("/v1beta/models/gemini-3.6-flash:generateContent"), r.url);
+          r.url.endsWith("/v1beta/models/gemini-3.8-flash:generateContent"), r.url);
     check("sends the key as the x-goog-api-key header (not in the URL)",
           r.headers["x-goog-api-key"] === KEY && !r.url.includes(KEY));
     check("asks for a JSON response",
@@ -712,7 +712,18 @@ async function testRuby(page, base) {
           zipMember(out, "c1.xhtml") === fs.readFileSync(path.join(FIXTURES, "ref_ruby_ai", "zh-pinyin.xhtml"), "utf-8"));
     check("the key goes in the header, not the URL", calls.length > 0
           && calls.every((c) => c.headers["x-goog-api-key"] === "stub-key-not-a-real-credential" && !c.url.includes("stub-key")));
-    check("deterministic answers asked for", calls.every((c) => c.body.generationConfig.temperature === 0));
+    check("no sampling parameters (Gemini 3.8 drops them)",
+          calls.every((c) => !("temperature" in c.body.generationConfig) && !("topP" in c.body.generationConfig)));
+    check("the default model is asked", calls.every((c) => c.url.includes("/models/gemini-3.8-flash:generateContent")));
+
+    // A saved former default is upgraded on the next visit; a model typed in on purpose is kept.
+    await page.evaluate(() => localStorage.setItem("matcha-tools/gemini-model", "gemini-3.6-flash"));
+    await page.goto(`${base}/ruby.html`);
+    check("a saved former default becomes the current one", (await page.inputValue("#ruby-model")) === "gemini-3.8-flash");
+    await page.evaluate(() => localStorage.setItem("matcha-tools/gemini-model", "my-own-model"));
+    await page.goto(`${base}/manga.html`);
+    check("a model chosen on purpose is kept", (await page.inputValue("#manga-model")) === "my-own-model");
+    await page.evaluate(() => localStorage.removeItem("matcha-tools/gemini-model"));
 
     // Japanese: AI only, the dictionary method cannot be picked.
     await page.goto(`${base}/ruby.html`);

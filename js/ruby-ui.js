@@ -122,7 +122,7 @@ function finish(result, epubFile, suffix, extra) {
 if (typeof document !== "undefined" && document.getElementById("ruby-run")) {
   $("ruby-run").addEventListener("click", runRuby);
   $("ruby-key").value = loadSetting("gemini-key", "");
-  $("ruby-model").value = loadSetting("gemini-model", RUBY_GEMINI_MODEL);
+  $("ruby-model").value = loadGeminiModel(RUBY_GEMINI_MODEL);
   const lang = loadSetting("ruby-lang", "ja");
   if (lang === "ja" || lang === "zh") $("ruby-lang").value = lang;
   const method = loadSetting("ruby-method", "dict");

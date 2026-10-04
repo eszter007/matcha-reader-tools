@@ -104,6 +104,15 @@ function loadSetting(key, fallback) {
   } catch (e) { return fallback; }
 }
 
+/* The Gemini model to show: the saved choice, unless it is a default this site shipped before.
+ * The pages save the model on every run, so without this a returning user would stay on an old
+ * default forever, including ones Google has since shut down. A model typed in on purpose is kept. */
+const FORMER_GEMINI_DEFAULTS = ["gemini-2.5-flash", "gemini-3.6-flash"];
+function loadGeminiModel(currentDefault) {
+  const saved = loadSetting("gemini-model", currentDefault);
+  return FORMER_GEMINI_DEFAULTS.includes(saved) ? currentDefault : saved;
+}
+
 function saveSetting(key, value) {
   try { localStorage.setItem("matcha-tools/" + key, value); } catch (e) { /* private mode */ }
 }

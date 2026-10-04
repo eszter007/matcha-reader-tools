@@ -5,7 +5,7 @@
  * every function here works on code-point arrays for the same reason. */
 "use strict";
 
-const RUBY_GEMINI_MODEL = "gemini-3.6-flash";
+const RUBY_GEMINI_MODEL = "gemini-3.8-flash";
 
 // Text that must not be touched: tags, existing ruby, scripts/styles, and the <head>.
 const RUBY_SKIP_BLOCK = /(<(ruby|rt|rp|script|style|head|title)\b[\s\S]*?<\/\2\s*>)/i;
@@ -78,9 +78,11 @@ function numberedPassages(passages) {
 
 /* The model's JSON answer to prompt, parsed, or null after the retries. */
 async function geminiJson(prompt, apiKey, model = RUBY_GEMINI_MODEL, retries = 3, onWarn = null) {
+  // No temperature: Gemini 3.8 drops the sampling parameters, and a reading is checked against
+  // the word anyway, so a varied answer cannot put a wrong one into the book.
   const payload = {
     contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { responseMimeType: "application/json", temperature: 0 },
+    generationConfig: { responseMimeType: "application/json" },
   };
   for (let attempt = 0; attempt < retries; attempt++) {
     let response;

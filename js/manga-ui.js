@@ -3,7 +3,7 @@
  * input, image decoding, Gemini OCR calls, and the output zip. */
 "use strict";
 
-const GEMINI_DEFAULT_MODEL = "gemini-3.6-flash";
+const GEMINI_DEFAULT_MODEL = "gemini-3.8-flash";
 
 /* Book types, mirroring the flags convert_manga.py takes. The type decides panel
  * reading order, whether printed margins are trimmed, and whether the page is a
@@ -1395,7 +1395,7 @@ async function runMangaConversion() {
 
 if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-key").value = loadSetting("gemini-key", "");
-  $("manga-model").value = loadSetting("gemini-model", GEMINI_DEFAULT_MODEL);
+  $("manga-model").value = loadGeminiModel(GEMINI_DEFAULT_MODEL);
   $("manga-yolo").checked = loadSetting("manga-yolo", "1") === "1";
   $("manga-mono").checked = loadSetting("manga-mono", "0") === "1";
   $("manga-panels-only").checked = loadSetting("manga-panels-only", "0") === "1";
