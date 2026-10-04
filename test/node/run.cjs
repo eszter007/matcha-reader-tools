@@ -16,6 +16,15 @@ global.compareBytes = binary.compareBytes;
 global.bytesEqual = binary.bytesEqual;
 const zip = require("../../js/zip.js");
 const dict = require("../../js/dict.js");
+const zh = require("../../js/dict-zh.js");
+// pinyin-ruby.js uses dict-zh.js's globals the way the page does.
+global.CEDICT_LINE_RE = zh.CEDICT_LINE_RE;
+global.isProperNounPinyin = zh.isProperNounPinyin;
+global.pinyinSyllableToMarks = zh.pinyinSyllableToMarks;
+global.pinyinSyllableToZhuyin = zh.pinyinSyllableToZhuyin;
+global.ZipReader = zip.ZipReader;
+global.ZipWriter = zip.ZipWriter;
+const ruby = require("../../js/pinyin-ruby.js");
 const manga = require("../../js/manga-core.js");
 const epub = require("../../js/manga-epub.js");
 
@@ -827,6 +836,142 @@ async function testMangaYolo() {
   }
 }
 
+/* ── Dictionary, Chinese: vs convert_jmdict.py --lang zh / yue ──── */
+
+const ZH = path.join(FIXTURES, "zh");
+function zhText(name) { return fs.readFileSync(path.join(ZH, name), "utf-8"); }
+
+/* The page's Chinese pipeline, as dict-ui.js runs it, on a list of fixture inputs. */
+function convertChineseFixture(inputs, opts = {}) {
+  const lang = opts.lang || "zh";
+  const twins = new Map();
+  const zhOpts = {
+    zhuyin: !!opts.zhuyin, splitNames: !!opts.splitNames, twins,
+    levels: opts.levels ? zh.loadLevels(zhText(opts.levels), opts.levelName || "HSK") : new Map(),
+    jyutping: opts.jyutping ? zh.loadCantoReadings(zhText(opts.jyutping)) : new Map(),
+    sentencePairs: opts.examples ? zh.loadSentencePairs(zhText(opts.examples), opts.examplesScript || "any") : null,
+    examplesScript: opts.examplesScript || "any",
+  };
+  let records = [];
+  let names = [];
+  const titles = [];
+  for (const input of inputs) {
+    const fmt = zh.detectDictFormat(input, lang);
+    let title = zh.DEFAULT_DICT_TITLES[fmt] || "";
+    if (fmt === "cedict") {
+      const r = zh.convertCedict(zhText(input), zhOpts);
+      records = records.concat(r.records);
+      names = names.concat(r.names);
+      if (input.toLowerCase().includes("canto")) title = "CC-Canto";
+    } else if (fmt === "moedict") {
+      records = records.concat(zh.convertMoedict(JSON.parse(zhText(input))).records);
+    } else if (fmt === "tsv") {
+      records = records.concat(zh.convertTsv(zhText(input)).records);
+      title = input.replace(/\.[^.]+$/, "");
+    } else {
+      throw new Error(`fixture format ${fmt} not handled here`);
+    }
+    if (title) titles.push(title);
+  }
+  if (opts.frequency) {
+    const { priorities } = zh.loadFrequency(zhText(opts.frequency), opts.frequencyKind || "auto");
+    records = zh.applyFrequency(records, priorities, twins);
+    names = zh.applyFrequency(names, priorities, twins);
+  }
+  return { records, names, title: opts.title || zh.joinDictTitles(titles) };
+}
+
+function compareDictDir(label, refDir, name, records, title) {
+  const { idx, dat } = dict.dictWriteBinary(records);
+  compareFile(`${label} ${name}.idx`, idx, path.join(refDir, `${name}.idx`));
+  compareFile(`${label} ${name}.dat`, dat, path.join(refDir, `${name}.dat`));
+  compareFile(`${label} ${name}.spx`, dict.dictGenSpx(idx), path.join(refDir, `${name}.spx`));
+  const titleBytes = zh.encodeDictTitle(title);
+  const refTitle = path.join(refDir, `${name}.title`);
+  if (fs.existsSync(refTitle)) {
+    if (titleBytes) compareFile(`${label} ${name}.title`, titleBytes, refTitle);
+    else check(`${label} ${name}.title`, false, "reference has a title, JS wrote none");
+  } else {
+    check(`${label} ${name}.title absent`, titleBytes === null, "JS wrote a title the reference lacks");
+  }
+}
+
+async function testDictChinese() {
+  console.log("dictionary converter, Chinese and Cantonese (vs convert_jmdict.py --lang zh/yue):");
+  if (!fs.existsSync(path.join(ZH, "cedict.u8")) || !fs.existsSync(path.join(FIXTURES, "ref_dict_zh"))) {
+    console.log("  skip (no zh fixtures — run test/gen_references.py)");
+    return;
+  }
+  // Everything at once: CC-CEDICT + MoE merged, ranked by a jieba-style list (with its stray
+  // traditional 說 3), HSK tags, simplified-only examples, names split off, zhuyin.
+  let r = convertChineseFixture(["cedict.u8", "moe.json"], {
+    frequency: "freq.txt", levels: "hsk.csv", levelName: "HSK", examples: "pairs.tsv",
+    examplesScript: "simplified", splitNames: true, zhuyin: true,
+  });
+  compareDictDir("zh", path.join(FIXTURES, "ref_dict_zh"), "vocab", r.records, r.title);
+  compareDictDir("zh", path.join(FIXTURES, "ref_dict_zh"), "names", r.names, "CC-CEDICT names");
+
+  // A graded list as the frequency source (row order, never its level column), TOCFL tags with
+  // the Novice band and 你/妳 variants, traditional-only examples.
+  r = convertChineseFixture(["cedict.u8"], {
+    levels: "tocfl.csv", levelName: "TOCFL", frequency: "hsk.csv", examples: "pairs.tsv", examplesScript: "traditional",
+  });
+  compareDictDir("zh tocfl", path.join(FIXTURES, "ref_dict_zh_tocfl"), "vocab", r.records, r.title);
+
+  // Cantonese: CC-Canto's own jyutping, plus the readings file for the CC-CEDICT part.
+  r = convertChineseFixture(["canto.u8", "cedict.u8"], { lang: "yue", jyutping: "canto-readings.txt" });
+  compareDictDir("yue", path.join(FIXTURES, "ref_dict_yue"), "vocab", r.records, r.title);
+
+  // A grammar TSV into the grammar slot.
+  r = convertChineseFixture(["grammar.tsv"]);
+  compareDictDir("zh grammar", path.join(FIXTURES, "ref_dict_zh_grammar"), "grammar", r.records, r.title);
+
+  // A title too long for the device's field is cut on a character boundary.
+  r = convertChineseFixture(["cedict.u8"], { title: "一個非常非常非常長的詞典名字會被切短" });
+  compareDictDir("zh title", path.join(FIXTURES, "ref_dict_zh_title"), "vocab", r.records, r.title);
+
+  // A Yomitan dictionary converted as Chinese: no reading records.
+  const zr = new zip.ZipReader(new Uint8Array(fs.readFileSync(path.join(FIXTURES, "yomitan.zip"))));
+  const banks = [];
+  for (const e of zr.entries.filter((e) => /^term_bank_\d+\.json$/.test(e.name)).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    banks.push(JSON.parse(new TextDecoder().decode(await zr.readEntry(e))));
+  }
+  const yomi = dict.convertYomitanRecords(banks, null, /*readingRecords=*/false);
+  const meta = JSON.parse(new TextDecoder().decode(await zr.readEntry(zr.findEntry("index.json"))));
+  compareDictDir("zh yomitan", path.join(FIXTURES, "ref_dict_zh_yomitan"), "vocab", yomi.records, zh.joinDictTitles([meta.title]));
+
+  // Pure functions the pipeline leans on.
+  check("pinyin marks", zh.pinyinToMarks("ni3 hao3 lu:4 ma5 xiu1 gui4") === "nǐ hǎo lǜ ma xiū guì");
+  check("zhuyin", zh.pinyinToZhuyin("ni3 hao3 lu:4 ma5 zhi1 xue2 yuan2") === "ㄋㄧˇ ㄏㄠˇ ㄌㄩˋ ˙ㄇㄚ ㄓ ㄒㄩㄝˊ ㄩㄢˊ");
+  check("rank to priority", zh.rankToPriority(1) === 255 && zh.rankToPriority(10) === 227 && zh.rankToPriority(1000) === 171 && zh.rankToPriority(100000) === 115);
+  check("common nouns stay vocabulary", !zh.isProperNounPinyin("Xing1 qi1 liu4", ["Saturday"]) && zh.isProperNounPinyin("Bei3 jing1", ["Beijing"]));
+  check("script of a sentence", zh.sentenceScript("我不是中國人") === "traditional" && zh.sentenceScript("人山人海") === "any");
+}
+
+async function testPinyinRuby() {
+  console.log("pinyin ruby (vs add_pinyin_ruby.py):");
+  const refDir = path.join(FIXTURES, "ref_pinyin");
+  if (!fs.existsSync(path.join(ZH, "book.epub")) || !fs.existsSync(refDir)) {
+    console.log("  skip (no pinyin fixtures — run test/gen_references.py)");
+    return;
+  }
+  const words = ruby.loadCedictReadings(zhText("cedict.u8"));
+  const input = new zip.ZipReader(new Uint8Array(fs.readFileSync(path.join(ZH, "book.epub"))));
+  const doc = new TextDecoder().decode(await input.readEntry(input.findEntry("c1.xhtml")));
+  for (const [refName, skipTop, zhuyin] of [["book-pinyin.epub", 2, false], ["book-zhuyin.epub", 0, true]]) {
+    const skip = skipTop ? ruby.topWords(zh.loadFrequency(zhText("freq.txt")).priorities, skipTop) : new Set();
+    const got = ruby.annotateXhtml(doc, words, skip, zhuyin);
+    const ref = new zip.ZipReader(new Uint8Array(fs.readFileSync(path.join(refDir, refName))));
+    const want = new TextDecoder().decode(await ref.readEntry(ref.findEntry("c1.xhtml")));
+    check(`${refName} c1.xhtml`, got === want, got === want ? "" : `\n    got  ${got}\n    want ${want}`);
+    // The whole EPUB round-trips with every member and the mimetype first.
+    const out = await ruby.annotateEpub(new Uint8Array(fs.readFileSync(path.join(ZH, "book.epub"))), words, skip, zhuyin);
+    const outZip = new zip.ZipReader(new Uint8Array(await out.blob.arrayBuffer()));
+    check(`${refName} members`, outZip.entries.map((e) => e.name).join(",") === input.entries.map((e) => e.name).join(","));
+    check(`${refName} annotated count`, out.annotated === 1, `${out.annotated}`);
+  }
+}
+
 /* ── Dictionary: vs convert_jmdict.py + gen_dict_spx.py ───────── */
 
 async function testDictYomitan() {
@@ -1101,6 +1246,8 @@ function testXtc() {
   testDictJmdict();
   await testDictMdx();
   testDictPos();
+  await testDictChinese();
+  await testPinyinRuby();
   await testZipRoundTrip();
   if (failures) {
     console.error(`\n${failures} failure(s)`);

@@ -1,17 +1,18 @@
 # 🍵 Matcha Reader Tools
 
 Browser-based converters for the [Matcha Reader](https://github.com/eszter007/matcha-reader)
-e-reader firmware, a CrossPoint Reader fork with Japanese learning features. Everything runs
+e-reader firmware, a CrossPoint Reader fork with Japanese and Chinese learning features. Everything runs
 client-side: **no installs, no uploads**. Files never leave your device, except panel images sent
 to Gemini when you supply your own API key.
 
-**Three tools:**
+**Four tools:**
 
 | Tool | Input | Output |
 |---|---|---|
 | 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.pdf`, `.xtc` or `.xtch` |
-| 📚 **Dictionary Converter** | Yomitan `.zip` (Jitendex, JMnedict, grammar) or jmdict-simplified `.json`/`.json.tgz` | `dict/<name>.idx` + `.dat` + `.spx` lookup accelerator |
+| 📚 **Dictionary Converter** | Japanese: Yomitan `.zip` (Jitendex, JMnedict, grammar), jmdict-simplified `.json`/`.json.tgz`, MDict `.mdx`. Chinese and Cantonese: CC-CEDICT / CC-Canto text, the MoE `dict-revised.json`, Yomitan, MDict, a `headword<TAB>definition` TSV, with optional frequency, level, example-sentence and jyutping lists | `dict/<name>.idx` + `.dat` + `.spx` for Japanese; `dictionaries/zh/` or `dictionaries/yue/` with `vocab.*`, `names.*` and `.title` files for Chinese |
 | 🔤 **Font Converter** | TTF / OTF (up to 4 styles + fallback font) | `.fonts/<Family>/<Family>_<size>.cpfont` (v4, with kerning + ligatures) |
+| 🈷 **Pinyin Ruby** | A Chinese EPUB + CC-CEDICT (+ optional frequency list) | The same EPUB with pinyin or zhuyin `<ruby>` over every dictionary word |
 
 Each tool downloads a zip already laid out for the SD card: unzip it onto the card, or upload the
 files via the reader's built-in Wi-Fi web file transfer.
@@ -124,6 +125,32 @@ grayscale; XTCH needs a page height divisible by 8. All are browser-only, as is 
 Panel crops go in a `panels/` subfolder so the device does not walk a crop per panel when opening
 the book. The older flat layout still works; re-convert for the faster open.
 
+## Chinese dictionaries
+
+The Dictionary page's **Language** choice decides the input formats, the extra lists it takes and
+the folder the zip lays out: `dictionaries/zh/` for Chinese (one folder serves simplified and
+traditional books alike, both forms of every word are indexed), `dictionaries/yue/` for
+Cantonese. Japanese keeps `dict/`.
+
+| Control | Desktop flag | Effect |
+|---|---|---|
+| **Dictionary file(s)** | `--input` (repeatable) | CC-CEDICT `.u8`/`.txt`/`.gz`, CC-Canto, `dict-revised.json` (unpack the `.xz` first; the browser has no xz), Yomitan `.zip`, MDict `.mdx`, `.tsv`. Several files merge; a word in two shows both entries, CC-CEDICT first. |
+| **Word frequency list** | `--frequency`, `--frequency-kind` | jieba `dict.txt` / `dict.txt.big`, BCC, SUBTLEX, or any one-word-per-row list. Ranks the entries so the common sense shows first and the device's page segmentation prefers common words; a word missing from the list takes its other-script form's rank. |
+| **Graded word list** + label | `--levels`, `--level-name` | `hsk30.csv` or `tocfl-202307.csv` from the ivankra repos: each entry gets a `[HSK 3]`-style tag on its grammar line. Variant cells (`你/妳`, `爸爸\|爸`) count for every form. |
+| **Example sentences** + script | `--examples`, `--examples-script` | A Tatoeba sentence-pairs export or a `sentence<TAB>translation` file; entries of two or more characters get up to two short examples, in the chosen script only. |
+| **Cantonese readings** | `--jyutping` | `cccedict-canto-readings`: jyutping after the pinyin of every CC-CEDICT entry it covers. |
+| **Zhuyin** | `--zhuyin` | Bopomofo beside the pinyin. |
+| **Proper nouns to names** | `--split-names` | Capitalised CC-CEDICT entries (places, people, dynasties) go to `names.*` and show as Name entries; languages, nationalities, weekdays, months and festivals stay in the vocabulary. |
+| **Dictionary name** | `--title` | The footer label, `vocab.title`; default is the sources joined (`CC-CEDICT + MoE 國語辭典`). |
+
+The ready-made simplified and traditional packs on the firmware's `dictionaries-zh` release are
+built by the same converter with these inputs, so the page reproduces them from the raw files.
+
+**Pinyin Ruby** ports `tools/pinyin_ruby/add_pinyin_ruby.py`: longest-match segmentation
+against CC-CEDICT, one `<rt>` per character, the everyday reading of a word over a surname's,
+existing ruby, scripts, styles and the head left alone, and optionally the N commonest words
+of a frequency list left bare so only the words a learner needs are annotated.
+
 ## Fidelity to the firmware's Python tools
 
 Ports of the firmware's scripts, not reimplementations from the spec.
@@ -131,7 +158,8 @@ Ports of the firmware's scripts, not reimplementations from the spec.
 | Tool | Ports | Output |
 |---|---|---|
 | Manga | `tools/manga_convert/convert_manga.py` | Byte-identical, given the same input pixels |
-| Dictionary | `tools/dict_convert/convert_jmdict.py`, `scripts/gen_dict_spx.py` | Byte-identical |
+| Dictionary | `tools/dict_convert/convert_jmdict.py` (Japanese, Chinese and Cantonese paths), `scripts/gen_dict_spx.py` | Byte-identical |
+| Pinyin Ruby | `tools/pinyin_ruby/add_pinyin_ruby.py` | Identical XHTML; the zip is stored rather than deflated |
 | Fonts | `lib/EpdFont/scripts/fontconvert_sdcard.py` | Byte-identical except glyph bitmaps |
 
 Three places where pixels differ, each verified within ±2 px: AI detection (same

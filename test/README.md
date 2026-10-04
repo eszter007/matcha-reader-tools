@@ -84,7 +84,8 @@ filenames — export `LANG=C.UTF-8` if you hit that.
 panel detection and reading-order sort, the manga binary formats
 (`panels.idx`/`panels.dat`/`meta.bin`/`toc.idx`), XTC/XTCH encoding decoded back the way
 the firmware's reader does, 1-bit BMP output, device downscaling, EPUB assembly, the
-dictionary converters and their POS flags, and the zip writer.
+dictionary converters and their POS flags (Japanese, Chinese and Cantonese), pinyin ruby, and
+the zip writer.
 
 **`test/browser/e2e.mjs`** — the actual pages in Chromium, end to end: a file goes into
 the picker, the download that comes out is unzipped and compared. Covers `manga.html`
@@ -105,6 +106,8 @@ and the no-`OffscreenCanvas` fallback older Safari takes), `dictionary.html`
 | `manga_fullbleed.cbz` | synthetic | panels-only on borderless pages |
 | `manga_foldered.cbz` | synthetic | page order through chapter subfolders |
 | `ref_manga*/`, `ref_dict_*/` | `convert_manga.py`, `convert_jmdict.py` | byte comparison |
+| `zh/`, `ref_dict_zh*/`, `ref_dict_yue/` | synthetic, `convert_jmdict.py --lang zh/yue` | the Chinese paths, every option at once |
+| `zh/book.epub`, `ref_pinyin/` | synthetic, `add_pinyin_ruby.py` | pinyin ruby, XHTML comparison |
 | `ref_yolo/boxes.json` | the shipped ONNX model | panel boxes, ±2px |
 | `ref_font/` | the firmware's `fontconvert_sdcard.py` | `.cpfont` structure |
 

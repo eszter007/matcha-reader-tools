@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pinyin Ruby — Matcha Reader Tools</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍵</text></svg>">
+</head>
+<body>
+<header>
+  <div class="inner">
+    <h1><a href="./">🍵 Matcha Reader Tools</a></h1>
+    <nav>
+      <a href="manga.html">Manga</a>
+      <a href="dictionary.html">Dictionary</a>
+      <a href="fonts.html">Fonts</a>
+      <a href="pinyin.html" class="active">Pinyin</a>
+    </nav>
+  </div>
+</header>
+<main>
+  <h2>🈷 Pinyin Ruby</h2>
+  <p class="lede">Adds pinyin (or zhuyin) above the text of a Chinese EPUB, the way Japanese books
+  carry furigana. The reader shows it from the book itself and its Furigana toggle hides it.
+  Every run of characters is split into CC-CEDICT words by longest match, and each character gets
+  its syllable.</p>
+
+  <div class="card">
+    <h3>1. The book and the dictionary</h3>
+    <label for="pinyin-epub">EPUB</label>
+    <input type="file" id="pinyin-epub" accept=".epub">
+    <label for="pinyin-cedict">CC-CEDICT <span class="hint">— <a href="https://www.mdbg.net/chinese/dictionary?page=cc-cedict" target="_blank" rel="noopener">cedict_1_0_ts_utf-8_mdbg.txt</a>, plain or .gz; it supplies the readings</span></label>
+    <input type="file" id="pinyin-cedict" accept=".txt,.u8,.gz">
+  </div>
+
+  <div class="card">
+    <h3>2. Options</h3>
+    <label><input type="checkbox" id="pinyin-zhuyin"> Zhuyin (bopomofo) instead of pinyin</label>
+    <div class="row">
+      <div>
+        <label for="pinyin-frequency">Word frequency list <span class="hint">— optional, e.g. jieba's dict.txt; needed for the skip below</span></label>
+        <input type="file" id="pinyin-frequency" accept=".txt,.tsv,.csv,.big,.gz">
+      </div>
+      <div>
+        <label for="pinyin-skip-top">Leave the commonest words bare <span class="hint">— how many, by the list; 0 annotates everything</span></label>
+        <input type="number" id="pinyin-skip-top" value="0" min="0" step="100">
+      </div>
+    </div>
+  </div>
+
+  <button class="primary" id="pinyin-run">Annotate</button>
+
+  <div id="progress" hidden><div id="progress-bar"></div><div id="progress-text"></div></div>
+  <div id="log" hidden></div>
+
+  <div class="card">
+    <h3>Reading it</h3>
+    <p>Copy the annotated EPUB to the card like any other book. The readings appear as ruby above
+    each word; <strong>Reader Settings → Furigana</strong> switches them off and on per book.
+    Existing ruby, scripts, styles and the document head are left untouched.</p>
+  </div>
+</main>
+<footer>
+  Output matches <code>tools/pinyin_ruby/add_pinyin_ruby.py</code> from the
+  <a href="https://github.com/eszter007/matcha-reader">matcha-reader</a> firmware.
+  <p class="legal"><a href="legal.html">Imprint</a> · <a href="legal.html#privacy">Privacy Policy</a></p>
+</footer>
+<script src="js/binary.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/common.js"></script>
+<script src="js/dict-zh.js"></script>
+<script src="js/pinyin-ruby.js"></script>
+<script>
+"use strict";
+async function runPinyin() {
+  const epubFile = document.getElementById("pinyin-epub").files[0];
+  const cedictFile = document.getElementById("pinyin-cedict").files[0];
+  if (!epubFile || !cedictFile) {
+    logLine("Choose the EPUB and the CC-CEDICT file first.", "warn");
+    return;
+  }
+  const button = document.getElementById("pinyin-run");
+  button.disabled = true;
+  clearLog();
+  const wakeLock = new WakeLock();
+  await wakeLock.acquire();
+  try {
+    const readText = async (file) => {
+      let bytes = await readFileBytes(file);
+      if (file.name.toLowerCase().endsWith(".gz")) bytes = await gunzip(bytes);
+      return new TextDecoder("utf-8").decode(bytes);
+    };
+    setProgress(0, 1, "Reading CC-CEDICT…");
+    await sleep(0);
+    const words = loadCedictReadings(await readText(cedictFile));
+    logLine(`CC-CEDICT: ${words.size.toLocaleString()} headwords`);
+    let skip = new Set();
+    const skipTop = parseInt(document.getElementById("pinyin-skip-top").value, 10) || 0;
+    if (skipTop > 0) {
+      const freqFile = document.getElementById("pinyin-frequency").files[0];
+      if (!freqFile) throw new Error("Leaving the commonest words bare needs a frequency list.");
+      const f = loadFrequency(await readText(freqFile));
+      skip = topWords(f.priorities, skipTop);
+      logLine(`Skipping the ${skip.size.toLocaleString()} commonest words`);
+    }
+    const zhuyin = document.getElementById("pinyin-zhuyin").checked;
+    const result = await annotateEpub(await readFileBytes(epubFile), words, skip, zhuyin,
+                                      (done, total) => setProgress(done, total, `Annotating: ${done}/${total}`));
+    const outName = epubFile.name.replace(/\.epub$/i, "") + (zhuyin ? "-zhuyin.epub" : "-pinyin.epub");
+    logLine(`Done — ${result.annotated} document(s) annotated, ${formatBytes(result.blob.size)}.`);
+    downloadBlob(result.blob, outName);
+    setProgress(1, 1, "Complete");
+  } catch (e) {
+    logLine("Error: " + e.message, "error");
+    console.error(e);
+  } finally {
+    button.disabled = false;
+    wakeLock.release();
+  }
+}
+document.getElementById("pinyin-run").addEventListener("click", runPinyin);
+</script>
+</body>
+</html>

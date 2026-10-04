@@ -4,7 +4,8 @@
  * This is a line-faithful port of matcha-reader's
  * tools/dict_convert/convert_jmdict.py and scripts/gen_dict_spx.py: the
  * .idx/.dat/.spx bytes produced here match the Python tool's output for the
- * same input. MDict (.mdx) input is not supported in the web tool.
+ * same input. The Chinese formats (CC-CEDICT, MoE, TSV, word lists) live in
+ * dict-zh.js; MDict in mdx.js.
  */
 "use strict";
 
@@ -74,31 +75,25 @@ function dictWriteBinary(records) {
   const idx = new ByteWriter(records.length * RECORD_SIZE + 16);
 
   let datOffset = 0;
-  let prevDef = null;
-  let prevOffset = 0;
-  let prevLength = 0;
+  // One copy per distinct definition, wherever its records sort (Python: a dict keyed by the
+  // definition bytes): a Chinese entry is indexed under its traditional and simplified form,
+  // which sort far apart, and a Japanese one under kanji and kana.
+  const stored = new Map();
+  const keyDecoder = new TextDecoder("latin1");  // a byte-for-byte string key
   const entries = [];
 
   for (const rec of records) {
     let defBytes = rec.def;
-    let offset, length;
-    if (prevDef !== null && bytesEqual(defBytes, prevDef)) {
-      offset = prevOffset;
-      length = prevLength;
-    } else {
-      offset = datOffset;
-      length = defBytes.length;
-      if (length > 0xffff) {
-        length = 0xffff;
-        defBytes = defBytes.subarray(0, 0xffff);
-      }
+    if (defBytes.length > 0xffff) defBytes = defBytes.subarray(0, 0xffff);
+    const key = keyDecoder.decode(defBytes);
+    let hit = stored.get(key);
+    if (hit === undefined) {
+      hit = { offset: datOffset, length: defBytes.length };
       dat.bytes(defBytes);
       datOffset += defBytes.length;
-      prevDef = defBytes;
-      prevOffset = offset;
-      prevLength = length;
+      stored.set(key, hit);
     }
-    entries.push({ hw: rec.hw, offset, length, priority: rec.priority, posFlags: rec.posFlags || 0 });
+    entries.push({ hw: rec.hw, offset: hit.offset, length: hit.length, priority: rec.priority, posFlags: rec.posFlags || 0 });
   }
 
   for (const e of entries) {
@@ -341,8 +336,9 @@ function yomitanPriority(score) {
 }
 
 /* termBanks: array of parsed term_bank JSON arrays, in lexicographic
- * filename order. Returns {records, entryCount}. */
-function convertYomitanRecords(termBanks, onProgress) {
+ * filename order. Returns {records, entryCount}. readingRecords=false skips the extra record
+ * per reading: Chinese dictionaries carry pinyin there, which no page text ever matches. */
+function convertYomitanRecords(termBanks, onProgress, readingRecords = true) {
   // Pass 1: collect entries; canonical headword → best definition for
   // non-redirect entries so variant/redirect entries can be resolved.
   const allEntries = [];
@@ -396,16 +392,16 @@ function convertYomitanRecords(termBanks, onProgress) {
     const hwBytes = dictEncoder.encode(headword);
     if (hwBytes.length < HEADWORD_SIZE) {
       seen.add(headword);
-      records.push({ hw: hwBytes, def: defBytes, priority, posFlags });
+      records.push({ hw: hwBytes, def: defBytes, priority, posFlags, word: headword });
     }
 
-    if (reading && reading !== headword && !redirect) {
+    if (readingRecords && reading && reading !== headword && !redirect) {
       const rBytes = dictEncoder.encode(reading);
       if (rBytes.length < HEADWORD_SIZE && !seen.has(reading)) {
         const rDef = formatDefinitionYomitan(reading, reading, definitions);
         if (rDef) {
           // reading != headword: kana reading of a kanji headword → flag it.
-          records.push({ hw: rBytes, def: dictEncoder.encode(rDef), priority, posFlags: posFlags | POS_READING });
+          records.push({ hw: rBytes, def: dictEncoder.encode(rDef), priority, posFlags: posFlags | POS_READING, word: reading });
         }
       }
     }

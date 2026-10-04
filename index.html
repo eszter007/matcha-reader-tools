@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Matcha Reader Tools</title>
-<meta name="description" content="Browser-based converters for the Matcha Reader e-reader firmware: manga with OCR, dictionaries, and SD card fonts. Runs entirely on your device.">
+<meta name="description" content="Browser-based converters for the Matcha Reader e-reader firmware: manga with OCR, Japanese and Chinese dictionaries, pinyin ruby, and SD card fonts. Runs entirely on your device.">
 <link rel="stylesheet" href="css/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍵</text></svg>">
 </head>
@@ -16,6 +16,7 @@
       <a href="manga.html">Manga</a>
       <a href="dictionary.html">Dictionary</a>
       <a href="fonts.html">Fonts</a>
+      <a href="pinyin.html">Pinyin</a>
     </nav>
   </div>
 </header>
@@ -35,14 +36,21 @@
     <a class="toolcard" href="dictionary.html">
       <div class="emoji">📚</div>
       <h3>Dictionary Converter</h3>
-      <p>Convert Yomitan dictionaries (Jitendex, JMnedict, grammar references),
-      jmdict-simplified JSON, or MDict .mdx into the on-device lookup format.</p>
+      <p>Convert Japanese dictionaries (Jitendex, JMnedict, grammar references, jmdict-simplified,
+      MDict) or Chinese and Cantonese ones (CC-CEDICT, the MoE dictionary, CC-Canto, with
+      frequency ranking, HSK/TOCFL tags and example sentences) into the on-device lookup format.</p>
+    </a>
+    <a class="toolcard" href="pinyin.html">
+      <div class="emoji">🈷</div>
+      <h3>Pinyin Ruby</h3>
+      <p>Add pinyin or zhuyin above the text of a Chinese EPUB, shown on the reader like furigana
+      and switched off with the same toggle.</p>
     </a>
     <a class="toolcard" href="fonts.html">
       <div class="emoji">🔤</div>
       <h3>Font Converter</h3>
-      <p>Convert TTF/OTF fonts (like Japanese reading fonts) into <code>.cpfont</code> files for
-      the SD card, with kerning and ligatures.</p>
+      <p>Convert TTF/OTF fonts (Japanese or Chinese reading fonts, for instance) into
+      <code>.cpfont</code> files for the SD card, with kerning and ligatures.</p>
     </a>
   </div>
 

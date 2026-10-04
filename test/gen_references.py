@@ -18,6 +18,9 @@ Produces under test/fixtures/:
     ref_dict_yomitan/    convert_jmdict.py output + .spx
     ref_font/            fontconvert_sdcard.py .cpfont (needs freetype-py + fontTools)
     ref_dict_jmdict/     convert_jmdict.py output + .spx
+    zh/                  synthetic CC-CEDICT, CC-Canto, MoE JSON, word lists, sentence pairs
+    ref_dict_zh*/        convert_jmdict.py --lang zh / yue output (+ names.*, .title files)
+    ref_pinyin/          add_pinyin_ruby.py output for zh/book.epub
 """
 
 import json
@@ -637,6 +640,186 @@ def run_dict_references():
         print(f"dict reference: {out}")
 
 
+# ── Chinese dictionaries and pinyin ruby ─────────────────────────
+
+ZH = os.path.join(FIXTURES, "zh")
+
+CEDICT_LINES = """# CC-CEDICT test fixture
+你好 你好 [ni3 hao3] /hello/hi/
+說話 说话 [shuo1 hua4] /to speak/to say/to talk/CL:個|个[ge4]/
+中國 中国 [Zhong1 guo2] /China/
+中國人 中国人 [Zhong1 guo2 ren2] /Chinese person/
+漢語 汉语 [Han4 yu3] /Chinese language/CL:門|门[men2]/
+北京 北京 [Bei3 jing1] /Beijing, capital of People's Republic of China/
+星期六 星期六 [Xing1 qi1 liu4] /Saturday/
+東西 东西 [dong1 xi1] /east and west/
+東西 东西 [dong1 xi5] /thing/stuff/person/animal/CL:個|个[ge4],件[jian4]/
+周 周 [Zhou1] /surname Zhou/Zhou Dynasty (1046-256 BC)/
+周 周 [zhou1] /to make a circuit/week/
+和尚 和尚 [he2 shang5] /Buddhist monk/
+尚未 尚未 [shang4 wei4] /not yet/still not/
+和 和 [he2] /and/together with/
+的 的 [de5] /of/~'s (possessive particle)/
+不是 不是 [bu4 shi4] /no/is not/not/
+不 不 [bu4] /(negative prefix)/not/no/
+是 是 [shi4] /is/are/am/yes/to be/
+研究 研究 [yan2 jiu1] /research/CL:項|项[xiang4]/
+生命 生命 [sheng1 ming4] /life (as the characteristic of living beings)/
+研究生 研究生 [yan2 jiu1 sheng1] /graduate student/
+花兒 花儿 [hua1 r5] /erhua variant of 花[hua1]/
+長 长 [Zhang3] /surname Zhang/
+長 长 [chang2] /length/long/
+長 长 [zhang3] /chief/head/to grow/
+綠 绿 [lu:4] /green/
+一不做，二不休 一不做，二不休 [yi1 bu4 zuo4 , er4 bu4 xiu1] /don't do it, or don't rest (idiom)/
+這是一個很長很長很長很長的詞條 这是一个很长很长很长很长的词条 [zhe4 shi4] /too long/
+malformed line without brackets
+"""
+
+CANTO_LINES = """# CC-Canto test fixture
+你好 你好 [ni3 hao3] {nei5 hou2} /hello/
+唔係 唔系 [m2 xi4] {m4 hai6} /is not (Cantonese)/
+佢哋 佢哋 [qu2 di4] {keoi5 dei6} /they (Cantonese)/
+"""
+
+CANTO_READINGS = """# cccedict-canto-readings test fixture
+中國 中国 [Zhong1 guo2] {zung1 gwok3}
+說話 说话 [shuo1 hua4] {syut3 waa6}
+"""
+
+FREQ_LINES = """的 3188252 uj
+是 796991 v
+不 700000 d
+和 400000 c
+长 150000 a
+不是 139000 v
+中国 108000 ns
+研究 90000 vn
+东西 50000 n
+说话 30000 v
+生命 20000 n
+研究生 8000 n
+尚未 6000 d
+和尚 5000 n
+你好 2000 l
+說 3 zg
+"""
+
+HSK_CSV = """ID,Simplified,Traditional,Pinyin,POS,Level,WebNo
+L1-0001,你好,你好,nǐhǎo,Intj,1,1
+L1-0002,不,不,bù,Adv,1,2
+L2-0001,说话,說話,shuōhuà,V,2,3
+L7-0001,研究生,研究生,yánjiūshēng,N,7-9,4
+L1-0003,爸爸|爸,爸爸|爸,bàba,N,1,5
+"""
+
+TOCFL_CSV = """ID,Traditional,Simplified,Pinyin,POS,Variants
+L0-1001,我,我,wǒ,N,
+L0-1002,你/妳,你,nǐ,N,
+L1-0001,說話,说话,shuōhuà,V,
+L3-0001,研究,研究,yánjiū,V,
+"""
+
+PAIRS_TSV = (
+    "1\t我不是中国人。\t101\tI am not Chinese.\n"
+    "2\t我不是中國人。\t102\tI am not Chinese.\n"
+    "3\t他在说话。\t103\tHe is talking.\n"
+    "4\t我喜欢Tatoeba。\t104\tI like Tatoeba.\n"
+    "5\t这是一个很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长的句子。\t105\tA very long sentence.\n"
+    "6\t研究生命的起源。\t106\tStudy the origin of life.\n"
+    "7\t东西很贵。\t107\tThings are expensive.\n"
+    "和尚在说话。\tThe monk is talking.\n"
+)
+
+GRAMMAR_TSV = "# pattern\tdefinition\n把…了\tdisposal construction\\nexample: 把书放在桌子上\n是…的\temphasis on time, place or manner\n"
+
+MOE_JSON = [
+    {"title": "好", "heteronyms": [
+        {"bopomofo": "ㄏㄠˇ", "pinyin": "hǎo", "definitions": [
+            {"type": "形", "def": "美、善。與「壞」相對。", "example": ["如：「好人」、「好事」。"]},
+            {"type": "副", "def": "很、非常。<br>強調程度。", "example": ["如：「好久」。", "如：「好多」。"]}]},
+        {"bopomofo": "ㄏㄠˋ", "pinyin": "hào", "definitions": [
+            {"type": "動", "def": "愛、喜愛。", "example": ["如：「好學」。"]}]}]},
+    {"title": "一不做，二不休", "heteronyms": [{"bopomofo": "ㄧ ㄅㄨˋ ㄗㄨㄛˋ ㄦˋ ㄅㄨˋ ㄒㄧㄡ",
+                                         "definitions": [{"def": "要做就做到底。"}]}]},
+    {"title": "行列", "heteronyms": [{"bopomofo": "ㄏㄤˊ ㄌㄧㄝˋ", "pinyin": "háng liè", "definitions": [
+        {"type": "名", "def": "排列的行伍。{[8e4f]}", "example": ["如：「行列整齊」。"]}]}]},
+    {"title": "說話", "heteronyms": [{"bopomofo": "ㄕㄨㄛ ㄏㄨㄚˋ", "pinyin": "shuō huà", "definitions": [
+        {"type": "動", "def": "發言、講話。"}, {"type": "動", "def": "閒談。"}]}]},
+]
+
+BOOK_XHTML = (
+    '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>说话</title><style>p { margin: 0 }</style></head>'
+    '<body><p>我不是中国人。花儿很好看。他&amp;她在說話。<ruby>東<rt>dōng</rt></ruby>西</p>'
+    '<SCRIPT>var x = "中国";</SCRIPT><p>Saturday 星期六 研究生命 &lt;綠&gt;</p></body></html>'
+)
+
+
+def make_zh_fixtures():
+    os.makedirs(ZH, exist_ok=True)
+    for name, text in [("cedict.u8", CEDICT_LINES), ("canto.u8", CANTO_LINES),
+                       ("canto-readings.txt", CANTO_READINGS), ("freq.txt", FREQ_LINES),
+                       ("hsk.csv", HSK_CSV), ("tocfl.csv", TOCFL_CSV), ("pairs.tsv", PAIRS_TSV),
+                       ("grammar.tsv", GRAMMAR_TSV)]:
+        with open(os.path.join(ZH, name), "w", encoding="utf-8") as f:
+            f.write(text)
+    with open(os.path.join(ZH, "moe.json"), "w", encoding="utf-8") as f:
+        json.dump(MOE_JSON, f, ensure_ascii=False)
+    path = os.path.join(ZH, "book.epub")
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" '
+                   'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                   '<rootfile full-path="book.opf" media-type="application/oebps-package+xml"/>'
+                   '</rootfiles></container>', compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("book.opf", '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
+                   'unique-identifier="u"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                   '<dc:identifier id="u">pinyin-test</dc:identifier><dc:title>测试</dc:title>'
+                   '<dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" '
+                   'media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>',
+                   compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("c1.xhtml", BOOK_XHTML, compress_type=zipfile.ZIP_DEFLATED)
+    print(f"zh fixtures: {ZH}")
+
+
+def run_zh_references():
+    """convert_jmdict.py --lang zh / yue, with every option the page offers, and
+    add_pinyin_ruby.py on the synthetic book. The converter writes the .spx itself."""
+    script = os.path.join(FIRMWARE, "tools", "dict_convert", "convert_jmdict.py")
+    f = lambda name: os.path.join(ZH, name)  # noqa: E731
+    cases = [
+        ("ref_dict_zh", ["--lang", "zh", "--input", f("cedict.u8"), "--input", f("moe.json"),
+                         "--frequency", f("freq.txt"), "--levels", f("hsk.csv"), "--level-name", "HSK",
+                         "--examples", f("pairs.tsv"), "--examples-script", "simplified",
+                         "--split-names", "--zhuyin"]),
+        ("ref_dict_zh_tocfl", ["--lang", "zh", "--input", f("cedict.u8"), "--levels", f("tocfl.csv"),
+                               "--level-name", "TOCFL", "--frequency", f("hsk.csv"),
+                               "--examples", f("pairs.tsv"), "--examples-script", "traditional"]),
+        ("ref_dict_yue", ["--lang", "yue", "--input", f("canto.u8"), "--input", f("cedict.u8"),
+                          "--jyutping", f("canto-readings.txt")]),
+        ("ref_dict_zh_grammar", ["--lang", "zh", "--format", "tsv", "--input", f("grammar.tsv"),
+                                 "--name", "grammar"]),
+        ("ref_dict_zh_yomitan", ["--lang", "zh", "--input", os.path.join(FIXTURES, "yomitan.zip")]),
+        ("ref_dict_zh_title", ["--lang", "zh", "--input", f("cedict.u8"), "--title",
+                               "一個非常非常非常長的詞典名字會被切短"]),
+    ]
+    for name, args in cases:
+        out = os.path.join(FIXTURES, name)
+        shutil.rmtree(out, ignore_errors=True)
+        subprocess.run([sys.executable, script, *args, "--output-dir", out], check=True)
+        print(f"zh dict reference: {out}")
+
+    ruby = os.path.join(FIRMWARE, "tools", "pinyin_ruby", "add_pinyin_ruby.py")
+    out = os.path.join(FIXTURES, "ref_pinyin")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out, exist_ok=True)
+    subprocess.run([sys.executable, ruby, "--cedict", f("cedict.u8"), "--frequency", f("freq.txt"),
+                    "--skip-top", "2", f("book.epub"), os.path.join(out, "book-pinyin.epub")], check=True)
+    subprocess.run([sys.executable, ruby, "--cedict", f("cedict.u8"), "--zhuyin",
+                    f("book.epub"), os.path.join(out, "book-zhuyin.epub")], check=True)
+    print(f"pinyin reference: {out}")
+
+
 if __name__ == "__main__":
     os.makedirs(FIXTURES, exist_ok=True)
     make_manga_pages()
@@ -653,6 +836,8 @@ if __name__ == "__main__":
     make_jmdict_json()
     run_font_reference()
     run_dict_references()
+    make_zh_fixtures()
+    run_zh_references()
     if make_mdx_fixtures():
         run_mdx_reference()
     print("done")

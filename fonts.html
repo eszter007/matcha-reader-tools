@@ -15,6 +15,7 @@
       <a href="manga.html">Manga</a>
       <a href="dictionary.html">Dictionary</a>
       <a href="fonts.html" class="active">Fonts</a>
+      <a href="pinyin.html">Pinyin</a>
     </nav>
   </div>
 </header>
@@ -67,8 +68,8 @@
     <label>Unicode coverage</label>
     <div class="checks">
       <label><input type="checkbox" class="font-preset" value="latin-ext" checked> Latin (extended)</label>
-      <label><input type="checkbox" class="font-preset" value="cjk-ext"> Japanese — full <span class="hint">(kana, all kanji, symbols, rare kanji; what the reader's own Japanese fonts use)</span></label>
-      <label><input type="checkbox" class="font-preset" value="cjk"> Japanese — basic <span class="hint">(kana and common kanji only)</span></label>
+      <label><input type="checkbox" class="font-preset" value="cjk-ext"> Japanese / Chinese — full <span class="hint">(kana, all hanzi and kanji, bopomofo, vertical punctuation, symbols, rare characters; what the reader's own Noto JP, SC and TC fonts use)</span></label>
+      <label><input type="checkbox" class="font-preset" value="cjk"> Japanese / Chinese — basic <span class="hint">(kana and the common ideographs only)</span></label>
       <label><input type="checkbox" class="font-preset" value="greek"> Greek</label>
       <label><input type="checkbox" class="font-preset" value="cyrillic"> Cyrillic</label>
       <label><input type="checkbox" class="font-preset" value="arabic"> Arabic</label>
@@ -91,7 +92,7 @@
       <input type="text" id="font-intervals-custom" placeholder="">
     </details>
 
-    <label for="font-name">Family name <span class="hint">(used for filenames and on-device UI; default: from the font filename)</span></label>
+    <label for="font-name">Family name <span class="hint">(used for filenames and on-device UI; default: from the font filename). <code>NotoSansJP</code>, <code>NotoSansSC</code>, <code>NotoSansTC</code> / <code>NotoSansHK</code> and their <code>NotoSerif…</code> counterparts pair with the reader's built-in Noto entries as the Japanese, simplified- and traditional-Chinese halves, picked by the book's language.</span></label>
     <input type="text" id="font-name" placeholder="auto">
   </div>
 
@@ -101,8 +102,9 @@
   <div id="log" hidden></div>
 
   <div class="notice">
-    Japanese fonts with full CJK coverage rasterize ~7,000 glyphs per size and style — this can
-    take a few minutes. Glyphs are rendered by your browser's font engine, so pixel edges can
+    Japanese and Chinese fonts with full CJK coverage rasterize ~7,000 glyphs per size and style —
+    this can take a few minutes. A Chinese book needs an SC or TC cut: the reader's built-in CJK
+    glyphs are the Japanese set, so everyday characters such as 这, 说 or 們 are missing without one. Glyphs are rendered by your browser's font engine, so pixel edges can
     differ very slightly from the desktop (FreeType) tool; metrics, kerning, and ligatures are
     extracted from the font file itself and match exactly.
   </div>

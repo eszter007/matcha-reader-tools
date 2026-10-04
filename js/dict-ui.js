@@ -1,14 +1,224 @@
-/* Dictionary converter: page wiring. Conversion logic lives in dict.js. */
+/* Dictionary converter: page wiring. Conversion logic lives in dict.js (Japanese formats),
+ * dict-zh.js (Chinese formats and word lists) and mdx.js (MDict). */
 "use strict";
+
+/* Where the device reads each language's converted files. Japanese keeps the original /dict
+ * folder, which the firmware still accepts beside /dictionaries/jp. */
+const DICT_FOLDERS = { ja: "dict", zh: "dictionaries/zh", yue: "dictionaries/yue" };
+
+function dictLanguage() {
+  const sel = $("dict-lang");
+  return sel ? sel.value : "ja";
+}
+
+/* UTF-8 text of an uploaded file, inflating a .gz on the way. */
+async function readFileText(file) {
+  let bytes = await readFileBytes(file);
+  if (file.name.toLowerCase().endsWith(".gz")) bytes = await gunzip(bytes);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+function optionalFile(id) {
+  const input = $(id);
+  return input && input.files.length ? input.files[0] : null;
+}
+
+/* The Japanese converter's own inputs: Yomitan zip, jmdict-simplified JSON, MDict. Returns
+ * {records, title}. */
+async function convertJapaneseFile(file, readingRecords) {
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith(".zip")) {
+    logLine(`Loading ${file.name} (Yomitan format)…`);
+    const zip = new ZipReader(await readFileBytes(file));
+    const decoder = new TextDecoder("utf-8");
+    let title = "";
+    const indexEntry = zip.findEntry("index.json");
+    if (indexEntry) {
+      try {
+        const meta = JSON.parse(decoder.decode(await zip.readEntry(indexEntry)));
+        title = typeof meta.title === "string" ? meta.title : "";
+        logLine(`  Dictionary: ${title || "(unknown)"}`);
+        logLine(`  Format version: ${meta.format ?? meta.version ?? "?"}`);
+      } catch (e) { /* metadata is informational only */ }
+    }
+    const bankEntries = zip.entries
+      .filter((e) => /^term_bank_\d+\.json$/.test(e.name))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    if (!bankEntries.length) throw new Error("No term_bank_N.json files found in zip — is this a Yomitan dictionary?");
+    logLine(`  Found ${bankEntries.length} term bank files`);
+    const termBanks = [];
+    for (let i = 0; i < bankEntries.length; i++) {
+      setProgress(i, bankEntries.length, `Reading term banks: ${i + 1}/${bankEntries.length}`);
+      termBanks.push(JSON.parse(decoder.decode(await zip.readEntry(bankEntries[i]))));
+      await sleep(0); // keep the UI alive between large JSON parses
+    }
+    setProgress(0, 1, "Converting entries…");
+    const result = convertYomitanRecords(termBanks, (done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`), readingRecords);
+    logLine(`Processed ${result.entryCount} Yomitan entries → ${result.records.length} index records`);
+    return { records: result.records, title };
+  }
+
+  if (lower.endsWith(".json") || lower.endsWith(".tgz") || lower.endsWith(".tar.gz")) {
+    logLine(`Loading ${file.name} (jmdict-simplified format)…`);
+    let jsonText;
+    if (lower.endsWith(".json")) {
+      jsonText = new TextDecoder("utf-8").decode(await readFileBytes(file));
+    } else {
+      setProgress(0, 1, "Decompressing…");
+      const tarBytes = await gunzip(await readFileBytes(file));
+      const member = parseTar(tarBytes).find((f) => f.name.endsWith(".json"));
+      if (!member) throw new Error("No JSON file found in the tarball");
+      jsonText = new TextDecoder("utf-8").decode(member.data);
+    }
+    setProgress(0, 1, "Parsing JSON…");
+    await sleep(0);
+    const data = JSON.parse(jsonText);
+    jsonText = null;
+    logLine(`Processing ${(data.words || []).length} JMdict entries…`);
+    const records = convertJmdictRecords(data, (done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`));
+    return { records, title: "" };
+  }
+
+  if (lower.endsWith(".mdx")) {
+    logLine(`Loading ${file.name} (MDict format)…`);
+    setProgress(0, 1, "Parsing MDX…");
+    const bytes = await readFileBytes(file);
+    // Optional registration passcode for Encrypted=1 dictionaries.
+    let options;
+    const regcodeHex = $("dict-regcode").value.replace(/[\s:-]/g, "");
+    const userid = $("dict-userid").value.trim();
+    if (regcodeHex || userid) {
+      if (!/^[0-9a-fA-F]{32}$/.test(regcodeHex)) {
+        throw new Error("The MDict registration code must be 32 hex characters");
+      }
+      if (!userid) throw new Error("Enter the email or device ID the registration code belongs to");
+      const regcode = new Uint8Array(16);
+      for (let i = 0; i < 16; i++) regcode[i] = parseInt(regcodeHex.substring(i * 2, i * 2 + 2), 16);
+      options = { passcode: { regcode, userid } };
+    }
+    const result = await convertMdictRecords(bytes, (seen) => setProgress(0, 1, `Reading entries: ${seen.toLocaleString()}…`), options);
+    if (result.keysReadVia === "brutal") {
+      logLine(options
+        ? "Registration code didn't match — recovered by scanning for key blocks instead."
+        : "Encrypted key index — recovered by scanning for key blocks (fill in the registration fields if this fails).", "warn");
+    }
+    logLine(`Processed ${result.entryCount} MDict entries (${result.skipped} skipped) → ${result.records.length} index records`);
+    return { records: result.records, title: file.name.replace(/\.[^.]+$/, "") };
+  }
+
+  throw new Error(`Unsupported input ${file.name}. Use a Yomitan .zip, jmdict-simplified .json/.json.tgz, or MDict .mdx.`);
+}
+
+/* One input of a Chinese or Cantonese conversion. Returns {records, names, title}. */
+async function convertChineseFile(file, lang, zhOpts) {
+  const fmt = detectDictFormat(file.name, lang);
+  logLine(`${file.name}: format ${fmt}`);
+  if (fmt === "yomitan" || fmt === "mdict") {
+    const r = await convertJapaneseFile(file, /*readingRecords=*/false);
+    return { records: r.records, names: [], title: r.title };
+  }
+  if (fmt === "jmdict") {
+    throw new Error(`${file.name}: a jmdict-simplified file is Japanese; pick Japanese above, or name a MoE export dict-revised.json.`);
+  }
+  if (fmt === "moedict") {
+    if (file.name.toLowerCase().endsWith(".xz")) {
+      throw new Error(`${file.name}: the browser cannot unpack .xz — decompress it first (xz -d) and choose the .json.`);
+    }
+    setProgress(0, 1, `Parsing ${file.name}…`);
+    await sleep(0);
+    const data = JSON.parse(new TextDecoder("utf-8").decode(await readFileBytes(file)));
+    if (!Array.isArray(data)) throw new Error(`${file.name}: not a g0v dict-revised.json (expected an array of entries)`);
+    const r = convertMoedict(data);
+    logLine(`Processed ${r.records.length} MoE entries (${r.skipped} skipped)`);
+    return { records: r.records, names: [], title: DEFAULT_DICT_TITLES.moedict };
+  }
+  if (fmt === "tsv") {
+    const r = convertTsv(await readFileText(file));
+    logLine(`Processed ${r.records.length} TSV entries (${r.skipped} skipped)`);
+    return { records: r.records, names: [], title: file.name.replace(/\.[^.]+$/, "") };
+  }
+  // cedict (also CC-Canto)
+  setProgress(0, 1, `Parsing ${file.name}…`);
+  await sleep(0);
+  const r = convertCedict(await readFileText(file), zhOpts);
+  if (zhOpts.sentencePairs) {
+    if (r.examplesDropped) logLine(`  Example sentences: ${r.examplesDropped.toLocaleString()} in the other script dropped`);
+    logLine(`  Examples attached to ${r.examplesAttached.toLocaleString()} entries`);
+  }
+  logLine(`Processed ${r.entryCount} CC-CEDICT entries (${r.skipped} skipped) → ${r.records.length} vocab records`
+          + (zhOpts.splitNames ? `, ${r.names.length} name records` : ""));
+  const title = file.name.toLowerCase().includes("canto") ? "CC-Canto" : DEFAULT_DICT_TITLES.cedict;
+  return { records: r.records, names: r.names, title };
+}
+
+/* The word lists a Chinese conversion can take beside the dictionaries themselves. */
+async function readChineseOptions() {
+  const opts = {
+    zhuyin: $("dict-zhuyin").checked,
+    splitNames: $("dict-split-names").checked,
+    levels: new Map(),
+    jyutping: new Map(),
+    sentencePairs: null,
+    twins: new Map(),
+    examplesScript: $("dict-examples-script").value,
+    frequency: null,
+    frequencyKind: $("dict-frequency-kind").value,
+    title: $("dict-title").value.trim(),
+  };
+  const levelsFile = optionalFile("dict-levels");
+  if (levelsFile) {
+    const name = $("dict-level-name").value.trim() || "HSK";
+    opts.levels = loadLevels(await readFileText(levelsFile), name);
+    logLine(`Level list ${levelsFile.name}: ${opts.levels.size.toLocaleString()} forms tagged ${name}`);
+  }
+  const jyutFile = optionalFile("dict-jyutping");
+  if (jyutFile) {
+    opts.jyutping = loadCantoReadings(await readFileText(jyutFile));
+    logLine(`Jyutping readings ${jyutFile.name}: ${opts.jyutping.size.toLocaleString()} entries`);
+  }
+  const examplesFile = optionalFile("dict-examples");
+  if (examplesFile) {
+    opts.sentencePairs = loadSentencePairs(await readFileText(examplesFile), opts.examplesScript);
+    logLine(`Sentence pairs ${examplesFile.name}: ${opts.sentencePairs.length.toLocaleString()} usable`);
+  }
+  const frequencyFile = optionalFile("dict-frequency");
+  if (frequencyFile) {
+    const f = loadFrequency(await readFileText(frequencyFile), opts.frequencyKind);
+    if (!f.priorities.size) logLine(`No words found in frequency list ${frequencyFile.name}`, "warn");
+    else logLine(`Frequency list ${frequencyFile.name}: ${f.priorities.size.toLocaleString()} words, ranked by ${f.rankedBy}`);
+    opts.frequency = f.priorities;
+  }
+  return opts;
+}
+
+/* Write one slot's idx/dat/spx (and .title when there is one) into the zip. */
+function addDictOutput(zipOut, folder, name, records, title) {
+  const { idx, dat, recordCount } = dictWriteBinary(records);
+  const spx = dictGenSpx(idx);
+  logLine(`  ${folder}/${name}.idx: ${formatBytes(idx.length)} (${recordCount.toLocaleString()} records)`);
+  logLine(`  ${folder}/${name}.dat: ${formatBytes(dat.length)}`);
+  logLine(`  ${folder}/${name}.spx: ${formatBytes(spx.length)} (lookup accelerator)`);
+  zipOut.addFile(`${folder}/${name}.idx`, idx);
+  zipOut.addFile(`${folder}/${name}.dat`, dat);
+  zipOut.addFile(`${folder}/${name}.spx`, spx);
+  const titleBytes = encodeDictTitle(title);
+  if (titleBytes) {
+    zipOut.addFile(`${folder}/${name}.title`, titleBytes);
+    logLine(`  ${folder}/${name}.title: ${new TextDecoder().decode(titleBytes).trim()}`);
+  }
+}
 
 async function runDictConversion() {
   const fileInput = $("dict-file");
   if (!fileInput.files.length) {
-    logLine("Choose a dictionary file first (Yomitan .zip, or jmdict-simplified .json/.tgz).", "warn");
+    logLine("Choose a dictionary file first.", "warn");
     return;
   }
-  const file = fileInput.files[0];
+  const files = [...fileInput.files];
+  const lang = dictLanguage();
+  const chinese = lang !== "ja";
   const outName = $("dict-name").value; // vocab | names | grammar (device also accepts legacy jmdict/jmnedict)
+  const folder = DICT_FOLDERS[lang];
 
   $("dict-run").disabled = true;
   clearLog();
@@ -16,109 +226,45 @@ async function runDictConversion() {
   await wakeLock.acquire();
 
   try {
-    const lower = file.name.toLowerCase();
-    let records;
+    let records = [];
+    let nameRecords = [];
+    const titles = [];
+    const zhOpts = chinese ? await readChineseOptions() : null;
 
-    if (lower.endsWith(".zip")) {
-      logLine(`Loading ${file.name} (Yomitan format)…`);
-      const zip = new ZipReader(await readFileBytes(file));
-      const decoder = new TextDecoder("utf-8");
+    for (const file of files) {
+      const part = chinese ? await convertChineseFile(file, lang, zhOpts)
+                           : await convertJapaneseFile(file, /*readingRecords=*/true);
+      records = records.concat(part.records);
+      if (part.names && part.names.length) nameRecords = nameRecords.concat(part.names);
+      if (part.title) titles.push(part.title);
+    }
+    if (!records.length) throw new Error("No entries converted.");
 
-      const indexEntry = zip.findEntry("index.json");
-      if (indexEntry) {
-        try {
-          const meta = JSON.parse(decoder.decode(await zip.readEntry(indexEntry)));
-          logLine(`  Dictionary: ${meta.title || "(unknown)"}`);
-          logLine(`  Format version: ${meta.format ?? meta.version ?? "?"}`);
-        } catch (e) { /* metadata is informational only */ }
+    let title = "";
+    if (chinese) {
+      if (zhOpts.frequency && zhOpts.frequency.size) {
+        records = applyFrequency(records, zhOpts.frequency, zhOpts.twins);
+        nameRecords = applyFrequency(nameRecords, zhOpts.frequency, zhOpts.twins);
       }
-
-      const bankEntries = zip.entries
-        .filter((e) => /^term_bank_\d+\.json$/.test(e.name))
-        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-      if (!bankEntries.length) throw new Error("No term_bank_N.json files found in zip — is this a Yomitan dictionary?");
-      logLine(`  Found ${bankEntries.length} term bank files`);
-
-      const termBanks = [];
-      for (let i = 0; i < bankEntries.length; i++) {
-        setProgress(i, bankEntries.length, `Reading term banks: ${i + 1}/${bankEntries.length}`);
-        termBanks.push(JSON.parse(decoder.decode(await zip.readEntry(bankEntries[i]))));
-        await sleep(0); // keep the UI alive between large JSON parses
+      title = zhOpts.title || joinDictTitles(titles);
+      // Proper nouns go to their own files only beside the vocab slot; written into another
+      // slot they stay with the rest, as the desktop tool does.
+      if (nameRecords.length && outName !== "vocab") {
+        logLine("Proper nouns are split off only when writing the vocab slot; kept in this output.", "warn");
+        records = records.concat(nameRecords);
+        nameRecords = [];
       }
-
-      setProgress(0, 1, "Converting entries…");
-      const result = convertYomitanRecords(termBanks, (done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`));
-      logLine(`Processed ${result.entryCount} Yomitan entries → ${result.records.length} index records`);
-      records = result.records;
-
-    } else if (lower.endsWith(".json") || lower.endsWith(".tgz") || lower.endsWith(".tar.gz")) {
-      logLine(`Loading ${file.name} (jmdict-simplified format)…`);
-      let jsonText;
-      if (lower.endsWith(".json")) {
-        jsonText = new TextDecoder("utf-8").decode(await readFileBytes(file));
-      } else {
-        setProgress(0, 1, "Decompressing…");
-        const tarBytes = await gunzip(await readFileBytes(file));
-        const member = parseTar(tarBytes).find((f) => f.name.endsWith(".json"));
-        if (!member) throw new Error("No JSON file found in the tarball");
-        jsonText = new TextDecoder("utf-8").decode(member.data);
-      }
-      setProgress(0, 1, "Parsing JSON…");
-      await sleep(0);
-      const data = JSON.parse(jsonText);
-      jsonText = null;
-      logLine(`Processing ${(data.words || []).length} JMdict entries…`);
-      records = convertJmdictRecords(data, (done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`));
-
-    } else if (lower.endsWith(".mdx")) {
-      logLine(`Loading ${file.name} (MDict format)…`);
-      setProgress(0, 1, "Parsing MDX…");
-      const bytes = await readFileBytes(file);
-
-      // Optional registration passcode for Encrypted=1 dictionaries.
-      let options;
-      const regcodeHex = $("dict-regcode").value.replace(/[\s:-]/g, "");
-      const userid = $("dict-userid").value.trim();
-      if (regcodeHex || userid) {
-        if (!/^[0-9a-fA-F]{32}$/.test(regcodeHex)) {
-          throw new Error("The MDict registration code must be 32 hex characters");
-        }
-        if (!userid) throw new Error("Enter the email or device ID the registration code belongs to");
-        const regcode = new Uint8Array(16);
-        for (let i = 0; i < 16; i++) regcode[i] = parseInt(regcodeHex.substring(i * 2, i * 2 + 2), 16);
-        options = { passcode: { regcode, userid } };
-      }
-
-      const result = await convertMdictRecords(bytes, (seen) => setProgress(0, 1, `Reading entries: ${seen.toLocaleString()}…`), options);
-      if (result.keysReadVia === "brutal") {
-        logLine(options
-          ? "Registration code didn't match — recovered by scanning for key blocks instead."
-          : "Encrypted key index — recovered by scanning for key blocks (fill in the registration fields if this fails).", "warn");
-      }
-      logLine(`Processed ${result.entryCount} MDict entries (${result.skipped} skipped) → ${result.records.length} index records`);
-      records = result.records;
-
-    } else {
-      throw new Error("Unsupported input. Use a Yomitan .zip, jmdict-simplified .json/.json.tgz, or MDict .mdx.");
     }
 
     setProgress(0, 1, "Sorting and writing binary index…");
     await sleep(0);
-    const { idx, dat, recordCount } = dictWriteBinary(records);
-    const spx = dictGenSpx(idx);
-
-    logLine(`Output:`);
-    logLine(`  dict/${outName}.idx: ${formatBytes(idx.length)} (${recordCount.toLocaleString()} records)`);
-    logLine(`  dict/${outName}.dat: ${formatBytes(dat.length)}`);
-    logLine(`  dict/${outName}.spx: ${formatBytes(spx.length)} (lookup accelerator)`);
-
     const zipOut = new ZipWriter();
-    zipOut.addFile(`dict/${outName}.idx`, idx);
-    zipOut.addFile(`dict/${outName}.dat`, dat);
-    zipOut.addFile(`dict/${outName}.spx`, spx);
+    logLine("Output:");
+    addDictOutput(zipOut, folder, outName, records, title);
+    if (nameRecords.length) addDictOutput(zipOut, folder, "names", nameRecords, "CC-CEDICT names");
     const blob = zipOut.toBlob();
-    logLine(`Done — ${formatBytes(blob.size)}. Unzip at the SD card root: files land in /dict/.`);
-    downloadBlob(blob, `${outName}-dict.zip`);
+    logLine(`Done — ${formatBytes(blob.size)}. Unzip at the SD card root: files land in /${folder}/.`);
+    downloadBlob(blob, `${chinese ? lang + "-" : ""}${outName}-dict.zip`);
     setProgress(1, 1, "Complete");
   } catch (e) {
     logLine("Error: " + e.message, "error");
@@ -129,6 +275,29 @@ async function runDictConversion() {
   }
 }
 
+/* Show the Chinese options only when they apply, and remember the language choice. */
+function updateDictLanguageUi() {
+  const lang = dictLanguage();
+  const chinese = lang !== "ja";
+  const zhCard = $("dict-zh-options");
+  if (zhCard) zhCard.hidden = !chinese;
+  const hint = $("dict-file-hint");
+  if (hint) {
+    hint.textContent = chinese
+      ? "CC-CEDICT (.u8 / .txt, optionally .gz), CC-Canto, the MoE dict-revised.json, a Yomitan .zip, MDict .mdx, or a headword<TAB>definition .tsv. Several files merge into one dictionary."
+      : "Yomitan .zip, jmdict-simplified .json / .json.tgz, or MDict .mdx. Several files merge into one dictionary.";
+  }
+  for (const el of document.querySelectorAll(".dict-folder")) el.textContent = `/${DICT_FOLDERS[lang]}/`;
+  saveSetting("dict-lang", lang);
+}
+
 if (typeof document !== "undefined" && document.getElementById("dict-run")) {
   $("dict-run").addEventListener("click", runDictConversion);
+  const langSel = $("dict-lang");
+  if (langSel) {
+    const saved = loadSetting("dict-lang", "ja");
+    if (DICT_FOLDERS[saved]) langSel.value = saved;
+    langSel.addEventListener("change", updateDictLanguageUi);
+    updateDictLanguageUi();
+  }
 }
