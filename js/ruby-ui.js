@@ -24,24 +24,27 @@ async function loadKuromoji() {
   });
 }
 
+function rubyMethod() {
+  return document.querySelector('input[name="ruby-method"]:checked').value;
+}
+
 /* Show what applies to the chosen language and method. */
 function updateRubyUi() {
   const lang = $("ruby-lang").value;
-  const ai = $("ruby-method").value === "ai";
-  $("ruby-ai-fields").hidden = !ai;
+  const method = rubyMethod();
+  $("ruby-ai-fields").hidden = method !== "ai";
   $("ruby-zh-fields").hidden = lang !== "zh";
-  $("ruby-method-hint").textContent = lang === "ja"
-    ? ai ? "Gemini reads each sentence and gives every word its reading there."
-         : "Readings come from the built-in Japanese dictionary (IPADIC), word by word. The book stays on this device."
-    : ai ? "Gemini picks each character's reading in context; CC-CEDICT checks it and fills in anything it misses."
-         : "Readings come from CC-CEDICT, word by word. The book stays on this device.";
+  $("ruby-method-dict-hint").textContent = lang === "ja"
+    ? "Built-in Japanese dictionary (IPADIC). The book stays on this device. Usually right; where the sentence decides a reading, it takes the likelier one."
+    : "Built-in CC-CEDICT. The book stays on this device. Usually right; a character with several readings can get the wrong one.";
+  $("ruby-method-ai-hint").textContent = "Most accurate: Gemini reads each sentence and picks the reading meant there. Sends the book's text to Google under your own key.";
   saveSetting("ruby-lang", lang);
-  saveSetting("ruby-method", $("ruby-method").value);
+  saveSetting("ruby-method", method);
 }
 
 async function runRuby() {
   const lang = $("ruby-lang").value;
-  const ai = $("ruby-method").value === "ai";
+  const ai = rubyMethod() === "ai";
   const epubFile = $("ruby-epub").files[0];
   if (!epubFile) { logLine("Choose the EPUB first.", "warn"); return; }
   const cedictFile = $("ruby-cedict").files[0];
@@ -147,8 +150,13 @@ if (typeof document !== "undefined" && document.getElementById("ruby-run")) {
   const lang = loadSetting("ruby-lang", "ja");
   if (lang === "ja" || lang === "zh") $("ruby-lang").value = lang;
   const method = loadSetting("ruby-method", "dict");
-  if (method === "dict" || method === "ai") $("ruby-method").value = method;
+  const radio = document.querySelector(`input[name="ruby-method"][value="${method}"]`);
+  if (radio) radio.checked = true;
   $("ruby-lang").addEventListener("change", updateRubyUi);
-  $("ruby-method").addEventListener("change", updateRubyUi);
+  for (const r of document.querySelectorAll('input[name="ruby-method"]')) r.addEventListener("change", updateRubyUi);
+  $("ruby-epub").addEventListener("change", () => {
+    const file = $("ruby-epub").files[0];
+    $("ruby-epub-label").textContent = file ? file.name : "Tap to choose the EPUB";
+  });
   updateRubyUi();
 }

@@ -717,10 +717,11 @@ async function testRuby(page, base) {
   try {
     await page.goto(`${base}/ruby.html`);
     await page.selectOption("#ruby-lang", "zh");
-    await page.selectOption("#ruby-method", "dict");
+    await page.check('input[name="ruby-method"][value="dict"]');
     await page.setInputFiles("#ruby-epub", zh("book.epub"));
     await page.setInputFiles("#ruby-cedict", zh("cedict.u8"));
     await page.setInputFiles("#ruby-frequency", zh("freq.txt"));
+    await page.click("#ruby-zh-fields summary");
     await page.fill("#ruby-skip-top", "2");
     await page.uncheck("#ruby-zhuyin");
     let out = await downloadFromPage(page, () => page.click("#ruby-run"));
@@ -731,10 +732,11 @@ async function testRuby(page, base) {
     // Chinese with AI.
     await page.goto(`${base}/ruby.html`);
     await page.selectOption("#ruby-lang", "zh");
-    await page.selectOption("#ruby-method", "ai");
+    await page.check('input[name="ruby-method"][value="ai"]');
     await page.fill("#ruby-key", "stub-key-not-a-real-credential");
     await page.setInputFiles("#ruby-epub", zh("ai_zh.epub"));
     await page.setInputFiles("#ruby-cedict", zh("cedict.u8"));
+    await page.click("#ruby-zh-fields summary");
     await page.fill("#ruby-skip-top", "0");
     out = await downloadFromPage(page, () => page.click("#ruby-run"));
     check("pinyin with AI matches add_pinyin_ruby.py --ai",
@@ -757,7 +759,7 @@ async function testRuby(page, base) {
     // Chinese with no CC-CEDICT chosen: the built-in copy.
     await page.goto(`${base}/ruby.html`);
     await page.selectOption("#ruby-lang", "zh");
-    await page.selectOption("#ruby-method", "dict");
+    await page.check('input[name="ruby-method"][value="dict"]');
     await page.setInputFiles("#ruby-epub", zh("book.epub"));
     let before = calls.length;
     out = await downloadFromPage(page, () => page.click("#ruby-run"));
@@ -768,7 +770,7 @@ async function testRuby(page, base) {
     // Japanese from the built-in dictionary (kuromoji, IPADIC).
     await page.goto(`${base}/ruby.html`);
     await page.selectOption("#ruby-lang", "ja");
-    await page.selectOption("#ruby-method", "dict");
+    await page.check('input[name="ruby-method"][value="dict"]');
     await page.setInputFiles("#ruby-epub", zh("ai_ja.epub"));
     before = calls.length;
     out = await downloadFromPage(page, () => page.click("#ruby-run"));
@@ -780,7 +782,7 @@ async function testRuby(page, base) {
     // Japanese with AI.
     await page.goto(`${base}/ruby.html`);
     await page.selectOption("#ruby-lang", "ja");
-    await page.selectOption("#ruby-method", "ai");
+    await page.check('input[name="ruby-method"][value="ai"]');
     await page.fill("#ruby-key", "stub-key-not-a-real-credential");
     await page.setInputFiles("#ruby-epub", zh("ai_ja.epub"));
     out = await downloadFromPage(page, () => page.click("#ruby-run"));

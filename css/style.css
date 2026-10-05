@@ -224,6 +224,8 @@ button.secondary {
 #log .error { color: var(--error); }
 
 details { margin-top: 0.8rem; }
+ul.compact { padding-left: 1.2rem; margin: 0.4rem 0 0; }
+ul.compact li { margin: 0.35rem 0; }
 details summary { cursor: pointer; font-weight: 600; font-size: 0.92rem; color: var(--muted); }
 
 .toolgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1rem; margin-top: 1.2rem; }
@@ -265,6 +267,7 @@ footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid v
 
 /* A notice about a limitation rather than a neutral aside, so it reads as a caution. */
 .notice.warn { background: #fdf3e2; border-left: 3px solid var(--warn); }
+@media (prefers-color-scheme: dark) { .notice.warn { background: #3a2f1a; } }
 
 /* A choice the current book type makes meaningless: still readable, visibly not in play. */
 .checks label.disabled { opacity: 0.5; }
