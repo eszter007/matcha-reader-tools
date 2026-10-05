@@ -209,7 +209,7 @@ node test/browser/e2e.mjs
 
 ## Notes & limits
 
-- **Gemini OCR** needs your own API key. Free tier works; rate limits make long volumes slow, so
+- **Gemini OCR** needs your own API key. Rate limits can make long volumes slow, so
   the converter retries with backoff and keeps the screen awake. *Stop* still packages every
   finished page. The key lives in `localStorage` and goes only to Google.
 - **Memory**: pages are processed one at a time, but the output zip is assembled in memory. Very
