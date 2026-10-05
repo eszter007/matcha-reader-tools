@@ -633,9 +633,9 @@ async function testDictChinese(page, base) {
   await page.goto(`${base}/dictionary.html`);
   await page.selectOption("#dict-lang", "zh");
   check("Chinese starts on a built-in edition, without the file steps",
-        await page.isChecked('input[name="dict-zh-edition"][value="simplified"]')
+        await page.isChecked('input[name="dict-edition"][value="simplified"]')
         && !(await page.isVisible("#dict-file-card")) && !(await page.isVisible("#dict-zh-options")));
-  await page.check('input[name="dict-zh-edition"][value="own"]');
+  await page.check('input[name="dict-edition"][value="own"]');
   await page.setInputFiles("#dict-file", [zh("cedict.u8"), zh("moe.json")]);
   await page.setInputFiles("#dict-frequency", zh("freq.txt"));
   await page.setInputFiles("#dict-levels", zh("hsk.csv"));
@@ -655,29 +655,33 @@ async function testDictChinese(page, base) {
     }
   }
   // The built-in editions: nothing to choose but the edition.
-  for (const edition of ["simplified", "traditional"]) {
-    const ref = path.join(FIXTURES, `ref_dict_zh_${edition}`);
+  for (const [lang, edition] of [["zh", "simplified"], ["zh", "traditional"], ["yue", "cantonese"]]) {
+    const ref = path.join(FIXTURES, `ref_dict_${lang}_${edition}`);
     if (!fs.existsSync(ref)) { console.log(`  skip ${edition} edition (no reference)`); continue; }
     await page.goto(`${base}/dictionary.html`);
-    await page.selectOption("#dict-lang", "zh");
-    await page.check(`input[name="dict-zh-edition"][value="${edition}"]`);
+    await page.selectOption("#dict-lang", lang);
+    await page.check(`input[name="dict-edition"][value="${edition}"]`);
     zipFile = await downloadFromPage(page, () => page.click("#dict-run"));
-    dest = path.join(OUT, `dict_zh_${edition}`);
+    dest = path.join(OUT, `dict_${lang}_${edition}`);
     unzipTo(zipFile, dest);
     let same = true;
     for (const name of ["vocab", "names"]) {
       for (const ext of ["idx", "dat", "spx", "title"]) {
-        const got = path.join(dest, "dictionaries", "zh", `${name}.${ext}`);
+        const got = path.join(dest, "dictionaries", lang, `${name}.${ext}`);
         same &&= fs.existsSync(got) && filesEqual(path.join(ref, `${name}.${ext}`), got);
       }
     }
     check(`built-in ${edition} edition matches convert_jmdict.py on the same sources`, same);
-    check(`${edition} download named for its edition`, path.basename(zipFile) === `zh-${edition}-dict.zip`, path.basename(zipFile));
+    check(`${edition} download named for its edition`, path.basename(zipFile) === `${lang}-${edition}-dict.zip`, path.basename(zipFile));
   }
 
   // Cantonese: CC-Canto + CC-CEDICT with the readings file, into dictionaries/yue.
   await page.goto(`${base}/dictionary.html`);
   await page.selectOption("#dict-lang", "yue");
+  check("Cantonese starts on its built-in edition",
+        await page.isChecked('input[name="dict-edition"][value="cantonese"]') && !(await page.isVisible("#dict-file-card"))
+        && !(await page.isVisible('input[name="dict-edition"][value="simplified"]')));
+  await page.check('input[name="dict-edition"][value="own"]');
   await page.setInputFiles("#dict-file", [zh("canto.u8"), zh("cedict.u8")]);
   await page.setInputFiles("#dict-jyutping", zh("canto-readings.txt"));
   await page.uncheck("#dict-split-names");

@@ -33,18 +33,19 @@
     </select>
   </div>
 
-  <div class="card" id="dict-zh-edition-card" data-step hidden>
+  <div class="card" id="dict-edition-card" data-step hidden>
     <h3><span class="step"></span>Pick an edition</h3>
-    <div class="checks stacked" id="dict-zh-edition">
-      <label><input type="radio" name="dict-zh-edition" value="simplified" checked> <span class="opt">Simplified</span>
+    <div class="checks stacked" id="dict-edition">
+      <label><input type="radio" name="dict-edition" value="simplified" data-lang="zh"> <span class="opt">Simplified</span>
         <span class="hint">For books from mainland China. Pinyin, HSK levels, example sentences.</span></label>
-      <label><input type="radio" name="dict-zh-edition" value="traditional"> <span class="opt">Traditional</span>
+      <label><input type="radio" name="dict-edition" value="traditional" data-lang="zh"> <span class="opt">Traditional</span>
         <span class="hint">For books from Taiwan. Pinyin with zhuyin, TOCFL levels, example sentences.</span></label>
-      <label><input type="radio" name="dict-zh-edition" value="own"> <span class="opt">My own files</span>
+      <label><input type="radio" name="dict-edition" value="cantonese" data-lang="yue"> <span class="opt">Cantonese</span>
+        <span class="hint">For books in written Cantonese, as in Hong Kong. CC-Canto and CC-CEDICT with jyutping and pinyin, example sentences.</span></label>
+      <label><input type="radio" name="dict-edition" value="own" data-lang="zh yue"> <span class="opt">My own files</span>
         <span class="hint">Another dictionary, or your own word lists.</span></label>
     </div>
-    <p class="hint" id="dict-zh-edition-hint">Everything is built in: just press Build. Either
-    edition looks words up in simplified and traditional books alike.</p>
+    <p class="hint" id="dict-edition-hint"></p>
   </div>
 
   <div class="card" id="dict-file-card" data-step>

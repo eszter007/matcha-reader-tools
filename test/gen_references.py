@@ -872,7 +872,8 @@ def run_zh_references():
     builtin = os.path.join(FIXTURES, "zh_builtin")
     os.makedirs(builtin, exist_ok=True)
     data = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
-    for name in ("jieba-dict.txt", "jieba-dict-big.txt", "hsk30.csv", "tocfl-202307.csv", "tatoeba-cmn-eng.tsv"):
+    for name in ("cccanto-webdist.txt", "jieba-dict.txt", "jieba-dict-big.txt", "hsk30.csv", "tocfl-202307.csv",
+                 "tatoeba-cmn-eng.tsv", "tatoeba-yue-eng.tsv", "cccedict-canto-readings.txt"):
         with gzip.open(os.path.join(data, name + ".gz"), "rb") as src, open(os.path.join(builtin, name), "wb") as dst:
             shutil.copyfileobj(src, dst)
 
@@ -886,6 +887,10 @@ def run_zh_references():
             "--lang", "zh", "--input", d("cedict_1_0_ts_utf-8_mdbg.txt.gz"), "--frequency", d(freq),
             "--levels", d(levels), "--level-name", level_name, "--examples", d("tatoeba-cmn-eng.tsv.gz"),
             "--examples-script", edition, "--split-names", *extra]))
+    cases.append(("ref_dict_yue_cantonese", [
+        "--lang", "yue", "--input", d("cccanto-webdist.txt.gz"), "--input", d("cedict_1_0_ts_utf-8_mdbg.txt.gz"),
+        "--jyutping", d("cccedict-canto-readings.txt.gz"), "--examples", d("tatoeba-yue-eng.tsv.gz"),
+        "--examples-script", "traditional", "--split-names"]))
     for name, args in cases:
         out = os.path.join(FIXTURES, name)
         shutil.rmtree(out, ignore_errors=True)

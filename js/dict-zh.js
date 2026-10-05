@@ -217,8 +217,9 @@ function applyFrequency(records, priorities, twins) {
 
 /* ── CC-CEDICT (.u8 / .txt) ───────────────────────────────────── */
 
-// CC-CEDICT, and CC-Canto's extension of it with a {jyutping} field after the pinyin.
-const CEDICT_LINE_RE = /^(\S+)\s+(\S+)\s+\[([^\]]*)\](?:\s+\{([^}]*)\})?\s+\/(.*)\/\s*$/;
+// CC-CEDICT, and CC-Canto's extension of it with a {jyutping} field after the pinyin. CC-Canto
+// ends a third of its lines with a comment ("/.../ # adapted from cc-cedict").
+const CEDICT_LINE_RE = /^(\S+)\s+(\S+)\s+\[([^\]]*)\](?:\s+\{([^}]*)\})?\s+\/(.*)\/\s*(?:#.*)?$/;
 // cccedict-canto-readings: "繁 简 [pin1 yin1] {jyut6 ping3}" with no glosses.
 const CANTO_READING_RE = /^(\S+)\s+(\S+)\s+\[([^\]]*)\]\s+\{([^}]*)\}/;
 

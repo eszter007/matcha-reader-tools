@@ -10,7 +10,7 @@ to Gemini when you supply your own API key, and a book's text when you choose AI
 | Tool | Input | Output |
 |---|---|---|
 | 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.pdf`, `.xtc` or `.xtch` |
-| 📚 **Dictionary Converter** | Chinese: nothing — pick the simplified or traditional edition, built from sources served with the page. Or your own files — Japanese: Yomitan `.zip` (Jitendex, JMnedict, grammar), jmdict-simplified `.json`/`.json.tgz`, MDict `.mdx`. Chinese and Cantonese: CC-CEDICT / CC-Canto text, the MoE `dict-revised.json`, Yomitan, MDict, a `headword<TAB>definition` TSV, with optional frequency, level, example-sentence and jyutping lists | `dict/<name>.idx` + `.dat` + `.spx` for Japanese; `dictionaries/zh/` or `dictionaries/yue/` with `vocab.*`, `names.*` and `.title` files for Chinese |
+| 📚 **Dictionary Converter** | Chinese and Cantonese: nothing — pick the simplified, traditional or Cantonese edition, built from sources served with the page. Or your own files — Japanese: Yomitan `.zip` (Jitendex, JMnedict, grammar), jmdict-simplified `.json`/`.json.tgz`, MDict `.mdx`. Chinese and Cantonese: CC-CEDICT / CC-Canto text, the MoE `dict-revised.json`, Yomitan, MDict, a `headword<TAB>definition` TSV, with optional frequency, level, example-sentence and jyutping lists | `dict/<name>.idx` + `.dat` + `.spx` for Japanese; `dictionaries/zh/` or `dictionaries/yue/` with `vocab.*`, `names.*` and `.title` files for Chinese |
 | 🔤 **Font Converter** | TTF / OTF (up to 4 styles + fallback font) | `.fonts/<Family>/<Family>_<size>.cpfont` (v4, with kerning + ligatures) |
 | 🈷 **Furigana & Pinyin** | A Japanese or Chinese EPUB (+ optionally your own CC-CEDICT and a frequency list) | The same EPUB with furigana, or pinyin / zhuyin, as `<ruby>` over the text |
 
@@ -127,16 +127,18 @@ the book. The older flat layout still works; re-convert for the faster open.
 
 ## Chinese dictionaries
 
-For Chinese the Dictionary page offers two ready-made editions, built from sources served with the
-page ([`data/README.md`](data/README.md)), so there is nothing to download first:
+For Chinese and Cantonese the Dictionary page offers ready-made editions, built from sources served
+with the page ([`data/README.md`](data/README.md)), so there is nothing to download first:
 
 | Edition | Equivalent desktop run |
 |---|---|
 | **Simplified** | CC-CEDICT, `--frequency` jieba `dict.txt`, `--levels hsk30.csv --level-name HSK`, Tatoeba `--examples-script simplified`, `--split-names` |
 | **Traditional** | The same with jieba `dict.txt.big`, `--levels tocfl-202307.csv --level-name TOCFL`, `--examples-script traditional` and `--zhuyin` |
+| **Cantonese** | `--lang yue`, CC-Canto and CC-CEDICT, `--jyutping cccedict-canto-readings`, Tatoeba Cantonese `--examples-script traditional`, `--split-names` |
 
-Both are byte-identical to `convert_jmdict.py` on the same files, and match the firmware's
-`dictionaries-zh` release packs except that the traditional pack also merges the MoE dictionary.
+All three are byte-identical to `convert_jmdict.py` on the same files (the Cantonese one needs
+the converter's CC-Canto comment fix, matcha-reader#401). The Chinese two match the firmware's
+`dictionaries-zh` release packs, except that the traditional pack also merges the MoE dictionary.
 **My own files** opens the full form below. The **Language** choice decides the folder the zip
 lays out: `dictionaries/zh/` for Chinese (one folder serves simplified and traditional books
 alike, both forms of every word are indexed), `dictionaries/yue/` for Cantonese. Japanese keeps
