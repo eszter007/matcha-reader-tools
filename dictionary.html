@@ -21,38 +21,40 @@
 </header>
 <main>
   <h2>📚 Dictionary Converter</h2>
-  <p class="lede">Converts a dictionary into the reader's binary lookup format
-  (<code>.idx</code> + <code>.dat</code>), including the <code>.spx</code> sidecar that makes
-  on-device lookups fast. Japanese, Chinese and Cantonese dictionaries each go to the folder
-  the reader looks in for that language.</p>
+  <p class="lede">Makes the dictionary the reader's Word Lookup uses. Everything runs in this
+  browser.</p>
 
-  <div class="card">
-    <h3>1. Language</h3>
-    <label for="dict-lang">The language the dictionary is for</label>
+  <div class="card" data-step>
+    <h3><span class="step"></span>What do you read?</h3>
     <select id="dict-lang">
-      <option value="ja">Japanese — Jitendex, JMnedict, grammar (Yomitan), jmdict-simplified, MDict</option>
-      <option value="zh">Chinese — CC-CEDICT, MoE 國語辭典, Yomitan, MDict (simplified and traditional books)</option>
-      <option value="yue">Cantonese — CC-Canto with CC-CEDICT, for books tagged yue</option>
+      <option value="ja">Japanese</option>
+      <option value="zh">Chinese (Mandarin)</option>
+      <option value="yue">Cantonese</option>
     </select>
   </div>
 
-  <div class="card">
-    <h3>2. Choose the dictionary file(s)</h3>
+  <div class="card" id="dict-zh-edition-card" data-step hidden>
+    <h3><span class="step"></span>Pick an edition</h3>
+    <div class="checks stacked" id="dict-zh-edition">
+      <label><input type="radio" name="dict-zh-edition" value="simplified" checked> <span class="opt">Simplified</span>
+        <span class="hint">For books from mainland China. Pinyin, HSK levels, example sentences.</span></label>
+      <label><input type="radio" name="dict-zh-edition" value="traditional"> <span class="opt">Traditional</span>
+        <span class="hint">For books from Taiwan. Pinyin with zhuyin, TOCFL levels, example sentences.</span></label>
+      <label><input type="radio" name="dict-zh-edition" value="own"> <span class="opt">My own files</span>
+        <span class="hint">Another dictionary, or your own word lists.</span></label>
+    </div>
+    <p class="hint" id="dict-zh-edition-hint">Everything is built in: just press Build. Either
+    edition looks words up in simplified and traditional books alike.</p>
+  </div>
+
+  <div class="card" id="dict-file-card" data-step>
+    <h3><span class="step"></span>Choose the dictionary file(s)</h3>
     <label class="filebtn">
-      <span>Tap to choose one or more dictionary files</span>
+      <span id="dict-file-label">Tap to choose one or more dictionary files</span>
       <input type="file" id="dict-file" multiple accept=".zip,.json,.tgz,.gz,.mdx,.u8,.txt,.tsv">
     </label>
-    <p id="dict-file-hint" style="color:var(--muted);font-size:0.85rem;margin-bottom:0"></p>
-    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0">
-      Sources: <a href="https://github.com/stephenmk/Jitendex/releases" target="_blank" rel="noopener">Jitendex</a>
-      (Japanese vocabulary), JMnedict in Yomitan format (Japanese names),
-      <a href="https://www.mdbg.net/chinese/dictionary?page=cc-cedict" target="_blank" rel="noopener">CC-CEDICT</a>
-      (Chinese, both scripts), the Taiwan Ministry of Education's dictionary as
-      <a href="https://github.com/g0v/moedict-data" target="_blank" rel="noopener">g0v dict-revised.json</a>
-      (unpack the <code>.xz</code> first), and
-      <a href="https://cantonese.org/download.html" target="_blank" rel="noopener">CC-Canto</a> (Cantonese).
-      Chinese files picked together merge into one dictionary: a word in both shows both entries.</p>
-    <details>
+    <p class="hint" id="dict-file-hint"></p>
+    <details id="dict-mdict-reg">
       <summary>MDict registration (encrypted .mdx only)</summary>
       <label for="dict-regcode">Registration code <span class="hint">— 32 hex characters, from the dictionary's owner</span></label>
       <input type="text" id="dict-regcode" autocomplete="off" placeholder="A1B2C3…">
@@ -61,37 +63,30 @@
     </details>
   </div>
 
-  <div class="card" id="dict-zh-options" hidden>
-    <h3>3. Chinese options</h3>
-    <p class="hint">All optional. Each list is a plain text or CSV file; nothing is uploaded anywhere.</p>
+  <div class="card" id="dict-zh-options" data-step hidden>
+    <h3><span class="step"></span>Extras <span class="hint" style="font-weight:400">— all optional</span></h3>
 
-    <label for="dict-frequency">Word frequency list <span class="hint">— ranks the entries, so the common sense of a word shows first and the page segments by frequency. jieba's <a href="https://github.com/fxsjy/jieba/blob/master/jieba/dict.txt" target="_blank" rel="noopener">dict.txt</a> (simplified; <a href="https://github.com/fxsjy/jieba/blob/master/extra_dict/dict.txt.big" target="_blank" rel="noopener">dict.txt.big</a> for traditional), a BCC or SUBTLEX export, or any one-word-per-line list</span></label>
+    <label for="dict-frequency">Word frequency list <span class="hint">— puts the common sense of a word first. jieba's <a href="https://github.com/fxsjy/jieba/blob/master/jieba/dict.txt" target="_blank" rel="noopener">dict.txt</a> (<a href="https://github.com/fxsjy/jieba/blob/master/extra_dict/dict.txt.big" target="_blank" rel="noopener">dict.txt.big</a> for traditional) or any one-word-per-line list</span></label>
     <input type="file" id="dict-frequency" accept=".txt,.tsv,.csv,.big,.gz">
-    <label for="dict-frequency-kind">Read the list <span class="hint">— auto ranks by the count column when there is one, else by row order</span></label>
-    <select id="dict-frequency-kind">
-      <option value="auto">auto</option>
-      <option value="count">by count column</option>
-      <option value="rank">by row order</option>
-    </select>
 
     <div class="row">
       <div>
-        <label for="dict-levels">Graded word list <span class="hint">— tags each entry with its level: <a href="https://github.com/ivankra/hsk30" target="_blank" rel="noopener">hsk30.csv</a> or <a href="https://github.com/ivankra/tocfl" target="_blank" rel="noopener">tocfl-202307.csv</a></span></label>
+        <label for="dict-levels">Graded word list <span class="hint">— <a href="https://github.com/ivankra/hsk30" target="_blank" rel="noopener">hsk30.csv</a> or <a href="https://github.com/ivankra/tocfl" target="_blank" rel="noopener">tocfl-202307.csv</a></span></label>
         <input type="file" id="dict-levels" accept=".csv,.tsv,.txt,.gz">
       </div>
       <div>
-        <label for="dict-level-name">Level label <span class="hint">— HSK, TOCFL or TBCL</span></label>
+        <label for="dict-level-name">Level label</label>
         <input type="text" id="dict-level-name" value="HSK">
       </div>
     </div>
 
     <div class="row">
       <div>
-        <label for="dict-examples">Example sentences <span class="hint">— a Tatoeba <a href="https://tatoeba.org/en/downloads" target="_blank" rel="noopener">sentence pairs</a> export (Chinese–English) or a sentence<code>&lt;TAB&gt;</code>translation file; entries of two or more characters get up to two short examples</span></label>
+        <label for="dict-examples">Example sentences <span class="hint">— Tatoeba <a href="https://tatoeba.org/en/downloads" target="_blank" rel="noopener">sentence pairs</a> (Chinese–English) or a sentence<code>&lt;TAB&gt;</code>translation file</span></label>
         <input type="file" id="dict-examples" accept=".tsv,.txt,.csv,.gz">
       </div>
       <div>
-        <label for="dict-examples-script">Keep sentences in <span class="hint">— Tatoeba mixes both scripts</span></label>
+        <label for="dict-examples-script">Keep sentences in</label>
         <select id="dict-examples-script">
           <option value="simplified">simplified characters</option>
           <option value="traditional">traditional characters</option>
@@ -100,57 +95,67 @@
       </div>
     </div>
 
-    <label for="dict-jyutping">Cantonese readings <span class="hint">— <code>cccedict-canto-readings</code> from cantonese.org adds jyutping to every CC-CEDICT entry it covers (CC-Canto's own file carries jyutping already)</span></label>
-    <input type="file" id="dict-jyutping" accept=".txt,.u8,.gz">
+    <div class="checks stacked" style="margin-top:0.8rem">
+      <label><input type="checkbox" id="dict-zhuyin"> <span class="opt">Zhuyin beside the pinyin</span>
+        <span class="hint">For Taiwanese Mandarin.</span></label>
+      <label><input type="checkbox" id="dict-split-names" checked> <span class="opt">Proper nouns in their own names dictionary</span>
+        <span class="hint">Places, people and dynasties show as Name entries.</span></label>
+    </div>
 
-    <label><input type="checkbox" id="dict-zhuyin"> Zhuyin (bopomofo) beside the pinyin <span class="hint">— for Taiwanese Mandarin</span></label>
-    <label><input type="checkbox" id="dict-split-names" checked> Proper nouns to their own names dictionary <span class="hint">— places, people and dynasties show as Name entries, like JMnedict's; languages, nationalities, weekdays and festivals stay in the vocabulary</span></label>
-
-    <label for="dict-title">Dictionary name in the lookup panel <span class="hint">— optional; default: the sources, e.g. <code>CC-CEDICT + MoE</code></span></label>
-    <input type="text" id="dict-title" placeholder="auto" maxlength="36">
+    <details>
+      <summary>More options</summary>
+      <label for="dict-frequency-kind">Read the frequency list <span class="hint">— auto ranks by the count column when there is one, else by row order</span></label>
+      <select id="dict-frequency-kind">
+        <option value="auto">auto</option>
+        <option value="count">by count column</option>
+        <option value="rank">by row order</option>
+      </select>
+      <label for="dict-jyutping">Cantonese readings <span class="hint">— <code>cccedict-canto-readings</code> from cantonese.org adds jyutping to CC-CEDICT entries</span></label>
+      <input type="file" id="dict-jyutping" accept=".txt,.u8,.gz">
+      <label for="dict-title">Dictionary name in the lookup panel <span class="hint">— default: the sources, e.g. <code>CC-CEDICT + MoE</code></span></label>
+      <input type="text" id="dict-title" placeholder="auto" maxlength="36">
+    </details>
   </div>
 
-  <div class="card">
-    <h3>4. Which dictionary slot is this?</h3>
-    <label for="dict-name">Output name <span class="hint">— determines the filenames the device expects</span></label>
+  <div class="card" id="dict-slot-card" data-step>
+    <h3><span class="step"></span>Which dictionary is this?</h3>
     <select id="dict-name">
-      <option value="vocab">vocab — vocabulary dictionary (required by Word Lookup)</option>
-      <option value="names">names — name dictionary (optional)</option>
-      <option value="grammar">grammar — grammar reference (optional)</option>
+      <option value="vocab">Vocabulary (required)</option>
+      <option value="names">Names (optional)</option>
+      <option value="grammar">Grammar (optional)</option>
     </select>
   </div>
 
-  <button class="primary" id="dict-run">Convert</button>
+  <button class="primary" id="dict-run">Build dictionary</button>
 
   <div id="progress" hidden><div id="progress-bar"></div><div id="progress-text"></div></div>
   <div id="log" hidden></div>
 
-  <div class="notice">
-    Large dictionaries (Jitendex is ~60&nbsp;MB, the MoE dictionary ~140&nbsp;MB unpacked) take a
-    minute and some memory to convert — everything stays on your device.
-  </div>
-
   <div class="card">
-    <h3>Install on the device</h3>
-    <p>The download is a zip containing the folder the reader looks in for the chosen language,
-    <code class="dict-folder">/dict/</code>. Unzip it at the SD card root (or upload the files
-    there via the reader's Wi-Fi web file transfer). The firmware's own layout documentation
-    lists <code>/dictionaries/jp/</code>, <code>/dictionaries/zh/</code> and
-    <code>/dictionaries/yue/</code>; Japanese files in <code>/dict/</code> keep working. After
-    installing all three slots a language's folder looks like:</p>
-    <pre style="font-size:0.82rem">vocab.idx    vocab.dat    vocab.spx    vocab.title      (vocabulary — required)
+    <h3>Put it on the reader</h3>
+    <p>Unzip the download at the root of the SD card, or upload it with the reader's Wi-Fi file
+    transfer. The files land in <code class="dict-folder">/dict/</code> and Word Lookup finds them
+    on its own.</p>
+    <details>
+      <summary>What goes where</summary>
+      <p>Each language has its own folder: <code>/dict/</code> (or <code>/dictionaries/jp/</code>)
+      for Japanese, <code>/dictionaries/zh/</code> for Chinese, <code>/dictionaries/yue/</code> for
+      books tagged Cantonese. A folder holds up to three dictionaries:</p>
+      <pre style="font-size:0.82rem">vocab.idx    vocab.dat    vocab.spx    vocab.title      (vocabulary — required)
 names.idx    names.dat    names.spx    names.title      (names — optional)
 grammar.idx  grammar.dat  grammar.spx  grammar.title    (grammar — optional)</pre>
-    <p>A Chinese vocabulary converted with <em>Proper nouns to their own names dictionary</em>
-    ticked writes <code>names.*</code> beside <code>vocab.*</code> in one go. One
-    <code>dictionaries/zh/</code> serves simplified and traditional books alike; a Cantonese
-    book (tagged <code>yue</code>) reads <code>dictionaries/yue/</code> instead.</p>
+      <p>A Chinese dictionary built with proper nouns split off writes <code>names.*</code> beside
+      <code>vocab.*</code> in one go. Large dictionaries (Jitendex is about 60&nbsp;MB) take a
+      minute and some memory to convert.</p>
+    </details>
   </div>
 </main>
 <footer>
   Output matches <code>tools/dict_convert/convert_jmdict.py</code> and
   <code>scripts/gen_dict_spx.py</code> from the
   <a href="https://github.com/eszter007/matcha-reader">matcha-reader</a> firmware byte-for-byte.
+  The built-in Chinese sources and their licences are listed in
+  <a href="https://github.com/eszter007/matcha-reader-tools/blob/main/data/README.md" target="_blank" rel="noopener">data/README.md</a>.
   <p class="legal"><a href="legal.html#impressum">Impressum / Imprint</a> · <a href="legal.html#datenschutz">Datenschutz / Privacy</a></p>
 </footer>
 <script src="js/binary.js"></script>

@@ -85,6 +85,7 @@ p.lede { color: var(--muted); margin-top: 0; }
 
 label { display: block; font-weight: 600; font-size: 0.9rem; margin: 0.7rem 0 0.2rem; }
 label .hint { font-weight: 400; color: var(--muted); }
+main a { color: var(--matcha-dark); }
 
 /* Hint under a <select>, swapped in place as the choice changes; .warn is the
  * amber variant used when the chosen value carries a cost worth reading. */
@@ -147,7 +148,7 @@ textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
   align-items: start;
   font-weight: 600;
 }
-.checks.stacked label input[type="checkbox"] { grid-column: 1; grid-row: 1; margin: 0.15rem 0 0; }
+.checks.stacked label input[type="checkbox"], .checks.stacked label input[type="radio"] { grid-column: 1; grid-row: 1; margin: 0.15rem 0 0; }
 .checks.stacked label .opt { grid-column: 2; grid-row: 1; }
 .checks.stacked label .hint { grid-column: 2; grid-row: 2; font-size: 0.85rem; line-height: 1.45; }
 /* display:grid/flex would otherwise beat the hidden attribute. */

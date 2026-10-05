@@ -951,6 +951,8 @@ async function testDictChinese() {
   check("zhuyin", zh.pinyinToZhuyin("ni3 hao3 lu:4 ma5 zhi1 xue2 yuan2") === "ㄋㄧˇ ㄏㄠˇ ㄌㄩˋ ˙ㄇㄚ ㄓ ㄒㄩㄝˊ ㄩㄢˊ");
   check("rank to priority", zh.rankToPriority(1) === 255 && zh.rankToPriority(10) === 227 && zh.rankToPriority(1000) === 171 && zh.rankToPriority(100000) === 115);
   check("common nouns stay vocabulary", !zh.isProperNounPinyin("Xing1 qi1 liu4", ["Saturday"]) && zh.isProperNounPinyin("Bei3 jing1", ["Beijing"]));
+  check("word boundaries are Unicode, as in Python", zh.isProperNounPinyin("Ge1 lun2 bu4", ["Cristóbal Colón or Christopher Columbus (1451-1506)"])
+        && !zh.isProperNounPinyin("Ji1 du1 jiao4", ["Christianity"]));
   check("script of a sentence", zh.sentenceScript("我不是中國人") === "traditional" && zh.sentenceScript("人山人海") === "any");
 }
 

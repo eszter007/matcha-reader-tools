@@ -6,9 +6,32 @@
  * folder, which the firmware still accepts beside /dictionaries/jp. */
 const DICT_FOLDERS = { ja: "dict", zh: "dictionaries/zh", yue: "dictionaries/yue" };
 
+/* The ready-made Chinese editions: the sources the release workflow builds its packs from (all
+ * but the MoE dictionary), served with the page from data/. */
+const ZH_EDITIONS = {
+  simplified: { frequency: "jieba-dict.txt.gz", levels: "hsk30.csv.gz", levelName: "HSK",
+                examplesScript: "simplified", zhuyin: false },
+  traditional: { frequency: "jieba-dict-big.txt.gz", levels: "tocfl-202307.csv.gz", levelName: "TOCFL",
+                 examplesScript: "traditional", zhuyin: true },
+};
+const BUILTIN_DATA = "data/";
+
 function dictLanguage() {
   const sel = $("dict-lang");
   return sel ? sel.value : "ja";
+}
+
+/* The chosen built-in Chinese edition, or null when the user's own files are converted. */
+function dictEdition() {
+  if (dictLanguage() !== "zh") return null;
+  const checked = document.querySelector('input[name="dict-zh-edition"]:checked');
+  return checked && ZH_EDITIONS[checked.value] ? checked.value : null;
+}
+
+async function fetchBuiltin(name) {
+  const resp = await fetch(BUILTIN_DATA + name);
+  if (!resp.ok) throw new Error(`Could not load the built-in ${name} (HTTP ${resp.status}).`);
+  return new File([await resp.arrayBuffer()], name);
 }
 
 /* UTF-8 text of an uploaded file, inflating a .gz on the way. */
@@ -152,38 +175,64 @@ async function convertChineseFile(file, lang, zhOpts) {
   return { records: r.records, names: r.names, title };
 }
 
-/* The word lists a Chinese conversion can take beside the dictionaries themselves. */
-async function readChineseOptions() {
-  const opts = {
+/* The settings of a Chinese conversion, from the form. */
+function formChineseSettings() {
+  return {
     zhuyin: $("dict-zhuyin").checked,
     splitNames: $("dict-split-names").checked,
+    examplesScript: $("dict-examples-script").value,
+    frequencyKind: $("dict-frequency-kind").value,
+    title: $("dict-title").value.trim(),
+    levelName: $("dict-level-name").value.trim(),
+    levelsFile: optionalFile("dict-levels"),
+    jyutFile: optionalFile("dict-jyutping"),
+    examplesFile: optionalFile("dict-examples"),
+    frequencyFile: optionalFile("dict-frequency"),
+  };
+}
+
+/* The settings of a built-in edition, its files fetched from data/. */
+async function editionChineseSettings(edition) {
+  const e = ZH_EDITIONS[edition];
+  setProgress(0, 1, "Loading the built-in sources…");
+  const [frequencyFile, levelsFile, examplesFile] = await Promise.all(
+    [e.frequency, e.levels, "tatoeba-cmn-eng.tsv.gz"].map(fetchBuiltin));
+  return { zhuyin: e.zhuyin, splitNames: true, examplesScript: e.examplesScript, frequencyKind: "auto",
+           title: "", levelName: e.levelName, levelsFile, jyutFile: null, examplesFile, frequencyFile };
+}
+
+/* The word lists a Chinese conversion can take beside the dictionaries themselves. */
+async function readChineseOptions(settings) {
+  const opts = {
+    zhuyin: settings.zhuyin,
+    splitNames: settings.splitNames,
     levels: new Map(),
     jyutping: new Map(),
     sentencePairs: null,
     twins: new Map(),
     bilingualHeadwords: new Set(),  // what CC-CEDICT left in the vocabulary; see keepNamesTogether
-    examplesScript: $("dict-examples-script").value,
+    examplesScript: settings.examplesScript,
     frequency: null,
-    frequencyKind: $("dict-frequency-kind").value,
-    title: $("dict-title").value.trim(),
+    frequencyKind: settings.frequencyKind,
+    title: settings.title,
   };
-  const levelsFile = optionalFile("dict-levels");
+  const levelsFile = settings.levelsFile;
   if (levelsFile) {
-    const name = $("dict-level-name").value.trim() || "HSK";
+    const name = settings.levelName || "HSK";
     opts.levels = loadLevels(await readFileText(levelsFile), name);
     logLine(`Level list ${levelsFile.name}: ${opts.levels.size.toLocaleString()} forms tagged ${name}`);
   }
-  const jyutFile = optionalFile("dict-jyutping");
+  const jyutFile = settings.jyutFile;
   if (jyutFile) {
     opts.jyutping = loadCantoReadings(await readFileText(jyutFile));
     logLine(`Jyutping readings ${jyutFile.name}: ${opts.jyutping.size.toLocaleString()} entries`);
   }
-  const examplesFile = optionalFile("dict-examples");
+  const examplesFile = settings.examplesFile;
   if (examplesFile) {
     opts.sentencePairs = loadSentencePairs(await readFileText(examplesFile), opts.examplesScript);
     logLine(`Sentence pairs ${examplesFile.name}: ${opts.sentencePairs.length.toLocaleString()} usable`);
   }
-  const frequencyFile = optionalFile("dict-frequency");
+  const frequencyFile = settings.frequencyFile;
   if (frequencyFile) {
     const f = loadFrequency(await readFileText(frequencyFile), opts.frequencyKind);
     if (!f.priorities.size) logLine(`No words found in frequency list ${frequencyFile.name}`, "warn");
@@ -211,15 +260,16 @@ function addDictOutput(zipOut, folder, name, records, title) {
 }
 
 async function runDictConversion() {
+  const edition = dictEdition();
   const fileInput = $("dict-file");
-  if (!fileInput.files.length) {
+  if (!edition && !fileInput.files.length) {
     logLine("Choose a dictionary file first.", "warn");
     return;
   }
-  const files = [...fileInput.files];
   const lang = dictLanguage();
   const chinese = lang !== "ja";
-  const outName = $("dict-name").value; // vocab | names | grammar (device also accepts legacy jmdict/jmnedict)
+  // vocab | names | grammar (device also accepts legacy jmdict/jmnedict)
+  const outName = edition ? "vocab" : $("dict-name").value;
   const folder = DICT_FOLDERS[lang];
 
   $("dict-run").disabled = true;
@@ -231,7 +281,10 @@ async function runDictConversion() {
     let records = [];
     let nameRecords = [];
     const titles = [];
-    const zhOpts = chinese ? await readChineseOptions() : null;
+    const files = edition ? [await fetchBuiltin("cedict_1_0_ts_utf-8_mdbg.txt.gz")] : [...fileInput.files];
+    const zhOpts = chinese
+      ? await readChineseOptions(edition ? await editionChineseSettings(edition) : formChineseSettings())
+      : null;
 
     for (const file of files) {
       const part = chinese ? await convertChineseFile(file, lang, zhOpts)
@@ -269,7 +322,7 @@ async function runDictConversion() {
     if (nameRecords.length) addDictOutput(zipOut, folder, "names", nameRecords, "CC-CEDICT names");
     const blob = zipOut.toBlob();
     logLine(`Done — ${formatBytes(blob.size)}. Unzip at the SD card root: files land in /${folder}/.`);
-    downloadBlob(blob, `${chinese ? lang + "-" : ""}${outName}-dict.zip`);
+    downloadBlob(blob, edition ? `zh-${edition}-dict.zip` : `${chinese ? lang + "-" : ""}${outName}-dict.zip`);
     setProgress(1, 1, "Complete");
   } catch (e) {
     logLine("Error: " + e.message, "error");
@@ -280,29 +333,55 @@ async function runDictConversion() {
   }
 }
 
-/* Show the Chinese options only when they apply, and remember the language choice. */
+const DICT_FILE_HINTS = {
+  ja: 'For example <a href="https://github.com/stephenmk/Jitendex/releases" target="_blank" rel="noopener">Jitendex</a> '
+    + "(vocabulary) or JMnedict (names), both as Yomitan .zip; also jmdict-simplified .json / .json.tgz "
+    + "or MDict .mdx. Several files merge into one dictionary.",
+  zh: '<a href="https://www.mdbg.net/chinese/dictionary?page=cc-cedict" target="_blank" rel="noopener">CC-CEDICT</a>, '
+    + 'the Taiwan Ministry of Education\'s <a href="https://github.com/g0v/moedict-data" target="_blank" rel="noopener">dict-revised.json</a> '
+    + "(unpack the .xz first), a Yomitan .zip, MDict .mdx or a headword<TAB>definition .tsv. Several files "
+    + "merge into one dictionary: a word in both shows both entries.",
+  yue: '<a href="https://cantonese.org/download.html" target="_blank" rel="noopener">CC-Canto</a> together with '
+    + '<a href="https://www.mdbg.net/chinese/dictionary?page=cc-cedict" target="_blank" rel="noopener">CC-CEDICT</a>. '
+    + "Several files merge into one dictionary.",
+};
+
+/* Show only the steps that apply, number them, and remember the choices. */
 function updateDictLanguageUi() {
   const lang = dictLanguage();
-  const chinese = lang !== "ja";
-  const zhCard = $("dict-zh-options");
-  if (zhCard) zhCard.hidden = !chinese;
-  const hint = $("dict-file-hint");
-  if (hint) {
-    hint.textContent = chinese
-      ? "CC-CEDICT (.u8 / .txt, optionally .gz), CC-Canto, the MoE dict-revised.json, a Yomitan .zip, MDict .mdx, or a headword<TAB>definition .tsv. Several files merge into one dictionary."
-      : "Yomitan .zip, jmdict-simplified .json / .json.tgz, or MDict .mdx. Several files merge into one dictionary.";
+  const edition = dictEdition();
+  const own = !edition;
+  $("dict-zh-edition-card").hidden = lang !== "zh";
+  $("dict-file-card").hidden = !own;
+  $("dict-zh-options").hidden = !own || lang === "ja";
+  $("dict-slot-card").hidden = !own;
+  $("dict-mdict-reg").hidden = lang !== "ja";
+  $("dict-zh-edition-hint").hidden = own;
+  $("dict-file-hint").innerHTML = DICT_FILE_HINTS[lang].replace("<TAB>", "&lt;TAB&gt;");
+  let step = 0;
+  for (const card of document.querySelectorAll("main > .card[data-step]")) {
+    if (!card.hidden) card.querySelector(".step").textContent = `${++step}. `;
   }
   for (const el of document.querySelectorAll(".dict-folder")) el.textContent = `/${DICT_FOLDERS[lang]}/`;
   saveSetting("dict-lang", lang);
+  if (lang === "zh") saveSetting("dict-zh-edition", edition || "own");
 }
 
 if (typeof document !== "undefined" && document.getElementById("dict-run")) {
   $("dict-run").addEventListener("click", runDictConversion);
+  $("dict-file").addEventListener("change", () => {
+    const names = [...$("dict-file").files].map((f) => f.name);
+    $("dict-file-label").textContent = names.length ? names.join(", ") : "Tap to choose one or more dictionary files";
+  });
   const langSel = $("dict-lang");
   if (langSel) {
     const saved = loadSetting("dict-lang", "ja");
     if (DICT_FOLDERS[saved]) langSel.value = saved;
+    const savedEdition = loadSetting("dict-zh-edition", "simplified");
+    const radio = document.querySelector(`input[name="dict-zh-edition"][value="${savedEdition}"]`);
+    if (radio) radio.checked = true;
     langSel.addEventListener("change", updateDictLanguageUi);
+    for (const r of document.querySelectorAll('input[name="dict-zh-edition"]')) r.addEventListener("change", updateDictLanguageUi);
     updateDictLanguageUi();
   }
 }

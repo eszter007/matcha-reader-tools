@@ -23,6 +23,7 @@ Produces under test/fixtures/:
     ref_pinyin/          add_pinyin_ruby.py output for zh/book.epub
 """
 
+import gzip
 import json
 import os
 import random
@@ -866,6 +867,25 @@ def run_zh_references():
         ("ref_dict_zh_title", ["--lang", "zh", "--input", f("cedict.u8"), "--title",
                                "一個非常非常非常長的詞典名字會被切短"]),
     ]
+    # The page's built-in editions, from the real sources in data/. The word lists are unpacked
+    # first: the page inflates any .gz, the Python converter only the dictionary itself.
+    builtin = os.path.join(FIXTURES, "zh_builtin")
+    os.makedirs(builtin, exist_ok=True)
+    data = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
+    for name in ("jieba-dict.txt", "jieba-dict-big.txt", "hsk30.csv", "tocfl-202307.csv", "tatoeba-cmn-eng.tsv"):
+        with gzip.open(os.path.join(data, name + ".gz"), "rb") as src, open(os.path.join(builtin, name), "wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+    def d(name):
+        return os.path.join(data, name) if name.startswith("cedict") else os.path.join(builtin, name.removesuffix(".gz"))
+
+    for edition, freq, levels, level_name, extra in (
+            ("simplified", "jieba-dict.txt.gz", "hsk30.csv.gz", "HSK", []),
+            ("traditional", "jieba-dict-big.txt.gz", "tocfl-202307.csv.gz", "TOCFL", ["--zhuyin"])):
+        cases.append((f"ref_dict_zh_{edition}", [
+            "--lang", "zh", "--input", d("cedict_1_0_ts_utf-8_mdbg.txt.gz"), "--frequency", d(freq),
+            "--levels", d(levels), "--level-name", level_name, "--examples", d("tatoeba-cmn-eng.tsv.gz"),
+            "--examples-script", edition, "--split-names", *extra]))
     for name, args in cases:
         out = os.path.join(FIXTURES, name)
         shutil.rmtree(out, ignore_errors=True)

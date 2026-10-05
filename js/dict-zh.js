@@ -105,7 +105,7 @@ const BRACKETED_PINYIN_RE = /\[([A-Za-z0-9:üÜ ,]+)\]/g;
 // A word given in both scripts inside a gloss: 個|个, 237號房間|237号房间, 對…|对…. Not every bar:
 // only one that touches a CJK character.
 const SCRIPT_PAIR_BAR_RE = /(?<=[\u3400-\u9fff\uf900-\ufaff])\||\|(?=[\u3400-\u9fff\uf900-\ufaff])/g;
-const CLASSIFIER_RE = /\bCL:(?=\S)/g;
+const CLASSIFIER_RE = /(?<![\p{L}\p{N}_])CL:(?=\S)/gu;
 
 /* CEDICT glosses carry their own markup for cross-references: both scripts joined by a bar and
  * numbered pinyin in brackets (CL:個|个[ge4], see 你好[ni3 hao3]). Written out for a reader:
@@ -327,12 +327,15 @@ function attachExamples(pairs, forms, entryCount) {
 
 // Capitalised in CC-CEDICT but everyday vocabulary, not names: languages, nationalities, days,
 // festivals, religions and institutions a learner meets in any text.
+// Python's \b and \w are Unicode-aware; JS's are ASCII-only, so they are spelled out here
+// (Cristóbal must not end in "ist").
+const ZH_WORD_CHAR = "[\\p{L}\\p{N}_]";
 const COMMON_NOUN_GLOSS_RE = new RegExp(
-  "\\b(language|people|person|ethnic|nationality|citizen|day|\\w+day|week|month|festival|holiday|new year|"
+  `(?<!${ZH_WORD_CHAR})(language|people|person|ethnic|nationality|citizen|day|${ZH_WORD_CHAR}+day|week|month|festival|holiday|new year|`
   + "religion|church|bible|god|party|army|navy|games|cup|era|calendar|zodiac|internet|christianity|"
   + "january|february|march|april|may|june|july|august|september|october|november|december|"
   + "american|british|chinese|japanese|korean|english|french|german|russian|spanish|italian|indian|"
-  + "asian|european|african|western)\\b|ism\\b|ist\\b", "i");
+  + `asian|european|african|western)(?!${ZH_WORD_CHAR})|ism(?!${ZH_WORD_CHAR})|ist(?!${ZH_WORD_CHAR})`, "iu");
 
 function isAlpha(ch) { return /\p{L}/u.test(ch); }
 function isUpper(ch) { return ch !== ch.toLowerCase() && ch === ch.toUpperCase(); }
