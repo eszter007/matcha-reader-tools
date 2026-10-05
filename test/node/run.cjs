@@ -1006,6 +1006,17 @@ async function testRubyAi() {
 
   // A model that gives no usable answer changes nothing.
   const none = async () => null;
+  // Dictionary furigana: kuromoji-style tokens, reading in katakana; "*" or none is skipped.
+  const tokens = { "今日は本を読む。": [["今日", "キョウ"], ["は", "ハ"], ["本", "ホン"], ["を", "ヲ"], ["読む", "ヨム"], ["。", "。"]],
+                   "取り引きを食べる。": [["取り引き", "トリヒキ"], ["を", "ヲ"], ["食べ", "タベ"], ["る", "ル"], ["。", "。"]],
+                   "林さんの本。": [["林", "*"], ["さん", "サン"], ["の", "ノ"], ["本", "ホン"], ["。", "。"]] };
+  const tokenize = (t) => (tokens[t] || []).map(([surface_form, reading]) => ({ surface_form, reading }));
+  const dictSpans = furigana.dictionaryFurigana(Object.keys(tokens).concat(["かな。"]), tokenize);
+  check("dictionary furigana", JSON.stringify([...dictSpans]) === JSON.stringify([
+    ["今日は本を読む。", [[0, 2, "きょう"], [3, 4, "ほん"], [5, 6, "よ"]]],
+    ["取り引きを食べる。", [[0, 1, "と"], [2, 3, "ひ"], [5, 6, "た"]]],
+    ["林さんの本。", [[4, 5, "ほん"]]]]), JSON.stringify([...dictSpans]));
+
   check("no answer: furigana leaves the document alone",
         furigana.annotateFurigana(jaDoc, await furigana.contextualFurigana(documentPassages(jaDoc), none)) === jaDoc);
   check("no answer: pinyin falls back to the dictionary",

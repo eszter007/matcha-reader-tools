@@ -12,7 +12,7 @@ to Gemini when you supply your own API key, and a book's text when you choose AI
 | 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.pdf`, `.xtc` or `.xtch` |
 | 📚 **Dictionary Converter** | Japanese: Yomitan `.zip` (Jitendex, JMnedict, grammar), jmdict-simplified `.json`/`.json.tgz`, MDict `.mdx`. Chinese and Cantonese: CC-CEDICT / CC-Canto text, the MoE `dict-revised.json`, Yomitan, MDict, a `headword<TAB>definition` TSV, with optional frequency, level, example-sentence and jyutping lists | `dict/<name>.idx` + `.dat` + `.spx` for Japanese; `dictionaries/zh/` or `dictionaries/yue/` with `vocab.*`, `names.*` and `.title` files for Chinese |
 | 🔤 **Font Converter** | TTF / OTF (up to 4 styles + fallback font) | `.fonts/<Family>/<Family>_<size>.cpfont` (v4, with kerning + ligatures) |
-| 🈷 **Furigana & Pinyin** | A Japanese EPUB, or a Chinese EPUB + CC-CEDICT (+ optional frequency list) | The same EPUB with furigana, or pinyin / zhuyin, as `<ruby>` over the text |
+| 🈷 **Furigana & Pinyin** | A Japanese or Chinese EPUB (+ optionally your own CC-CEDICT and a frequency list) | The same EPUB with furigana, or pinyin / zhuyin, as `<ruby>` over the text |
 
 Each tool downloads a zip already laid out for the SD card: unzip it onto the card, or upload the
 files via the reader's built-in Wi-Fi web file transfer.
@@ -154,12 +154,13 @@ left alone.
 
 | | Dictionary | AI (Gemini) |
 |---|---|---|
-| **Chinese** — `tools/pinyin_ruby/add_pinyin_ruby.py` | Longest-match segmentation against CC-CEDICT, one `<rt>` per character, the everyday reading of a word over a surname's. Nothing leaves the device. | `--ai`: Gemini reads each sentence and picks the reading meant there (石 *shí* or *dàn*); a reading is used only when CC-CEDICT lists it for that character. |
-| **Japanese** — `tools/furigana_ruby/add_furigana_ruby.py` | — Readings depend on context, so the firmware's tool has no dictionary mode, and neither does the page. | Gemini lists each word with its reading; a reading is used only when it is kana and fits the word as written, so okurigana stays bare. |
+| **Chinese** — `tools/pinyin_ruby/add_pinyin_ruby.py` | Longest-match segmentation against CC-CEDICT (a built-in copy, or your own file), one `<rt>` per character, the everyday reading of a word over a surname's. Nothing leaves the device. | `--ai`: Gemini reads each sentence and picks the reading meant there (石 *shí* or *dàn*); a reading is used only when CC-CEDICT lists it for that character. |
+| **Japanese** — `tools/furigana_ruby/add_furigana_ruby.py` | Page only (the firmware's tool has none): the built-in IPADIC, via [kuromoji.js](https://github.com/takuyaa/kuromoji.js), splits each sentence into words and gives each its likeliest reading (今日 is always *きょう*). Nothing leaves the device. | Gemini lists each word with its reading; a reading is used only when it is kana and fits the word as written, so okurigana stays bare. |
 
 The AI method sends the book's text to Google, sentence by sentence, under your own key (shared
 with the Manga page, kept in `localStorage`). Chinese can also leave the N commonest words of a
-frequency list bare, and write zhuyin instead of pinyin.
+frequency list bare, and write zhuyin instead of pinyin. The built-in dictionaries and their
+licences are listed in [`data/README.md`](data/README.md).
 
 ## Fidelity to the firmware's Python tools
 
@@ -169,7 +170,7 @@ Ports of the firmware's scripts, not reimplementations from the spec.
 |---|---|---|
 | Manga | `tools/manga_convert/convert_manga.py` | Byte-identical, given the same input pixels |
 | Dictionary | `tools/dict_convert/convert_jmdict.py` (Japanese, Chinese and Cantonese paths), `scripts/gen_dict_spx.py` | Byte-identical |
-| Furigana & Pinyin | `tools/furigana_ruby/add_furigana_ruby.py`, `tools/pinyin_ruby/add_pinyin_ruby.py`, `tools/ruby_common/ruby_epub.py` | Identical XHTML for the same model answers; the zip is stored rather than deflated |
+| Furigana & Pinyin | `tools/furigana_ruby/add_furigana_ruby.py`, `tools/pinyin_ruby/add_pinyin_ruby.py`, `tools/ruby_common/ruby_epub.py` | Identical XHTML for the same model answers; the zip is stored rather than deflated. Japanese dictionary furigana has no Python counterpart |
 | Fonts | `lib/EpdFont/scripts/fontconvert_sdcard.py` | Byte-identical except glyph bitmaps |
 
 Three places where pixels differ, each verified within ±2 px: AI detection (same

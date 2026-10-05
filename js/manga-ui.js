@@ -460,16 +460,6 @@ const YOLO_MODEL_URL = "models/manga_panel_detector_yolo26n.onnx";
 const ORT_DIR = "js/vendor/ort/";
 let yoloLoadPromise = null; // resolves to {ort, session}; reset to null on failure
 
-function loadScriptOnce(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = src;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("failed to load " + src));
-    document.head.appendChild(s);
-  });
-}
-
 function loadYoloDetector() {
   if (!yoloLoadPromise) {
     yoloLoadPromise = (async () => {

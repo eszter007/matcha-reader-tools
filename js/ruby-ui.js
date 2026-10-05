@@ -1,28 +1,42 @@
 /* Furigana & Pinyin page wiring. The annotators live in pinyin-ruby.js and furigana-ruby.js. */
 "use strict";
 
+// Built-in dictionaries, served with the page: CC-CEDICT for pinyin, IPADIC (kuromoji) for furigana.
+const BUILTIN_CEDICT_URL = "data/cedict_1_0_ts_utf-8_mdbg.txt.gz";
+const KUROMOJI_DIR = "data/kuromoji/";
+
 async function readRubyText(file) {
   let bytes = await readFileBytes(file);
   if (file.name.toLowerCase().endsWith(".gz")) bytes = await gunzip(bytes);
   return new TextDecoder("utf-8").decode(bytes);
 }
 
-/* Show what applies to the chosen language and method. Japanese has no dictionary method. */
+async function fetchBuiltinCedict() {
+  const resp = await fetch(BUILTIN_CEDICT_URL);
+  if (!resp.ok) throw new Error(`Could not load the built-in CC-CEDICT (HTTP ${resp.status}).`);
+  return new TextDecoder("utf-8").decode(await gunzip(new Uint8Array(await resp.arrayBuffer())));
+}
+
+async function loadKuromoji() {
+  if (typeof kuromoji === "undefined") await loadScriptOnce("js/vendor/kuromoji/kuromoji.js");
+  return new Promise((resolve, reject) => {
+    kuromoji.builder({ dicPath: KUROMOJI_DIR }).build((err, tokenizer) => (err ? reject(err) : resolve(tokenizer)));
+  });
+}
+
+/* Show what applies to the chosen language and method. */
 function updateRubyUi() {
   const lang = $("ruby-lang").value;
-  const methodSel = $("ruby-method");
-  const dictOption = methodSel.querySelector('option[value="dict"]');
-  dictOption.disabled = lang === "ja";
-  if (lang === "ja") methodSel.value = "ai";
-  const ai = methodSel.value === "ai";
+  const ai = $("ruby-method").value === "ai";
   $("ruby-ai-fields").hidden = !ai;
   $("ruby-zh-fields").hidden = lang !== "zh";
   $("ruby-method-hint").textContent = lang === "ja"
-    ? "Japanese furigana is read in context by Gemini; there is no dictionary method (see below)."
+    ? ai ? "Gemini reads each sentence and gives every word its reading there."
+         : "Readings come from the built-in Japanese dictionary (IPADIC), word by word. The book stays on this device."
     : ai ? "Gemini picks each character's reading in context; CC-CEDICT checks it and fills in anything it misses."
-         : "Readings come from CC-CEDICT, word by word. Nothing leaves this device.";
+         : "Readings come from CC-CEDICT, word by word. The book stays on this device.";
   saveSetting("ruby-lang", lang);
-  if (lang === "zh") saveSetting("ruby-method", methodSel.value);
+  saveSetting("ruby-method", $("ruby-method").value);
 }
 
 async function runRuby() {
@@ -31,7 +45,6 @@ async function runRuby() {
   const epubFile = $("ruby-epub").files[0];
   if (!epubFile) { logLine("Choose the EPUB first.", "warn"); return; }
   const cedictFile = $("ruby-cedict").files[0];
-  if (lang === "zh" && !cedictFile) { logLine("Chinese needs the CC-CEDICT file.", "warn"); return; }
   const apiKey = $("ruby-key").value.trim();
   const model = $("ruby-model").value.trim() || RUBY_GEMINI_MODEL;
   if (ai && !apiKey) { logLine("AI needs a Gemini API key.", "warn"); return; }
@@ -58,11 +71,18 @@ async function runRuby() {
 
     if (lang === "ja") {
       suffix = "-furigana.epub";
+      let tokenizer = null;
+      if (!ai) {
+        setProgress(0, 1, "Loading the Japanese dictionary…");
+        tokenizer = await loadKuromoji();
+      }
       let added = 0;
       annotate = async (name, doc) => {
         docLabel = name;
-        const furigana = await contextualFurigana(documentPassages(doc),
-          (batch) => askPerPassage(batch, FURIGANA_AI_PROMPT, apiKey, model, warn), onBatch);
+        const furigana = ai
+          ? await contextualFurigana(documentPassages(doc),
+              (batch) => askPerPassage(batch, FURIGANA_AI_PROMPT, apiKey, model, warn), onBatch)
+          : dictionaryFurigana(documentPassages(doc), (text) => tokenizer.tokenize(text));
         let n = 0;
         for (const spans of furigana.values()) n += spans.length;
         added += n;
@@ -77,8 +97,9 @@ async function runRuby() {
     setProgress(0, 1, "Reading CC-CEDICT…");
     await sleep(0);
     const charReadings = ai ? new Map() : null;
-    const words = loadCedictReadings(await readRubyText(cedictFile), charReadings);
-    logLine(`CC-CEDICT: ${words.size.toLocaleString()} headwords`);
+    const cedictText = cedictFile ? await readRubyText(cedictFile) : await fetchBuiltinCedict();
+    const words = loadCedictReadings(cedictText, charReadings);
+    logLine(`CC-CEDICT${cedictFile ? "" : " (built-in)"}: ${words.size.toLocaleString()} headwords`);
     let skip = new Set();
     const skipTop = parseInt($("ruby-skip-top").value, 10) || 0;
     if (skipTop > 0) {
@@ -127,10 +148,7 @@ if (typeof document !== "undefined" && document.getElementById("ruby-run")) {
   if (lang === "ja" || lang === "zh") $("ruby-lang").value = lang;
   const method = loadSetting("ruby-method", "dict");
   if (method === "dict" || method === "ai") $("ruby-method").value = method;
-  $("ruby-lang").addEventListener("change", () => {
-    if ($("ruby-lang").value === "zh") $("ruby-method").value = loadSetting("ruby-method", "dict");
-    updateRubyUi();
-  });
+  $("ruby-lang").addEventListener("change", updateRubyUi);
   $("ruby-method").addEventListener("change", updateRubyUi);
   updateRubyUi();
 }

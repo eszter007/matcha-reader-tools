@@ -75,6 +75,16 @@ async function mapLimit(items, limit, fn) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("failed to load " + src));
+    document.head.appendChild(s);
+  });
+}
+
 /* Keep the screen awake during long conversions (best-effort). */
 class WakeLock {
   constructor() { this.sentinel = null; this._onVis = null; }

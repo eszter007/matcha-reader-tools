@@ -725,12 +725,34 @@ async function testRuby(page, base) {
     check("a model chosen on purpose is kept", (await page.inputValue("#manga-model")) === "my-own-model");
     await page.evaluate(() => localStorage.removeItem("matcha-tools/gemini-model"));
 
-    // Japanese: AI only, the dictionary method cannot be picked.
+    // Chinese with no CC-CEDICT chosen: the built-in copy.
+    await page.goto(`${base}/ruby.html`);
+    await page.selectOption("#ruby-lang", "zh");
+    await page.selectOption("#ruby-method", "dict");
+    await page.setInputFiles("#ruby-epub", zh("book.epub"));
+    let before = calls.length;
+    out = await downloadFromPage(page, () => page.click("#ruby-run"));
+    check("pinyin from the built-in CC-CEDICT", /<rt>[a-zà-ǜ]+<\/rt>/.test(zipMember(out, "c1.xhtml"))
+          && (await page.textContent("#log")).includes("CC-CEDICT (built-in)"));
+    check("the built-in dictionary calls nothing", calls.length === before);
+
+    // Japanese from the built-in dictionary (kuromoji, IPADIC).
     await page.goto(`${base}/ruby.html`);
     await page.selectOption("#ruby-lang", "ja");
-    check("Japanese offers no dictionary method",
-          await page.$eval('#ruby-method option[value="dict"]', (o) => o.disabled)
-          && (await page.$eval("#ruby-method", (s) => s.value)) === "ai");
+    await page.selectOption("#ruby-method", "dict");
+    await page.setInputFiles("#ruby-epub", zh("ai_ja.epub"));
+    before = calls.length;
+    out = await downloadFromPage(page, () => page.click("#ruby-run"));
+    const ja = zipMember(out, "c1.xhtml");
+    check("furigana from the built-in dictionary", ja.includes("<ruby>今日<rt>きょう</rt></ruby>")
+          && ja.includes("<ruby>食<rt>た</rt></ruby>べる") && ja.includes("<ruby>林<rt>はやし</rt></ruby>"), ja);
+    check("Japanese dictionary furigana calls nothing", calls.length === before);
+
+    // Japanese with AI.
+    await page.goto(`${base}/ruby.html`);
+    await page.selectOption("#ruby-lang", "ja");
+    await page.selectOption("#ruby-method", "ai");
+    await page.fill("#ruby-key", "stub-key-not-a-real-credential");
     await page.setInputFiles("#ruby-epub", zh("ai_ja.epub"));
     out = await downloadFromPage(page, () => page.click("#ruby-run"));
     check("furigana matches add_furigana_ruby.py --ai",
