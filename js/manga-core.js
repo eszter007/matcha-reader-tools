@@ -134,6 +134,9 @@ function encodeXtgPage(gray, w, h, threshold = 128) {
 /* 2-bit page. Height MUST be a multiple of 8: the firmware sizes the buffer as
  * ((w*h+7)/8)*2 but indexes it as ((h+7)/8)*w per plane, and those agree only then --
  * otherwise it reads past what it allocated. Callers pad the image instead. */
+// Indexed by gray >> 6 (black, dark gray, light gray, white).
+const XTH_VALUE_FOR_LEVEL = [3, 1, 2, 0];
+
 function encodeXthPage(gray, w, h) {
   if (h % 8 !== 0) throw new Error(`XTH height must be a multiple of 8 (got ${h})`);
   const colBytes = h >> 3;
@@ -147,8 +150,8 @@ function encodeXthPage(gray, w, h) {
   for (let x = 0; x < w; x++) {
     const colIndex = w - 1 - x;
     for (let y = 0; y < h; y++) {
-      // 4 levels, matching the reader's 0=white .. 3=black ordering.
-      const v = 3 - (gray[y * w + x] >> 6);
+      // The reader's XTH values are not in tone order: 0=white, 1=dark gray, 2=light gray, 3=black.
+      const v = XTH_VALUE_FOR_LEVEL[gray[y * w + x] >> 6];
       if (!v) continue;
       const off = colIndex * colBytes + (y >> 3);
       const bit = 7 - (y & 7);

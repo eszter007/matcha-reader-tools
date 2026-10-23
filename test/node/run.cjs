@@ -1274,7 +1274,8 @@ function testXtc() {
     for (let y=0;y<h;y++) for (let x=0;x<w;x++) {
       const colIndex = w-1-x, off = colIndex*colBytes + (y>>3), bit = 7-(y&7);
       const v = (((p1[off]>>bit)&1) << 1) | ((p2[off]>>bit)&1);
-      if (v !== 3 - (gray[y*w+x] >> 6)) bad++;
+      // Reader: 0=white, 1=dark gray, 2=light gray, 3=black (photographed on an X4).
+      if (v !== [3, 1, 2, 0][gray[y*w+x] >> 6]) bad++;
     }
     check('XTH pixels round-trip', bad === 0, `${bad} wrong`);
   }
