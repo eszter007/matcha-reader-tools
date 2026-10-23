@@ -96,6 +96,22 @@ function xtcPageCount(file) {
   return fs.readFileSync(file).readUInt16LE(6);
 }
 
+/* Chapter titles and start pages from an XTC/XTCH container, laid out as buildXtcFile writes
+ * them: chapterOffset (u32 at 0x30), chapterCount (u16 at 56+246), 96-byte records. */
+function xtcChapters(file) {
+  const buf = fs.readFileSync(file);
+  const offset = buf.readUInt32LE(0x30);
+  const count = buf.readUInt16LE(56 + 246);
+  const chapters = [];
+  for (let i = 0; i < count; i++) {
+    const at = offset + i * 96;
+    const name = buf.subarray(at, at + 80);
+    const end = name.indexOf(0);
+    chapters.push({ title: name.subarray(0, end < 0 ? 80 : end).toString("utf8"), page: buf.readUInt16LE(at + 0x50) });
+  }
+  return chapters;
+}
+
 function filesEqual(a, b) {
   const ba = fs.readFileSync(a), bb = fs.readFileSync(b);
   return ba.length === bb.length && ba.equals(bb);
@@ -378,6 +394,29 @@ async function testMangaFolderedCbz(page, base) {
     console.log("  skip (no manga_foldered.cbz — rerun gen_references.py)");
     return;
   }
+  // One chapter per folder in the XTCH, which has no other way to jump between chapters. Run
+  // first: the page saves the formats of its last run, and the tests after this one expect the
+  // device-folder export below.
+  await gotoManga(page, base);
+  await page.setInputFiles("#manga-file", cbz);
+  await page.check("#manga-no-ocr");
+  await page.uncheck("#manga-yolo");
+  await setMangaForm(page, { formats: ["xtch"], res: "x4" });
+  await page.fill("#manga-title", "Foldered");
+  // A single output downloads as the file itself rather than a ZIP.
+  const xtch = await downloadFromPage(page, () => page.click("#manga-run"));
+  check("XTCH produced", fs.existsSync(xtch));
+  if (fs.existsSync(xtch)) {
+    const chapters = xtcChapters(xtch);
+    check("XTCH has one chapter per folder",
+          JSON.stringify(chapters.map((c) => c.title)) === JSON.stringify(["ch01", "ch02", "ch03"]),
+          JSON.stringify(chapters));
+    check("chapters start at page 0 and move forward",
+          chapters.length === 3 && chapters[0].page === 0 &&
+          chapters[1].page > chapters[0].page && chapters[2].page > chapters[1].page,
+          JSON.stringify(chapters));
+  }
+
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", cbz);
   await page.check("#manga-no-ocr");

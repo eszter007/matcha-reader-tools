@@ -350,17 +350,23 @@ async function collectFromCbz(bytes, fileName) {
   const ordered = naturalSortPaths([...byPath.keys()]);
 
   let meta = { title: "", author: "", language: "" };
+  let bookmarks = [];
   const infoEntry = zip.entries.find((e) => baseName(e.name).toLowerCase() === "comicinfo.xml");
   if (infoEntry) {
     try {
-      meta = cbzMetadataFromComicInfo(new TextDecoder().decode(await zip.readEntry(infoEntry)));
+      const xml = new TextDecoder().decode(await zip.readEntry(infoEntry));
+      meta = cbzMetadataFromComicInfo(xml);
+      bookmarks = comicInfoBookmarks(xml, ordered.length);
     } catch (e) { /* best-effort, like the Python tool */ }
   }
+  // Chapters the archive itself marks win; otherwise one per chapter folder.
+  const tocEntries = bookmarks.length ? bookmarks : chaptersFromFolders(ordered);
 
   return {
     pages: ordered.map((name) => ({ name, read: () => zip.readEntry(byPath.get(name)) })),
     meta,
-    tocEntries: [],
+    tocEntries,
+    tocSource: bookmarks.length ? "ComicInfo.xml bookmarks" : "chapter folders",
     sourceLabel: fileName,
   };
 }
@@ -421,7 +427,7 @@ async function collectFromEpub(bytes, fileName) {
     tocEntries = await epubNativeToc(zip, opf, opfDir, spineMap, pages);
   } catch (e) { /* fall back to no TOC */ }
 
-  return { pages, meta: epubMetadataFromOpf(opf), tocEntries, sourceLabel: fileName };
+  return { pages, meta: epubMetadataFromOpf(opf), tocEntries, tocSource: "EPUB's table of contents", sourceLabel: fileName };
 }
 
 async function epubNativeToc(zip, opf, opfDir, spineMap, pages) {
@@ -901,7 +907,7 @@ async function runMangaConversion() {
 
     // Resolve TOC before any max-pages truncation (indices stay correct).
     let tocEntries = collected.tocEntries;
-    if (tocEntries.length) logLine(`Found ${tocEntries.length} chapter(s) in the EPUB's table of contents`);
+    if (tocEntries.length) logLine(`Found ${tocEntries.length} chapter(s) from the ${collected.tocSource}`);
     const tocText = $("manga-toc").value;
     if (tocText.trim()) {
       const parsed = parseTocText(tocText);

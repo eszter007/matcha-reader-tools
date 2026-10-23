@@ -32,8 +32,9 @@
              accept=".cbz,.zip,.epub,.pdf,application/pdf,image/jpeg,image/png,image/webp,image/bmp">
     </label>
     <p class="hint" style="margin-bottom:0">
-      Pages are ordered by filename, cover and copyright first. EPUBs use their spine order and
-      table of contents. PDFs use document order, rasterized at 2×.</p>
+      Pages are ordered by filename, cover and copyright first. A .cbz or .zip with a folder per
+      chapter gets one chapter per folder (or the chapters its ComicInfo.xml marks). EPUBs use their
+      spine order and table of contents. PDFs use document order, rasterized at 2×.</p>
   </div>
 
   <div class="card">
@@ -232,7 +233,7 @@
     language to expect. Only EPUBs and CBZs with a <code>ComicInfo.xml</code> declare one; fill it
     in yourself for anything else. It is read at conversion time, so a book converted without it
     counts as "unknown" until you convert it again.</p>
-    <label for="manga-toc">Chapters <span class="hint">— one per line: <code>page | title</code>, 0-based final page number. Overrides the EPUB's own chapters.</span></label>
+    <label for="manga-toc">Chapters <span class="hint">— one per line: <code>page | title</code>, 0-based final page number. Overrides the chapters found in the file.</span></label>
     <textarea id="manga-toc" rows="3" placeholder="0 | Cover&#10;4 | Chapter 1&#10;36 | Chapter 2"></textarea>
   </div>
 

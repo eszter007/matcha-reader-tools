@@ -1078,6 +1078,42 @@ function cbzMetadataFromComicInfo(xml) {
   return { title, author, language };
 }
 
+/* Chapter starts a ComicInfo.xml marks with <Page Image="N" Bookmark="Title"/>, as
+ * [[pageIndex, title]] sorted by page. Image is the page's position in the archive's reading
+ * order, which is the order the pages are collected in. */
+function comicInfoBookmarks(xml, pageCount) {
+  const entries = [];
+  for (const m of xml.matchAll(/<Page\b([^>]*?)\/?>/g)) {
+    const image = m[1].match(/\bImage="(\d+)"/);
+    const bookmark = m[1].match(/\bBookmark="([^"]*)"/);
+    if (!image || !bookmark) continue;
+    const page = Number(image[1]);
+    const title = xmlUnescape(bookmark[1]).trim();
+    if (title && page < pageCount) entries.push([page, title]);
+  }
+  return entries.sort((a, b) => a[0] - b[0]);
+}
+
+/* Chapters from an archive's folder layout, as [[pageIndex, folderName]]: each folder below the
+ * folders every page shares (a book's own wrapper) starts a chapter at its first page. A cover or
+ * copyright page that naturalSortKey pins to the front does not start one. Returns [] unless the
+ * pages are split over at least two folders. `orderedPaths` is the final page order. */
+function chaptersFromFolders(orderedPaths) {
+  const dirs = orderedPaths.map((p) => pathNorm(p).split("/").slice(0, -1));
+  let shared = 0;
+  while (dirs.length && dirs.every((d) => d.length > shared && d[shared] === dirs[0][shared])) shared++;
+  const entries = [];
+  const seen = new Set();
+  dirs.forEach((d, i) => {
+    if (d.length <= shared) return;
+    const folder = d[shared];
+    if (seen.has(folder) || /cover|copyright/i.test(baseName(orderedPaths[i]))) return;
+    seen.add(folder);
+    entries.push([i, folder.trim()]);
+  });
+  return entries.length >= 2 ? entries : [];
+}
+
 /* Extract [(href, title)] entries from an EPUB3 nav document's toc nav. */
 function epubTocFromNav(navXhtml, navPath) {
   const navDir = pathDirname(navPath);
@@ -1175,7 +1211,8 @@ if (typeof module !== "undefined") {
     encodePage, blockLinesFromOcr, writePanelsIdx, writeMetaBin, writeTocIdx, normalizeLanguage, PANEL_CROP_SUBDIR,
     encodeXtgPage, encodeXthPage, buildXtcFile,
     pathDirname, pathNorm, pathJoinNorm,
-    epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo, xmlUnescape,
+    epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo, comicInfoBookmarks, chaptersFromFolders,
+    xmlUnescape,
     epubTocFromNav, epubTocFromNcx, epubNavHref, epubNcxHref, parseTocText,
   };
 }

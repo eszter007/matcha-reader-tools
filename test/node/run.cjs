@@ -434,6 +434,26 @@ function decodeBmp1bit(bmp) {
  * across folders. Keying or sorting on the basename alone collapsed ch01/001 and ch08/001
  * into one page -- most of a volume silently lost, and the survivors interleaved into
  * something that reads as jumbled chapters. */
+/* XTC/XTCH and EPUB chapters for a CBZ: one per chapter folder, or the ones ComicInfo.xml marks. */
+function testMangaArchiveChapters() {
+  console.log("manga chapters from an archive's layout:");
+  const order = manga.naturalSortPaths([
+    "Vol 1/ch02/001.png", "Vol 1/cover.jpg", "Vol 1/ch01/002.png", "Vol 1/ch01/001.png", "Vol 1/ch02/002.png"]);
+  check("one chapter per folder below the shared wrapper folder",
+        JSON.stringify(manga.chaptersFromFolders(order)) === JSON.stringify([[1, "ch01"], [3, "ch02"]]),
+        JSON.stringify(manga.chaptersFromFolders(order)));
+  check("a flat archive has no chapters", manga.chaptersFromFolders(["001.png", "002.png"]).length === 0);
+  check("a single folder is not a chapter list",
+        manga.chaptersFromFolders(["ch01/001.png", "ch01/002.png"]).length === 0);
+  const xml = '<ComicInfo><Pages><Page Image="0" Type="FrontCover"/>' +
+    '<Page Image="5" Bookmark="Chapter 2 &amp; more"/><Page Image="1" Bookmark="Chapter 1"/>' +
+    '<Page Image="99" Bookmark="Past the end"/></Pages></ComicInfo>';
+  check("ComicInfo bookmarks, sorted, unescaped, past-the-end dropped",
+        JSON.stringify(manga.comicInfoBookmarks(xml, 10)) ===
+        JSON.stringify([[1, "Chapter 1"], [5, "Chapter 2 & more"]]),
+        JSON.stringify(manga.comicInfoBookmarks(xml, 10)));
+}
+
 function testMangaFolderedSort() {
   console.log("manga page order in chapter-foldered archives:");
   const foldered = ["ch02/002.png", "ch01/002.png", "ch02/001.png", "ch01/001.png", "ch10/001.png"];
@@ -1295,6 +1315,7 @@ function testXtc() {
   testMangaLineBoxes();
   testXtc();
   testMangaFolderedSort();
+  testMangaArchiveChapters();
   testXmlUnescape();
   testMangaSourceMetadata();
   testMangaInkCoverage();
