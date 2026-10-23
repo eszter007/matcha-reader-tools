@@ -693,7 +693,8 @@ function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = tru
 
   // Both depths read from the same corrected buffer, so a book exported as XTC and XTCH
   // gets the same tonality rather than one of the two coming out darker.
-  const gray = stretchPaperAndInk(applyGrayGamma(grayFromRGBA(ctx.getImageData(0, 0, w, h).data, w, h), gamma));
+  const gray = stretchPaperAndInk(
+    unsharpMask(applyGrayGamma(grayFromRGBA(ctx.getImageData(0, 0, w, h).data, w, h), gamma), w, h));
   const out = {};
   if (wantXtc) {
     const dithered = floydSteinbergMono(gray, w, h);   // 0/1 per pixel, 1 = white

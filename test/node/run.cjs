@@ -449,6 +449,12 @@ function testXtchDither() {
   check("paper and ink are stretched to pure white and black",
         JSON.stringify([...manga.stretchPaperAndInk(Uint8Array.from([8, 16, 128, 240, 248]))]) ===
         JSON.stringify([0, 0, 128, 255, 255]));
+  const flat = new Uint8Array(w * h).fill(180);
+  check("sharpening leaves flat areas alone", manga.unsharpMask(flat, w, h).every((v) => v === 180));
+  const edge = new Uint8Array(w * h).map((_, i) => (i % w < w / 2 ? 60 : 200));
+  const sharp = manga.unsharpMask(edge, w, h);
+  check("sharpening steepens an edge", sharp[w / 2 - 1] < 60 && sharp[w / 2] > 200,
+        `${sharp[w / 2 - 1]} ${sharp[w / 2]}`);
 }
 
 /* XTC/XTCH and EPUB chapters for a CBZ: one per chapter folder, or the ones ComicInfo.xml marks. */

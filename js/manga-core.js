@@ -746,6 +746,26 @@ function floydSteinbergMono(gray, w, h) {
   return out;
 }
 
+/* Unsharp mask with a 3x3 Gaussian: shrinking a page to the screen softens line art and small
+ * furigana, and this restores their edges. Differences up to `threshold` are left alone so JPEG
+ * noise and flat screentone are not amplified; a stronger `amount` starts drawing halos. */
+function unsharpMask(gray, w, h, amount = 0.6, threshold = 3) {
+  const out = new Uint8Array(gray.length);
+  for (let y = 0; y < h; y++) {
+    const up = Math.max(0, y - 1) * w, row = y * w, down = Math.min(h - 1, y + 1) * w;
+    for (let x = 0; x < w; x++) {
+      const l = Math.max(0, x - 1), r = Math.min(w - 1, x + 1);
+      const blur = (gray[up + l] + 2 * gray[up + x] + gray[up + r] +
+                    2 * gray[row + l] + 4 * gray[row + x] + 2 * gray[row + r] +
+                    gray[down + l] + 2 * gray[down + x] + gray[down + r]) / 16;
+      const v = gray[row + x];
+      const diff = v - blur;
+      out[row + x] = Math.abs(diff) <= threshold ? v : Math.min(255, Math.max(0, Math.round(v + amount * diff)));
+    }
+  }
+  return out;
+}
+
 /* Scans rarely have pure white paper or pure black ink (about 248 and 8 in a typical one).
  * Dithered as they are, the slightly gray paper becomes a sprinkle of dots across every speech
  * bubble. Stretching the range so near-white is white and near-black is black removes that and
@@ -1248,7 +1268,7 @@ if (typeof module !== "undefined") {
     MANGA_FORMAT_VERSION, isImageName, baseName, mangaFileExt,
     naturalSortKey, compareNaturalKeys, naturalSortPaths,
     grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
-    floydSteinbergMono, floydSteinbergLevels, stretchPaperAndInk, encodeBmp1bit, encodeMonoBmpFromRGBA,
+    floydSteinbergMono, floydSteinbergLevels, stretchPaperAndInk, unsharpMask, encodeBmp1bit, encodeMonoBmpFromRGBA,
     DITHER_GAMMAS, validDitherGamma, applyGrayGamma,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
     yOverlapFrac, xOverlapFrac, sortPanelsReadingOrder,
