@@ -746,6 +746,54 @@ function floydSteinbergMono(gray, w, h) {
   return out;
 }
 
+/* Scans rarely have pure white paper or pure black ink (about 248 and 8 in a typical one).
+ * Dithered as they are, the slightly gray paper becomes a sprinkle of dots across every speech
+ * bubble. Stretching the range so near-white is white and near-black is black removes that and
+ * keeps the midtones in between. */
+function stretchPaperAndInk(gray, black = 16, white = 240) {
+  const out = new Uint8Array(gray.length);
+  const span = white - black;
+  for (let i = 0; i < gray.length; i++) {
+    const v = gray[i];
+    out[i] = v <= black ? 0 : v >= white ? 255 : Math.round(((v - black) * 255) / span);
+  }
+  return out;
+}
+
+/* Floyd-Steinberg error diffusion to `levels` evenly spaced grays (0..255 values out). An XTH page
+ * has four; rounding each pixel to the nearest one on its own flattens screentone and gradients
+ * into blotches, while diffusing the error keeps their average tone. Pure white and pure black
+ * stay exact and drop any error they receive: otherwise error leaking off ink edges travels
+ * through blank paper and margins and surfaces there as stray dots. */
+function floydSteinbergLevels(gray, w, h, levels) {
+  const step = 255 / (levels - 1);
+  const acc = new Int32Array(gray);
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      const i = row + x;
+      if (gray[i] === 255 || gray[i] === 0) {
+        out[i] = gray[i];
+        continue;
+      }
+      const oldVal = acc[i];
+      const q = Math.min(levels - 1, Math.max(0, Math.round(oldVal / step)));
+      const newVal = Math.round(q * step);
+      out[i] = newVal;
+      const err = oldVal - newVal;
+      if (err === 0) continue;
+      if (x + 1 < w) acc[i + 1] += (err * 7) >> 4;
+      if (y + 1 < h) {
+        if (x > 0) acc[i + w - 1] += (err * 3) >> 4;
+        acc[i + w] += (err * 5) >> 4;
+        if (x + 1 < w) acc[i + w + 1] += err >> 4;
+      }
+    }
+  }
+  return out;
+}
+
 /* Pack a 1-bit mono buffer (1 = white) into a standard uncompressed BI_RGB BMP:
  * 14-byte file header, 40-byte BITMAPINFOHEADER, a 2-entry black/white palette,
  * then bottom-up rows padded to a 4-byte stride with MSB-first bit packing.
@@ -1200,7 +1248,7 @@ if (typeof module !== "undefined") {
     MANGA_FORMAT_VERSION, isImageName, baseName, mangaFileExt,
     naturalSortKey, compareNaturalKeys, naturalSortPaths,
     grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
-    floydSteinbergMono, encodeBmp1bit, encodeMonoBmpFromRGBA,
+    floydSteinbergMono, floydSteinbergLevels, stretchPaperAndInk, encodeBmp1bit, encodeMonoBmpFromRGBA,
     DITHER_GAMMAS, validDitherGamma, applyGrayGamma,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
     yOverlapFrac, xOverlapFrac, sortPanelsReadingOrder,

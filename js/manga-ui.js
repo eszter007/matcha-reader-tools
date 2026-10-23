@@ -57,6 +57,14 @@ function canvasToJpegBytes(canvas, quality) { return canvasBytes(canvas, "image/
 
 function canvasToPngBytes(canvas) { return canvasBytes(canvas, "image/png"); }
 
+/* For a context that draws an image scaled: the default "low" quality is close to plain bilinear,
+ * which turns screentone into moiré and thins fine lines when a page is shrunk to the screen. */
+function smoothScaling(ctx) {
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  return ctx;
+}
+
 /* Rotate a canvas 90° clockwise into a new (height×width) canvas. */
 function rotateCanvas90CW(src) {
   const dst = makeCanvas(src.height, src.width);
@@ -182,7 +190,7 @@ async function assembleWebtoonPages(pages, target, onProgress) {
   async function tileCanvas(i) {
     const bmp = await decodeImage(await pages[i].read(), mangaFileExt(pages[i].name));
     const c = makeCanvas(width, scaledH[i]);
-    const ctx = c.getContext("2d", { willReadFrequently: true });
+    const ctx = smoothScaling(c.getContext("2d", { willReadFrequently: true }));
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, scaledH[i]);
     ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 0, 0, width, scaledH[i]);
@@ -666,13 +674,13 @@ async function buildMangaPdf({ title, author, epubPages }) {
  * rather than sitting in a thin band (the same thing the EPUB export does). rotateLandscape=false
  * keeps the image as drawn, letterboxed into the page.
  *
- * The 1-bit page is dithered (Floyd-Steinberg) rather than hard-thresholded: a plain threshold
- * turns screentone into flat black. XTH additionally needs a height that is a multiple of 8, which
+ * Both depths are dithered (Floyd-Steinberg) rather than rounded per pixel: a plain threshold
+ * turns screentone into flat black, and plain rounding to XTH's four grays into blotches. XTH additionally needs a height that is a multiple of 8, which
  * every device target already satisfies (800 and 792 both divide by 8). */
 function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = true, gamma = 1) {
   const [w, h] = target;
   const page = makeCanvas(w, h);
-  const ctx = page.getContext("2d", { willReadFrequently: true });
+  const ctx = smoothScaling(page.getContext("2d", { willReadFrequently: true }));
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, w, h);
 
@@ -685,7 +693,7 @@ function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = tru
 
   // Both depths read from the same corrected buffer, so a book exported as XTC and XTCH
   // gets the same tonality rather than one of the two coming out darker.
-  const gray = applyGrayGamma(grayFromRGBA(ctx.getImageData(0, 0, w, h).data, w, h), gamma);
+  const gray = stretchPaperAndInk(applyGrayGamma(grayFromRGBA(ctx.getImageData(0, 0, w, h).data, w, h), gamma));
   const out = {};
   if (wantXtc) {
     const dithered = floydSteinbergMono(gray, w, h);   // 0/1 per pixel, 1 = white
@@ -693,7 +701,7 @@ function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = tru
     for (let i = 0; i < bw.length; i++) bw[i] = dithered[i] ? 255 : 0;
     out.xtc = { bytes: encodeXtgPage(bw, w, h), w, h };
   }
-  if (wantXtch) out.xtch = { bytes: encodeXthPage(gray, w, h), w, h };
+  if (wantXtch) out.xtch = { bytes: encodeXthPage(floydSteinbergLevels(gray, w, h, 4), w, h), w, h };
   return out;
 }
 
@@ -1029,7 +1037,7 @@ async function runMangaConversion() {
       // Detection + page canvas (downscaled). White-fill only when actually
       // resizing, so panels.idx and the default (Original) output are unchanged.
       const canvas = makeCanvas(imgW, imgH);
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
       if (wasResized) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, imgW, imgH); }
       ctx.drawImage(bitmap, 0, 0, origW, origH, 0, 0, imgW, imgH);
       // The source bitmap stays open until after detection: the full-resolution
@@ -1187,7 +1195,7 @@ async function runMangaConversion() {
           const fw = Math.max(1, fx2 - fx1), fh = Math.max(1, fy2 - fy1);
           const pf = fitToDeviceSize(fw, fh, deviceTarget);
           const canvas = makeCanvas(pf.w, pf.h);
-          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
           // White under the draw, as sourceCanvas has: the bitmap fallback may carry transparency.
           ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, pf.w, pf.h);
           ctx.drawImage(sourceCanvas || bitmap, fx1, fy1, fw, fh, 0, 0, pf.w, pf.h);

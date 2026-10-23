@@ -434,6 +434,23 @@ function decodeBmp1bit(bmp) {
  * across folders. Keying or sorting on the basename alone collapsed ch01/001 and ch08/001
  * into one page -- most of a volume silently lost, and the survivors interleaved into
  * something that reads as jumbled chapters. */
+/* XTCH pages: four grays, dithered, with paper and ink kept exact so no stray dots appear. */
+function testXtchDither() {
+  console.log("XTCH 4-level dithering:");
+  const w = 64, h = 64;
+  const out = manga.floydSteinbergLevels(new Uint8Array(w * h).fill(200), w, h, 4);
+  check("only the four XTH grays come out", out.every((v) => v === 0 || v === 85 || v === 170 || v === 255));
+  const mean = out.reduce((a, v) => a + v, 0) / out.length;
+  check("a flat mid gray keeps its average tone", Math.abs(mean - 200) < 4, `mean ${mean.toFixed(1)}`);
+  const page = new Uint8Array(w * h).fill(255);
+  for (let i = 0; i < w * 8; i++) page[i] = 100;  // a gray band above white paper
+  const dithered = manga.floydSteinbergLevels(page, w, h, 4);
+  check("error never leaks into white paper", dithered.slice(w * 8).every((v) => v === 255));
+  check("paper and ink are stretched to pure white and black",
+        JSON.stringify([...manga.stretchPaperAndInk(Uint8Array.from([8, 16, 128, 240, 248]))]) ===
+        JSON.stringify([0, 0, 128, 255, 255]));
+}
+
 /* XTC/XTCH and EPUB chapters for a CBZ: one per chapter folder, or the ones ComicInfo.xml marks. */
 function testMangaArchiveChapters() {
   console.log("manga chapters from an archive's layout:");
@@ -1316,6 +1333,7 @@ function testXtc() {
   testXtc();
   testMangaFolderedSort();
   testMangaArchiveChapters();
+  testXtchDither();
   testXmlUnescape();
   testMangaSourceMetadata();
   testMangaInkCoverage();
