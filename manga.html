@@ -21,8 +21,10 @@
 </header>
 <main>
   <h2>📖 Manga Converter</h2>
-  <p class="lede">AI panel detection for manga, in your browser. Finds the panels, optionally reads
-  and translates their text with Gemini, and exports for the Matcha Reader, as EPUB, PDF, or XTC.</p>
+  <p class="lede">Finds the panels in your manga and exports it for the Matcha Reader, as EPUB, PDF,
+  or XTC. Everything runs here in your browser. Your pages are not uploaded anywhere and no AI
+  company sees them. The one exception is optional: if you turn on text reading and translation,
+  the panels are sent to Google's Gemini.</p>
 
   <div class="card">
     <h3>1. Choose your manga</h3>
@@ -101,10 +103,10 @@
       <summary>Advanced</summary>
       <div class="checks stacked">
         <label id="manga-yolo-row"><input type="checkbox" id="manga-yolo" checked> <span class="opt">AI panel detection</span>
-          <span class="hint">A small YOLO26 model that runs on your own computer, inside this
-          browser tab. It downloads once from this site (~21&nbsp;MB) and is then cached. Your pages
-          are never uploaded and no AI company sees them. Only text recognition below sends panels
-          to Google's Gemini. Untick for the faster white-gutter heuristic.</span></label>
+          <span class="hint">Spots panels more reliably, including ones without white borders. It
+          runs here in your browser: your pages are not uploaded anywhere and no AI company sees
+          them. The detector is downloaded once from this site (~21&nbsp;MB) and kept for next time.
+          Untick to use the faster white-border detection instead.</span></label>
         <label id="manga-rotate-row"><input type="checkbox" id="manga-rotate-panels" checked> <span class="opt">Rotate wide panels to portrait</span>
           <span class="hint">EPUB, PDF and XTC/XTCH only. Those carry pre-rendered images, so a wide
           panel is turned upright to fill the screen. Untick to keep panels as drawn. Matcha Reader
