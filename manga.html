@@ -32,10 +32,8 @@
 </header>
 <main id="main" tabindex="-1">
   <h2 class="with-icon"><svg class="title-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6l0 13"/><path d="M12 6l0 13"/><path d="M21 6l0 13"/></svg>Manga Converter</h2>
-  <p class="lede">Finds the panels in your manga and exports it for the Matcha Reader, as EPUB, PDF,
-  or XTC. Everything runs here in your browser. Your pages are not uploaded anywhere and no AI
-  company sees them. The one exception is optional: if you turn on text reading and translation,
-  the panels are sent to Google's Gemini.</p>
+  <p class="lede">Turns a manga, manhua or comic into a book you read panel by panel on your Matcha
+  Reader. Everything runs in your browser; your pages are not uploaded anywhere.</p>
 
   <div class="card">
     <h3>1. Choose your manga</h3>
@@ -44,21 +42,28 @@
       <input type="file" id="manga-file" multiple
              accept=".cbz,.zip,.epub,.pdf,application/pdf,image/jpeg,image/png,image/webp,image/bmp">
     </label>
-    <p class="hint" style="margin-bottom:0">
-      Choose several archives at once to convert a whole series, one book each.
-      Pages are ordered by filename, cover and copyright first. A .cbz or .zip with a folder per
-      chapter gets one chapter per folder (or the chapters its ComicInfo.xml marks). EPUBs use their
-      spine order and table of contents. PDFs use document order, rasterized at 2×.</p>
+    <p class="hint">One book, or several at once for a whole series.</p>
+    <details>
+      <summary>How pages are ordered</summary>
+      <p class="hint">By file name, cover and copyright first. A .cbz or .zip with a folder per chapter
+      gets one chapter per folder (or the chapters its ComicInfo.xml marks). EPUBs use their spine
+      order and table of contents. PDFs use document order, rasterized at 2×.</p>
+    </details>
   </div>
 
   <div class="card">
-    <h3>2. Export format</h3>
-    <div class="checks stacked" id="manga-format">
-      <label><input type="checkbox" class="fmt" value="matchafile"> <span class="opt">Matcha Reader, firmware 2.0.0-rc-4 and up</span>
-        <span class="hint">One <code>.matcha</code> file: panel-by-panel navigation, with offline
-        dictionary lookup and translations. Copies much faster than a folder.</span></label>
-      <label><input type="checkbox" class="fmt" value="matcha"> <span class="opt">Matcha Reader, legacy folder</span>
+    <h3>2. Format and device</h3>
+    <div id="manga-format">
+    <div class="subhead" id="fmt-matcha-title">For your Matcha Reader</div>
+    <div class="checks stacked" role="group" aria-labelledby="fmt-matcha-title">
+      <label><input type="checkbox" class="fmt" value="matchafile"> <span class="opt"><code>.matcha</code> file <span class="badge">recommended</span></span>
+        <span class="hint">Panel-by-panel reading with offline dictionary lookup and translations. One file,
+        so it copies fast. Needs firmware 2.0.0-rc-4 or later.</span></label>
+      <label><input type="checkbox" class="fmt" value="matcha"> <span class="opt">Folder (legacy)</span>
         <span class="hint">The same book as a folder, for firmware older than 2.0.0-rc-4.</span></label>
+    </div>
+    <div class="subhead" id="fmt-other-title">For other readers</div>
+    <div class="checks stacked" role="group" aria-labelledby="fmt-other-title">
       <label><input type="checkbox" class="fmt" value="epub"> <span class="opt">EPUB</span>
         <span class="hint">Fixed-layout <code>.epub</code>. Reads panel by panel on any e-reader,
         without dictionary, translations or panel zoom.</span></label>
@@ -70,6 +75,7 @@
         pre-rendered, so pick a target resolution below.</span></label>
       <label><input type="checkbox" class="fmt" value="xtch"> <span class="opt">XTCH</span>
         <span class="hint">Same, in 4-level grayscale. Twice the size.</span></label>
+    </div>
     </div>
     <div id="manga-xtc-split-row">
       <label for="manga-xtc-split">Split XTC/XTCH into parts</label>
@@ -84,31 +90,8 @@
       <p class="hint" id="manga-xtc-split-hint">For readers that run out of memory on a big file. Parts
       start at a chapter where one is close.</p>
     </div>
-  </div>
-
-  <div class="card">
-    <h3>3. Panel detection</h3>
-    <label for="manga-booktype">Book type</label>
-    <select id="manga-booktype">
-      <option value="">Please select</option>
-      <option value="manga">Manga — read right to left</option>
-      <option value="western">Western comic — read left to right</option>
-      <option value="webtoon">Webtoon / manhwa — one long vertical strip</option>
-      <option value="yonkoma">4-koma, right to left — columns read top to bottom</option>
-      <option value="yonkoma-ltr">4-koma, left to right — columns read top to bottom</option>
-    </select>
-    <p class="hint" id="manga-booktype-hint">
-      Sets the order panels are read in.</p>
-    <div class="notice warn" id="notice-booktype" hidden></div>
-
-    <div class="checks stacked" style="margin-top:0.6rem">
-      <label><input type="checkbox" id="manga-panels-only"> <span class="opt">Panels only (no full pages)</span>
-        <span class="hint">Panel crops only. Much smaller, and opens straight into panel reading.
-        The cover keeps its full page, as does any page whose panels miss part of the
-        artwork.</span></label>
-    </div>
-
-    <label for="manga-res" style="margin-top:0.6rem">Your device <span class="hint">(sets the target resolution)</span></label>
+    <div class="field-gap"></div>
+    <label for="manga-res">Your device <span class="hint">(sets the page size)</span></label>
     <select id="manga-res">
       <option value="">Please select</option>
       <optgroup label="480 × 800">
@@ -143,9 +126,33 @@
       Downscales to the device screen. Smaller download, faster page turns, no visible quality
       loss. Never upscales.</p>
 
+  </div>
+
+  <div class="card">
+    <h3>3. Panels</h3>
+    <label for="manga-booktype">Book type</label>
+    <select id="manga-booktype">
+      <option value="">Please select</option>
+      <option value="manga">Manga — read right to left</option>
+      <option value="western">Western comic — read left to right</option>
+      <option value="webtoon">Webtoon / manhwa — one long vertical strip</option>
+      <option value="yonkoma">4-koma, right to left — columns read top to bottom</option>
+      <option value="yonkoma-ltr">4-koma, left to right — columns read top to bottom</option>
+    </select>
+    <p class="hint" id="manga-booktype-hint">
+      Sets the order panels are read in.</p>
+    <div class="notice warn" id="notice-booktype" hidden></div>
+
+    <div class="checks stacked" style="margin-top:0.6rem">
+      <label><input type="checkbox" id="manga-panels-only"> <span class="opt">Panels only (no full pages)</span>
+        <span class="hint">Panel crops only. Much smaller, and opens straight into panel reading.
+        The cover keeps its full page, as does any page whose panels miss part of the
+        artwork.</span></label>
+    </div>
+
     <div class="panel-check-row">
       <button type="button" class="secondary" id="panel-check-btn">Check panels</button>
-      <span class="hint">Optional: see where the panels are and fix wrong ones before converting.</span>
+      <span class="hint">Optional: see the panels and fix wrong ones before converting.</span>
     </div>
     <div id="panel-check" hidden>
       <div class="panel-check-bar">
@@ -253,13 +260,17 @@
       </select>
       <p class="hint">The language translations come back in. Pick the book's own language to get
       the text without a translation. The language the book is written in comes from
-      <em>Language</em> in step 5. Set it: without it the model guesses, and can read a German
+      <em>Language</em> in Book details. Set it: without it the model guesses, and can read a German
       speech bubble as Japanese.</p>
 
       <label for="manga-key" style="margin-top:0.6rem">Gemini API key
         <span class="hint">— get one at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>. Stored only in this browser; sent only to Google.</span>
       </label>
       <input type="password" id="manga-key" autocomplete="off" placeholder="AIza…">
+      <div class="notice" id="notice-ocr">
+        Each panel image goes to Gemini. A whole volume takes a while, so keep this tab open; the
+        screen stays awake, and rate limits are retried automatically.
+      </div>
     </div>
 
     <details>
@@ -274,7 +285,8 @@
   </div>
 
   <div class="card" id="card-book">
-    <h3>6. Book details <span class="hint" style="font-weight:400">(optional — auto-detected from EPUB/ComicInfo when present)</span></h3>
+    <h3>6. Book details <span class="hint" style="font-weight:400">(optional)</span></h3>
+    <p class="hint" style="margin-top:0">Left empty, these come from the book itself or its file name.</p>
     <div class="row">
       <div>
         <label for="manga-title">Title</label>
@@ -284,9 +296,21 @@
         <label for="manga-author">Author</label>
         <input type="text" id="manga-author" placeholder="auto">
       </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="manga-series">Series</label>
+        <input type="text" id="manga-series" placeholder="auto">
+      </div>
+      <div>
+        <label for="manga-series-index">Volume</label>
+        <input type="number" id="manga-series-index" placeholder="auto" min="0" step="any">
+      </div>
+    </div>
+    <div class="row">
       <div>
         <label for="manga-language">Language</label>
-        <input type="text" id="manga-language" placeholder="e.g. ja" list="manga-language-options" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <input type="text" id="manga-language" placeholder="e.g. ja" list="manga-language-options" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="manga-language-hint">
         <!-- Suggestions only: the field stays free-text, so any ISO 639-1 tag not listed here
              still works. Japanese/English/Chinese/Korean lead as the most common for this
              reader; the rest are alphabetical by name. -->
@@ -320,48 +344,37 @@
           <option value="uk">Ukrainian</option>
           <option value="vi">Vietnamese</option>
         </datalist>
-      </div>
-      <div>
-        <label for="manga-series">Series</label>
-        <input type="text" id="manga-series" placeholder="auto">
-      </div>
-      <div>
-        <label for="manga-series-index">Volume</label>
-        <input type="number" id="manga-series-index" placeholder="auto" min="0" step="any">
+        <p class="hint" id="manga-language-hint">Splits your reading stats by language and tells text
+        recognition what to expect. Most files don't say; fill it in.</p>
       </div>
       <div>
         <label for="manga-cover">Cover page</label>
         <input type="number" id="manga-cover" placeholder="1" min="1" step="1" aria-describedby="manga-cover-hint">
-        <p class="hint" id="manga-cover-hint">When the cover isn't the first page: it moves to the front.</p>
+        <p class="hint" id="manga-cover-hint">If the cover isn't page 1, it moves to the front.</p>
       </div>
     </div>
-    <p class="hint">Splits your reading stats by language, and tells text recognition which
-    language to expect. Only EPUBs and CBZs with a <code>ComicInfo.xml</code> declare one; fill it
-    in yourself for anything else. It is read at conversion time, so a book converted without it
-    counts as "unknown" until you convert it again.</p>
-    <label for="manga-toc">Chapters <span class="hint">— one per line: <code>page | title</code>, 0-based final page number. Overrides the chapters found in the file.</span></label>
-    <textarea id="manga-toc" rows="3" placeholder="0 | Cover&#10;4 | Chapter 1&#10;36 | Chapter 2"></textarea>
+    <details>
+      <summary>Chapters</summary>
+      <label for="manga-toc">Chapter list <span class="hint">— one per line: <code>page | title</code>, counting from 0. Replaces the chapters found in the file.</span></label>
+      <textarea id="manga-toc" rows="3" placeholder="0 | Cover&#10;4 | Chapter 1&#10;36 | Chapter 2"></textarea>
+    </details>
   </div>
 
-  <button class="primary" id="manga-run">Convert</button>
-  <button class="secondary" id="manga-cancel" hidden>Stop &amp; keep finished pages</button>
+  <div class="run-bar">
+    <button class="primary" id="manga-run">Convert</button>
+    <button class="secondary" id="manga-cancel" hidden>Stop &amp; keep finished pages</button>
+    <p class="hint" id="manga-run-summary" aria-live="polite"></p>
+  </div>
 
   <div id="progress" hidden role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar"></div><div id="progress-text" aria-hidden="true"></div></div>
   <div id="log" hidden role="log" aria-label="Conversion log" tabindex="0"></div>
   <div id="sr-status" class="sr-only" role="status" aria-live="polite"></div>
-
-  <div class="notice" id="notice-ocr">
-    OCR sends each panel image to the Gemini API. A full volume takes a while, so keep this tab
-    open. The screen stays awake during conversion. Gemini's rate limits can make long volumes slow;
-    the converter retries automatically.
-  </div>
 
   <div class="card info" id="card-install">
     <h3>Install on the device</h3>
     <p>Copy the <code>.matcha</code> file anywhere on the SD card, by card reader or over the
     reader's Wi-Fi file transfer. <code>/manga/</code> is a nice convention. A <code>.matcha</code>
     is a normal zip: rename it to <code>.zip</code> to unpack it on your computer.</p>
-    <p class="hint">Enjoying the book? <a href="https://buymeacoffee.com/eszter007" target="_blank" rel="noopener">Buy me a coffee</a> ☕</p>
     <p>The legacy download is a zip holding one folder, named after the title. Unzip it onto the
     card; the device finds any folder containing <code>panels.idx</code>, at any depth.</p>
   </div>

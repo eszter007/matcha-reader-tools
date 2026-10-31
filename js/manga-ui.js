@@ -944,6 +944,28 @@ async function showCleanupPreview() {
   }
 }
 
+/* The line beside Convert: what is still missing, or what the conversion will make. */
+const FORMAT_NAMES = { matchafile: ".matcha", matcha: "folder", epub: "EPUB", pdf: "PDF", xtc: "XTC", xtch: "XTCH" };
+function updateRunSummary() {
+  const files = $("manga-file").files;
+  const formats = [...selectedFormats()];
+  const res = $("manga-res");
+  const missing = [];
+  if (!files || !files.length) missing.push("your manga");
+  if (!formats.length) missing.push("a format");
+  if (!validBookType($("manga-booktype").value)) missing.push("the book type");
+  if (!validResChoice(res.value)) missing.push("your device");
+  const el = $("manga-run-summary");
+  if (missing.length) {
+    el.textContent = `Still to choose: ${missing.join(", ")}.`;
+    return;
+  }
+  const books = splitIntoBooks(files).length;
+  const what = books > 1 ? `${books} books` : files.length === 1 ? files[0].name : `${files.length} images`;
+  const device = res.selectedOptions[0] ? res.selectedOptions[0].textContent.replace(/ — .*/, "") : "";
+  el.textContent = `Ready: ${what} → ${formats.map((f) => FORMAT_NAMES[f] || f).join(" + ")}, ${device}.`;
+}
+
 /* Title/series/volume guessed from a single archive's file name; empty for a set of images. */
 function fileNameMeta(files) {
   return files.length === 1 && !isImageName(files[0].name) ? metaFromFileName(files[0].name)
@@ -1203,7 +1225,7 @@ async function runMangaConversion() {
         : (collected.meta.seriesIndex ?? fileMeta.seriesIndex);
       const folder = sanitizeFolderName(metaTitle || "Manga");
 
-      // The book's own Language (step 5) is what tells the model which language to expect --
+      // The book's own Language (Book details) is what tells the model which language to expect --
       // there is no second picker for it, since a book that declares one in its EPUB/ComicInfo
       // fills it in by itself and a duplicate control would only disagree with it. Webtoon
       // panels are a single top-to-bottom column with horizontal text, so the right-to-left
@@ -1213,7 +1235,7 @@ async function runMangaConversion() {
       const ocrPrompt = buildPanelOcrPrompt(ocrSourceLang, ocrTargetLang, rtl && !isWebtoon);
       if (!noOcr && !ocrSourceLang) {
         logLine("No book language set, so the model is not told which one to expect. " +
-          "Filling in Language in step 5 improves recognition.", "warn");
+          "Filling in Language in Book details improves recognition.", "warn");
       }
 
       const zip = new ZipWriter();
@@ -2046,6 +2068,9 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-contrast").value = loadSetting("manga-contrast", "off");
   $("manga-preview-btn").addEventListener("click", showCleanupPreview);
   wirePanelEditor();
+  // Every setting that changes what Convert will do refreshes the line beside it.
+  document.querySelector("main").addEventListener("change", updateRunSummary);
+  updateRunSummary();
   // A visible preview follows the settings as they change.
   for (const id of ["manga-levels", "manga-sharpen", "manga-contrast"]) {
     $(id).addEventListener("change", () => { if (!$("manga-preview").hidden) showCleanupPreview(); });
