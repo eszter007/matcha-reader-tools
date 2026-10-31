@@ -453,7 +453,7 @@ details { margin-top: 0.8rem; }
 .choice-art .step text { fill: var(--on-matcha); font: 700 8px system-ui, sans-serif; text-anchor: middle; }
 .choice:has(input:checked) .choice-art .page { stroke: var(--matcha-dark); }
 .choice:has(input:checked) .choice-sub { color: var(--label); }
-.choice-sub { color: var(--muted); font-size: 0.8rem; }
+.choice-sub { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
 
 
 /* A quiet row offering an optional action: text on the left, its button on the right. */
