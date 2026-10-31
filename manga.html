@@ -143,6 +143,18 @@
       Downscales to the device screen. Smaller download, faster page turns, no visible quality
       loss. Never upscales.</p>
 
+    <div class="panel-check-row">
+      <button type="button" class="secondary" id="panel-check-btn">Check panels</button>
+      <span class="hint">Optional: see where the panels are and fix wrong ones before converting.</span>
+    </div>
+    <div id="panel-check" hidden>
+      <div class="panel-check-bar">
+        <label><input type="checkbox" id="panel-check-flagged"> Only pages to check</label>
+        <span class="hint" id="panel-check-summary"></span>
+      </div>
+      <ul id="panel-grid" class="panel-grid"></ul>
+    </div>
+
     <details id="manga-detect-advanced">
       <summary>Advanced</summary>
       <div class="checks stacked">
@@ -180,8 +192,8 @@
   </div>
 
   <div class="card" id="card-cleanup">
-    <h3>4. Image clean-up</h3>
-    <p class="hint" style="margin-top:0">Optional. Helps old or faded scans read better on e-ink.</p>
+    <h3>4. Image clean-up <span class="hint" style="font-weight:400">(optional)</span></h3>
+    <p class="hint" style="margin-top:0">Helps old or faded scans read better on e-ink.</p>
     <div class="checks stacked">
       <label><input type="checkbox" id="manga-levels"> <span class="opt">Clean up faded scans</span>
         <span class="hint">Makes yellowed paper white and grey ink black.</span></label>
@@ -354,6 +366,29 @@
     card; the device finds any folder containing <code>panels.idx</code>, at any depth.</p>
   </div>
 </main>
+<dialog id="panel-editor" aria-labelledby="pe-title">
+  <div class="pe-head">
+    <h3 id="pe-title">Page</h3>
+    <button type="button" class="primary pe-done" id="pe-close">Done</button>
+  </div>
+  <p class="hint" id="pe-help">Drag on the page to add a panel; over an existing one, use <strong>Draw panel</strong>
+  or hold Shift. Click a panel to select it, drag it to move, drag its corner to resize. <strong>Earlier</strong> and
+  <strong>Later</strong> change the reading order. Keys: <kbd>]</kbd>/<kbd>[</kbd> or 1–9 select, arrows move,
+  Shift+arrows resize, <kbd>,</kbd>/<kbd>.</kbd> earlier/later, <kbd>A</kbd> adds, <kbd>Delete</kbd> removes.</p>
+  <div class="pe-stage"><canvas id="pe-canvas" tabindex="0" role="img" aria-describedby="pe-help pe-status"></canvas></div>
+  <p id="pe-status" class="sr-only" role="status" aria-live="polite"></p>
+  <div class="pe-tools">
+    <button type="button" class="secondary" id="pe-prev">← Previous page</button>
+    <button type="button" class="secondary" id="pe-draw" aria-pressed="false">Draw panel</button>
+    <button type="button" class="secondary" id="pe-earlier">Earlier</button>
+    <button type="button" class="secondary" id="pe-later">Later</button>
+    <button type="button" class="secondary" id="pe-delete">Delete panel</button>
+    <button type="button" class="secondary" id="pe-whole">Whole page</button>
+    <button type="button" class="secondary" id="pe-reset">Undo my changes</button>
+    <button type="button" class="secondary" id="pe-next">Next page →</button>
+  </div>
+</dialog>
+
 <footer>
   Output matches <code>tools/manga_convert/convert_manga.py</code> from the
   <a href="https://github.com/eszter007/matcha-reader">matcha-reader</a> firmware —

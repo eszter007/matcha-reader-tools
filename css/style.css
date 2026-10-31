@@ -344,6 +344,31 @@ details { margin-top: 0.8rem; }
 .preview-pair canvas { width: 100%; height: auto; border-radius: 8px; box-shadow: var(--card-shadow); background: #fff; }
 .preview-pair figcaption { text-align: center; font-size: 13px; color: var(--muted); margin-top: 0.3rem; }
 
+/* Panel check: a grid of page thumbnails, and the editor dialog. */
+.panel-check-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 1rem; }
+.panel-check-row button.secondary { margin: 0; }
+.panel-check-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.8rem; }
+.panel-check-bar label { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; font-weight: 400; }
+.panel-grid { list-style: none; padding: 0; margin: 0.6rem 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 0.75rem; max-height: 32rem; overflow-y: auto; }
+.panel-thumb { display: flex; flex-direction: column; gap: 0.3rem; width: 100%; padding: 0.4rem; border: 2px solid transparent; border-radius: 10px;
+  background: var(--bg); color: var(--label); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.panel-thumb img { width: 100%; height: auto; border-radius: 6px; background: #fff; }
+.panel-thumb:hover { border-color: var(--border); }
+.panel-thumb.flagged { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn); }
+.panel-thumb.edited { border-color: var(--matcha); }
+
+#panel-editor { width: min(960px, 96vw); max-height: 96vh; border: 0; border-radius: 16px; padding: 18px 20px; background: var(--card); color: var(--text); box-shadow: 0 20px 60px #00000059; }
+#panel-editor::backdrop { background: #1c191799; }
+.pe-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.pe-head h3 { margin: 0; }
+button.primary.pe-done { margin: 0; padding: 0.5rem 1.2rem; }
+#panel-editor kbd { font: 600 11px ui-monospace, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; }
+.pe-stage { display: flex; justify-content: center; margin-top: 0.6rem; }
+#pe-canvas { max-width: 100%; touch-action: none; cursor: crosshair; border-radius: 6px; }
+.pe-tools { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; margin-top: 0.75rem; }
+.pe-tools button.secondary { margin: 0; }
+.pe-tools button.secondary.active { background: var(--matcha); border-color: var(--matcha); color: var(--on-matcha); }
+
 /* A small caption heading a group of options inside a card. */
 .subhead { margin: 1.1rem 0 0.5rem; color: var(--label); font-size: 13px; font-weight: 600; }
 

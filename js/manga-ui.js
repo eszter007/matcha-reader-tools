@@ -777,6 +777,111 @@ function clearValidationWarnings() {
   if (!log.children.length) log.hidden = true;
 }
 
+/* Panels fixed by hand in the panel check, by source page name: {w, h, boxes} in the page space
+ * they were drawn in. Cleared when another file is chosen. */
+const panelEdits = new Map();
+
+/* Boxes drawn on a w x h page, mapped onto a page of tw x th (the same page at another size). */
+function scaleBoxes(boxes, w, h, tw, th) {
+  if (w === tw && h === th) return boxes.map((b) => b.slice());
+  const sx = tw / w, sy = th / h;
+  return boxes.map(([x1, y1, x2, y2]) => [Math.round(x1 * sx), Math.round(y1 * sy), Math.round(x2 * sx), Math.round(y2 * sy)]);
+}
+
+/* Read, trim, downscale, clean up and detect one page -- shared by the conversion and the panel
+ * check, so both see the same page and the same panels. `o` holds the conversion settings:
+ * {trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor}, and
+ * detect: false for the page image alone. Panel boxes
+ * are in the downscaled page's space (imgW x imgH). The caller closes `bitmap`. */
+async function preparePage(page, o) {
+  const srcBytes = await page.read();
+  let ext = mangaFileExt(page.name);
+  let bitmap = await decodeImage(srcBytes, ext);
+
+  // Crop the blank paper border (and the page number sitting in it) before anything
+  // else, so every coordinate downstream lives in the trimmed page's space. It fills
+  // the screen, and it measurably improves detection: a page whose margin is gone
+  // gives the detector nothing but artwork to look at.
+  let wasTrimmed = false;
+  if (o.trimMargins) {
+    const probe = makeCanvas(bitmap.width, bitmap.height);
+    const pctx = probe.getContext("2d", { willReadFrequently: true });
+    pctx.drawImage(bitmap, 0, 0);
+    const gray = grayFromRGBA(pctx.getImageData(0, 0, bitmap.width, bitmap.height).data,
+      bitmap.width, bitmap.height);
+    const box = trimMarginsBox(gray, bitmap.width, bitmap.height);
+    if (box) {
+      const [tx1, ty1, tx2, ty2] = box;
+      const cropped = makeCanvas(tx2 - tx1, ty2 - ty1);
+      const cctx = cropped.getContext("2d");
+      cctx.fillStyle = "#ffffff";
+      cctx.fillRect(0, 0, tx2 - tx1, ty2 - ty1);
+      cctx.drawImage(probe, tx1, ty1, tx2 - tx1, ty2 - ty1, 0, 0, tx2 - tx1, ty2 - ty1);
+      bitmap.close && bitmap.close();
+      bitmap = await createImageBitmap(cropped);
+      wasTrimmed = true;
+    }
+  }
+
+  // Downscale FIRST, before panel detection, so every downstream coordinate
+  // (panel boxes, crop rects, OCR text boxes, the page dims in panels.idx)
+  // lives in the resized space and matches the files actually written. When
+  // no device is selected fit.resized is false and this is a 1:1 draw, so the
+  // default output is unchanged. (White-fill for transparent sources differs
+  // per canvas — see the detection/page and full-res source canvases below.)
+  const origW = bitmap.width, origH = bitmap.height;
+  const fit = fitToDeviceSize(origW, origH, o.deviceTarget);
+  const imgW = fit.w, imgH = fit.h;
+  const wasResized = fit.resized;
+
+  // Detection + page canvas (downscaled). White-fill only when actually
+  // resizing, so panels.idx and the default (Original) output are unchanged.
+  const canvas = makeCanvas(imgW, imgH);
+  const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
+  if (wasResized) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, imgW, imgH); }
+  ctx.drawImage(bitmap, 0, 0, origW, origH, 0, 0, imgW, imgH);
+  // Image clean-up: one tone curve per page, from the page itself, reused for its crops.
+  const tone = o.cleanupOn ? cleanPage(ctx, imgW, imgH, o.cleanup) : null;
+  const tuned = !!tone || o.cleanup.sharpen;
+  // The source bitmap stays open until after detection: the full-resolution
+  // panel-crop canvas is only built for pages that actually have a panel to
+  // crop (see below), so a cover / full-page spread never allocates it.
+
+  const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
+
+  let boxes = null;
+  if (o.detect === false) {
+    // The panel editor only needs the page image.
+  } else if (o.isWebtoon) {
+    // Already one top-to-bottom column, cut at its own gutters. The manga detector
+    // looks for bordered rectangles in a grid and a webtoon has none, and reordering
+    // a single column can only move boxes away from what the cut established.
+    boxes = detectWebtoonPanels(grayFromRGBA(rgba, imgW, imgH), imgW, imgH);
+  } else {
+    let textBoxes = [];
+    if (o.yolo) {
+      try {
+        const detected = await detectPanelsYolo(o.yolo.session, o.yolo.ort, rgba, imgW, imgH);
+        boxes = detected.frames;
+        textBoxes = detected.texts;
+      } catch (e) {
+        logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
+      }
+    }
+    if (!boxes) {
+      // The grid heuristic has no text detection, so nothing grows over bubbles here.
+      const gray = grayFromRGBA(rgba, imgW, imgH);
+      boxes = detectPanelsGrid(gray, imgW, imgH);
+    }
+    // Order on the frames as drawn -- growing a box moves its centre, which
+    // sortPanelsReadingOrder() tiers and orders on -- then grow the crops over the
+    // bubbles. yoloExpandPanelsOverText() is index-preserving, so the order survives.
+    boxes = sortPanelsReadingOrder(boxes, o.rtl, o.columnMajor);
+    boxes = yoloExpandPanelsOverText(boxes, textBoxes, imgW, imgH);
+  }
+  return { srcBytes, ext, bitmap, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba, boxes };
+}
+
 /* ── Image clean-up ───────────────────────────────────────────────── */
 
 function cleanupSettings() {
@@ -1085,6 +1190,7 @@ async function runMangaConversion() {
           logLine(`Could not load the AI panel detector (${e.message}); using the grid heuristic.`, "warn");
         }
       }
+      const pageOpts = { trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor };
 
       // What the user typed wins, then the book's own metadata, then a guess from the file name.
       const fileMeta = fileNameMeta(files);
@@ -1138,93 +1244,17 @@ async function runMangaConversion() {
         setProgress(pageIdx, pages.length, `Page ${pageIdx + 1} / ${pages.length}`);
         logLine(`[${pageIdx + 1}/${pages.length}] ${page.name}`);
 
-        const srcBytes = await page.read();
-        let ext = mangaFileExt(page.name);
-        let bitmap = await decodeImage(srcBytes, ext);
-
-        // Crop the blank paper border (and the page number sitting in it) before anything
-        // else, so every coordinate downstream lives in the trimmed page's space. It fills
-        // the screen, and it measurably improves detection: a page whose margin is gone
-        // gives the detector nothing but artwork to look at.
-        let wasTrimmed = false;
-        if (trimMargins) {
-          const probe = makeCanvas(bitmap.width, bitmap.height);
-          const pctx = probe.getContext("2d", { willReadFrequently: true });
-          pctx.drawImage(bitmap, 0, 0);
-          const gray = grayFromRGBA(pctx.getImageData(0, 0, bitmap.width, bitmap.height).data,
-            bitmap.width, bitmap.height);
-          const box = trimMarginsBox(gray, bitmap.width, bitmap.height);
-          if (box) {
-            const [tx1, ty1, tx2, ty2] = box;
-            const cropped = makeCanvas(tx2 - tx1, ty2 - ty1);
-            const cctx = cropped.getContext("2d");
-            cctx.fillStyle = "#ffffff";
-            cctx.fillRect(0, 0, tx2 - tx1, ty2 - ty1);
-            cctx.drawImage(probe, tx1, ty1, tx2 - tx1, ty2 - ty1, 0, 0, tx2 - tx1, ty2 - ty1);
-            bitmap.close && bitmap.close();
-            bitmap = await createImageBitmap(cropped);
-            wasTrimmed = true;
-          }
-        }
-
-        // Downscale FIRST, before panel detection, so every downstream coordinate
-        // (panel boxes, crop rects, OCR text boxes, the page dims in panels.idx)
-        // lives in the resized space and matches the files actually written. When
-        // no device is selected fit.resized is false and this is a 1:1 draw, so the
-        // default output is unchanged. (White-fill for transparent sources differs
-        // per canvas — see the detection/page and full-res source canvases below.)
-        const origW = bitmap.width, origH = bitmap.height;
-        const fit = fitToDeviceSize(origW, origH, deviceTarget);
-        const imgW = fit.w, imgH = fit.h;
-        const wasResized = fit.resized;
-
-        // Detection + page canvas (downscaled). White-fill only when actually
-        // resizing, so panels.idx and the default (Original) output are unchanged.
-        const canvas = makeCanvas(imgW, imgH);
-        const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
-        if (wasResized) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, imgW, imgH); }
-        ctx.drawImage(bitmap, 0, 0, origW, origH, 0, 0, imgW, imgH);
-        // Image clean-up: one tone curve per page, from the page itself, reused for its crops.
-        const tone = cleanupOn ? cleanPage(ctx, imgW, imgH, cleanup) : null;
-        const tuned = !!tone || cleanup.sharpen;
-        // The source bitmap stays open until after detection: the full-resolution
-        // panel-crop canvas is only built for pages that actually have a panel to
-        // crop (see below), so a cover / full-page spread never allocates it.
+        const prep = await preparePage(page, pageOpts);
+        const { srcBytes, ext, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba } = prep;
+        const bitmap = prep.bitmap;
+        // Panels fixed by hand in the panel check replace what the detector found.
+        const edited = panelEdits.get(page.name);
+        const boxes = edited ? scaleBoxes(edited.boxes, edited.w, edited.h, imgW, imgH) : prep.boxes;
+        if (edited) logLine(`  Using ${boxes.length} panel(s) you set in the panel check.`);
 
         // Panel boxes stay in resized page space (panels.idx records the page at that
         // size); only the crop comes from the original, so map the rect back across.
         const panelScaleX = origW / imgW, panelScaleY = origH / imgH;
-
-        const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
-
-        let boxes = null;
-        if (isWebtoon) {
-          // Already one top-to-bottom column, cut at its own gutters. The manga detector
-          // looks for bordered rectangles in a grid and a webtoon has none, and reordering
-          // a single column can only move boxes away from what the cut established.
-          boxes = detectWebtoonPanels(grayFromRGBA(rgba, imgW, imgH), imgW, imgH);
-        } else {
-          let textBoxes = [];
-          if (yolo) {
-            try {
-              const detected = await detectPanelsYolo(yolo.session, yolo.ort, rgba, imgW, imgH);
-              boxes = detected.frames;
-              textBoxes = detected.texts;
-            } catch (e) {
-              logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
-            }
-          }
-          if (!boxes) {
-            // The grid heuristic has no text detection, so nothing grows over bubbles here.
-            const gray = grayFromRGBA(rgba, imgW, imgH);
-            boxes = detectPanelsGrid(gray, imgW, imgH);
-          }
-          // Order on the frames as drawn -- growing a box moves its centre, which
-          // sortPanelsReadingOrder() tiers and orders on -- then grow the crops over the
-          // bubbles. yoloExpandPanelsOverText() is index-preserving, so the order survives.
-          boxes = sortPanelsReadingOrder(boxes, rtl, columnMajor);
-          boxes = yoloExpandPanelsOverText(boxes, textBoxes, imgW, imgH);
-        }
 
         // Panels-only must not lose anything the detector missed: with no full page behind them,
         // uncovered artwork would simply be unreachable. Measure how much of this page's ink falls
@@ -1590,6 +1620,405 @@ async function runMangaConversion() {
   }
 }
 
+/* ── Panel check ──────────────────────────────────────────────────
+ * Detect every page's panels before converting, show them, and let the user fix wrong ones.
+ * Fixes land in panelEdits, which the conversion uses instead of detecting again. */
+
+const PANEL_CHECK_THUMB_W = 150;
+const PE_HANDLE_PX = 14;      // corner grab size, in screen pixels
+const PE_MIN_SIDE = 16;       // smallest panel kept, in page pixels
+
+const panelCheck = { files: null, opts: null, pages: [], editIndex: -1 };
+
+/* The page settings the conversion would use, or null (with a message) when one is missing. */
+async function panelCheckSettings() {
+  const bookType = validBookType($("manga-booktype").value);
+  if (!bookType) { logValidation("Pick a book type first: it sets the order panels are read in."); return null; }
+  if (bookType === BOOK_WEBTOON) { logValidation("Webtoon panels come from the strip's gutters and are not checked here."); return null; }
+  const resChoice = validResChoice($("manga-res").value);
+  const deviceTarget = resChoice === RES_CUSTOM ? customResTarget()
+    : resChoice && resChoice !== RES_FULL ? MANGA_DEVICE_TARGETS[resChoice] : null;
+  const cleanup = cleanupSettings();
+  let yolo = null;
+  if ($("manga-yolo").checked) {
+    try { yolo = await loadYoloDetector(); } catch (e) { logLine(`AI panel detector unavailable (${e.message}); using the grid heuristic.`, "warn"); }
+  }
+  return {
+    trimMargins: bookType === BOOK_WESTERN, deviceTarget, cleanup,
+    cleanupOn: cleanup.levels || cleanup.contrast !== "off" || cleanup.sharpen,
+    isWebtoon: false, yolo, rtl: bookType === BOOK_MANGA || bookType === BOOK_YONKOMA,
+    columnMajor: bookType === BOOK_YONKOMA || bookType === BOOK_YONKOMA_LTR,
+  };
+}
+
+/* Why a page is worth a look, or "" when detection looks fine. */
+function panelCheckReason(boxes, rgba, w, h) {
+  if (!boxes.length) return "no panels found";
+  if (boxes.length > 9) return `${boxes.length} panels, more than usual`;
+  const margined = boxes.map(([x1, y1, x2, y2]) => [Math.max(0, x1 - 10), Math.max(0, y1 - 10), Math.min(w, x2 + 10), Math.min(h, y2 + 10)]);
+  const coverage = panelInkCoverage(grayFromRGBA(rgba, w, h), w, h, margined);
+  return coverage < 0.95 ? `${Math.round((1 - coverage) * 100)}% of the artwork is outside every panel` : "";
+}
+
+/* The boxes a page uses now: the user's edit, or what was detected. */
+function panelCheckBoxes(p) {
+  const e = panelEdits.get(p.name);
+  return e ? scaleBoxes(e.boxes, e.w, e.h, p.w, p.h) : p.boxes;
+}
+
+/* Draw a page with its numbered panels; `selected` is highlighted. */
+function drawPanelsOn(ctx, page, boxes, scale, selected = -1) {
+  ctx.drawImage(page, 0, 0, page.width * scale, page.height * scale);
+  ctx.lineWidth = Math.max(2, 3 * scale);
+  ctx.font = `bold ${Math.max(11, Math.round(28 * scale))}px system-ui, sans-serif`;
+  boxes.forEach(([x1, y1, x2, y2], i) => {
+    const sel = i === selected;
+    ctx.strokeStyle = sel ? "#d9480f" : "#2f9e44";
+    ctx.fillStyle = sel ? "rgba(217,72,15,0.12)" : "rgba(47,158,68,0.10)";
+    ctx.fillRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+    ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+    const label = String(i + 1);
+    const tw = ctx.measureText(label).width + 8 * Math.max(0.5, scale);
+    const th = Math.max(14, Math.round(34 * scale));
+    ctx.fillStyle = sel ? "#d9480f" : "#2f9e44";
+    ctx.fillRect(x1 * scale, y1 * scale, tw, th);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(label, x1 * scale + 4 * Math.max(0.5, scale), y1 * scale + th - 5 * Math.max(0.5, scale));
+    if (sel) {
+      const hs = PE_HANDLE_PX;
+      ctx.fillStyle = "#d9480f";
+      ctx.fillRect(x2 * scale - hs, y2 * scale - hs, hs, hs);
+    }
+  });
+}
+
+function panelCheckThumb(page, boxes) {
+  const scale = PANEL_CHECK_THUMB_W / page.width;
+  // A DOM canvas: makeCanvas() may give an OffscreenCanvas, which has no toDataURL().
+  const c = document.createElement("canvas");
+  c.width = PANEL_CHECK_THUMB_W;
+  c.height = Math.round(page.height * scale);
+  drawPanelsOn(c.getContext("2d"), page, boxes, scale);
+  return c.toDataURL("image/jpeg", 0.75);
+}
+
+function renderPanelGrid() {
+  const grid = $("panel-grid");
+  const onlyFlagged = $("panel-check-flagged").checked;
+  grid.textContent = "";
+  let flagged = 0;
+  panelCheck.pages.forEach((p, i) => {
+    const edited = panelEdits.has(p.name);
+    if (p.reason && !edited) flagged++;
+    if (onlyFlagged && !(p.reason && !edited)) return;
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "panel-thumb" + (p.reason && !edited ? " flagged" : "") + (edited ? " edited" : "");
+    const img = document.createElement("img");
+    img.src = p.thumb; img.alt = "";
+    const cap = document.createElement("span");
+    const n = panelCheckBoxes(p).length;
+    cap.textContent = `Page ${i + 1} · ${n} panel${n === 1 ? "" : "s"}` + (edited ? " · fixed" : p.reason ? ` · ${p.reason}` : "");
+    btn.append(img, cap);
+    btn.addEventListener("click", () => openPanelEditor(i));
+    li.append(btn);
+    grid.append(li);
+  });
+  $("panel-check-summary").textContent = flagged
+    ? `${flagged} of ${panelCheck.pages.length} pages may need a look.` : `All ${panelCheck.pages.length} pages look fine.`;
+}
+
+async function runPanelCheck() {
+  const files = $("manga-file").files;
+  if (!files || !files.length) { logValidation("Choose your manga first."); return; }
+  if (splitIntoBooks(files).length > 1) { logValidation("The panel check works on one book at a time."); return; }
+  const btn = $("panel-check-btn");
+  btn.disabled = true;
+  try {
+    const opts = await panelCheckSettings();
+    if (!opts) return;
+    if (panelCheck.files !== files) panelEdits.clear();
+    const collected = await collectPagesFromInput(files);
+    let pages = collected.pages;
+    const maxPages = parseInt($("manga-max-pages").value, 10);
+    if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
+    Object.assign(panelCheck, { files, opts, source: pages, pages: [] });
+    $("panel-check").hidden = false;
+    for (let i = 0; i < pages.length; i++) {
+      setProgress(i, pages.length, `Checking panels: page ${i + 1} / ${pages.length}`);
+      const prep = await preparePage(pages[i], opts);
+      prep.bitmap.close && prep.bitmap.close();
+      panelCheck.pages.push({
+        name: pages[i].name, w: prep.imgW, h: prep.imgH, boxes: prep.boxes,
+        reason: panelCheckReason(prep.boxes, prep.rgba, prep.imgW, prep.imgH),
+        thumb: "",
+      });
+      const p = panelCheck.pages[i];
+      p.thumb = panelCheckThumb(prep.canvas, panelCheckBoxes(p));
+      if (i % 4 === 3 || i === pages.length - 1) renderPanelGrid();
+    }
+    setProgress(pages.length, pages.length, "Panel check done");
+    announce($("panel-check-summary").textContent);
+    if (collected.cleanup) collected.cleanup();
+  } catch (e) {
+    logLine("Panel check failed: " + e.message, "error");
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ── Panel editor ── */
+
+// manual: the user set this page's reading order, so it is kept rather than re-sorted.
+// draw: the next drag draws a new panel even where it starts inside one.
+const pe = { page: null, boxes: [], sel: -1, drag: null, scale: 1, manual: false, draw: false };
+
+async function openPanelEditor(i) {
+  const p = panelCheck.pages[i];
+  if (!p) return;
+  panelCheck.editIndex = i;
+  const prep = await preparePage(panelCheck.source[i], { ...panelCheck.opts, detect: false });
+  prep.bitmap.close && prep.bitmap.close();
+  pe.page = prep.canvas;
+  pe.boxes = panelCheckBoxes(p).map((b) => b.slice());
+  pe.manual = !!(panelEdits.get(p.name) || {}).manual;
+  pe.sel = -1;
+  setDrawMode(false);
+  $("pe-title").textContent = `Page ${i + 1} of ${panelCheck.pages.length}`;
+  $("pe-prev").disabled = i === 0;
+  $("pe-next").disabled = i === panelCheck.pages.length - 1;
+  const dlg = $("panel-editor");
+  if (!dlg.open) dlg.showModal();
+  layoutPanelEditor();
+  $("pe-canvas").focus();
+  peAnnounce(`${pe.boxes.length} panel${pe.boxes.length === 1 ? "" : "s"} on this page.`);
+}
+
+function layoutPanelEditor() {
+  const c = $("pe-canvas");
+  const stage = c.parentElement.getBoundingClientRect();
+  const maxW = Math.max(200, stage.width), maxH = Math.max(200, window.innerHeight * 0.68);
+  pe.scale = Math.min(maxW / pe.page.width, maxH / pe.page.height);
+  c.width = Math.round(pe.page.width * pe.scale);
+  c.height = Math.round(pe.page.height * pe.scale);
+  drawPanelEditor();
+}
+
+function drawPanelEditor() {
+  const c = $("pe-canvas");
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+  drawPanelsOn(ctx, pe.page, pe.boxes, pe.scale, pe.sel);
+  if (pe.drag && pe.drag.mode === "new") {
+    const [x1, y1, x2, y2] = normBox(pe.drag.box);
+    ctx.setLineDash([6, 4]); ctx.strokeStyle = "#d9480f";
+    ctx.strokeRect(x1 * pe.scale, y1 * pe.scale, (x2 - x1) * pe.scale, (y2 - y1) * pe.scale);
+    ctx.setLineDash([]);
+  }
+  c.setAttribute("aria-label", `Page with ${pe.boxes.length} panel${pe.boxes.length === 1 ? "" : "s"}` +
+    (pe.sel >= 0 ? `, panel ${pe.sel + 1} selected` : ""));
+}
+
+function normBox([x1, y1, x2, y2]) {
+  return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+}
+
+function clampBox([x1, y1, x2, y2]) {
+  const W = pe.page.width, H = pe.page.height;
+  const w = Math.min(W, Math.max(PE_MIN_SIDE, x2 - x1)), h = Math.min(H, Math.max(PE_MIN_SIDE, y2 - y1));
+  const nx = Math.min(W - w, Math.max(0, x1)), ny = Math.min(H - h, Math.max(0, y1));
+  return [Math.round(nx), Math.round(ny), Math.round(nx + w), Math.round(ny + h)];
+}
+
+function peAnnounce(text) {
+  const s = $("pe-status");
+  s.textContent = "";
+  setTimeout(() => { s.textContent = text; }, 50);
+}
+
+/* Save the editor's boxes for this page, in reading order, keeping the selection. */
+function commitPanelEdits() {
+  const p = panelCheck.pages[panelCheck.editIndex];
+  const selected = pe.boxes[pe.sel];
+  pe.boxes = pe.boxes.map(normBox);
+  if (!pe.manual) pe.boxes = sortPanelsReadingOrder(pe.boxes, panelCheck.opts.rtl, panelCheck.opts.columnMajor);
+  pe.sel = selected ? pe.boxes.findIndex((b) => b.join() === normBox(selected).join()) : -1;
+  panelEdits.set(p.name, { w: pe.page.width, h: pe.page.height, boxes: pe.boxes.map((b) => b.slice()), manual: pe.manual });
+  p.thumb = panelCheckThumb(pe.page, pe.boxes);
+  drawPanelEditor();
+}
+
+function pePoint(ev) {
+  const r = $("pe-canvas").getBoundingClientRect();
+  return [(ev.clientX - r.left) / pe.scale, (ev.clientY - r.top) / pe.scale];
+}
+
+function peHit([x, y]) {
+  const grab = PE_HANDLE_PX / pe.scale;
+  for (let i = pe.boxes.length - 1; i >= 0; i--) {
+    const [x1, y1, x2, y2] = pe.boxes[i];
+    if (Math.abs(x - x2) <= grab && Math.abs(y - y2) <= grab) return { i, corner: true };
+  }
+  for (let i = pe.boxes.length - 1; i >= 0; i--) {
+    const [x1, y1, x2, y2] = pe.boxes[i];
+    if (x >= x1 && x <= x2 && y >= y1 && y <= y2) return { i, corner: false };
+  }
+  return null;
+}
+
+function wirePanelEditor() {
+  const c = $("pe-canvas");
+  c.addEventListener("pointerdown", (ev) => {
+    const pt = pePoint(ev);
+    const hit = pe.draw || ev.shiftKey ? null : peHit(pt);
+    c.setPointerCapture(ev.pointerId);
+    if (hit) {
+      pe.sel = hit.i;
+      pe.drag = { mode: hit.corner ? "resize" : "move", start: pt, orig: pe.boxes[hit.i].slice() };
+    } else {
+      pe.sel = -1;
+      pe.drag = { mode: "new", box: [pt[0], pt[1], pt[0], pt[1]] };
+    }
+    drawPanelEditor();
+  });
+  c.addEventListener("pointermove", (ev) => {
+    if (!pe.drag) return;
+    const [x, y] = pePoint(ev);
+    const d = pe.drag;
+    if (d.mode === "new") {
+      d.box[2] = x; d.box[3] = y;
+    } else {
+      const dx = x - d.start[0], dy = y - d.start[1];
+      const [x1, y1, x2, y2] = d.orig;
+      pe.boxes[pe.sel] = d.mode === "move" ? clampBox([x1 + dx, y1 + dy, x2 + dx, y2 + dy])
+        : clampBox([x1, y1, Math.max(x1 + PE_MIN_SIDE, x2 + dx), Math.max(y1 + PE_MIN_SIDE, y2 + dy)]);
+    }
+    drawPanelEditor();
+  });
+  const end = () => {
+    const d = pe.drag;
+    if (!d) return;
+    pe.drag = null;
+    if (d.mode === "new") {
+      const b = normBox(d.box);
+      if (b[2] - b[0] >= PE_MIN_SIDE && b[3] - b[1] >= PE_MIN_SIDE) {
+        pe.boxes.push(clampBox(b));
+        pe.sel = pe.boxes.length - 1;
+        setDrawMode(false);
+        commitPanelEdits();
+        peAnnounce(`Panel added as number ${pe.sel + 1} of ${pe.boxes.length}.`);
+        return;
+      }
+      drawPanelEditor();
+      return;
+    }
+    commitPanelEdits();
+  };
+  c.addEventListener("pointerup", end);
+  c.addEventListener("pointercancel", end);
+
+  c.addEventListener("keydown", (ev) => {
+    const n = pe.boxes.length;
+    let handled = true;
+    if (ev.key === "]" || ev.key === "[") {
+      if (n) pe.sel = ev.key === "]" ? (pe.sel + 1) % n : (pe.sel - 1 + n) % n;
+      peAnnounce(n ? `Panel ${pe.sel + 1} of ${n} selected.` : "No panels on this page.");
+      drawPanelEditor();
+    } else if (/^[1-9]$/.test(ev.key) && Number(ev.key) <= n) {
+      pe.sel = Number(ev.key) - 1;
+      peAnnounce(`Panel ${pe.sel + 1} of ${n} selected.`);
+      drawPanelEditor();
+    } else if (ev.key === "a" || ev.key === "A") {
+      const W = pe.page.width, H = pe.page.height;
+      pe.boxes.push(clampBox([W / 4, H / 4, (3 * W) / 4, (3 * H) / 4]));
+      pe.sel = pe.boxes.length - 1;
+      commitPanelEdits();
+      peAnnounce(`Panel added in the middle. Move it with the arrow keys, resize with Shift and the arrows.`);
+    } else if (ev.key === "," || ev.key === ".") {
+      movePanelInOrder(ev.key === "," ? -1 : 1);
+    } else if ((ev.key === "Delete" || ev.key === "Backspace") && pe.sel >= 0) {
+      deleteSelectedPanel();
+    } else if (ev.key.startsWith("Arrow") && pe.sel >= 0) {
+      const step = Math.max(2, Math.round(10 / pe.scale));
+      const dx = ev.key === "ArrowLeft" ? -step : ev.key === "ArrowRight" ? step : 0;
+      const dy = ev.key === "ArrowUp" ? -step : ev.key === "ArrowDown" ? step : 0;
+      const [x1, y1, x2, y2] = pe.boxes[pe.sel];
+      pe.boxes[pe.sel] = ev.shiftKey ? clampBox([x1, y1, x2 + dx, y2 + dy]) : clampBox([x1 + dx, y1 + dy, x2 + dx, y2 + dy]);
+      commitPanelEdits();
+    } else {
+      handled = false;
+    }
+    if (handled) ev.preventDefault();
+  });
+
+  $("pe-delete").addEventListener("click", deleteSelectedPanel);
+  $("pe-draw").addEventListener("click", () => {
+    setDrawMode(!pe.draw);
+    peAnnounce(pe.draw ? "Drag on the page to draw a panel." : "Draw panel off.");
+  });
+  $("pe-earlier").addEventListener("click", () => movePanelInOrder(-1));
+  $("pe-later").addEventListener("click", () => movePanelInOrder(1));
+  $("pe-whole").addEventListener("click", () => {
+    pe.boxes = [[0, 0, pe.page.width, pe.page.height]];
+    pe.sel = 0;
+    commitPanelEdits();
+    peAnnounce("The whole page is now one panel.");
+  });
+  $("pe-reset").addEventListener("click", () => {
+    const p = panelCheck.pages[panelCheck.editIndex];
+    panelEdits.delete(p.name);
+    pe.boxes = p.boxes.map((b) => b.slice());
+    pe.manual = false;
+    pe.sel = -1;
+    p.thumb = panelCheckThumb(pe.page, pe.boxes);
+    drawPanelEditor();
+    peAnnounce("Back to the detected panels.");
+  });
+  $("pe-prev").addEventListener("click", () => openPanelEditor(panelCheck.editIndex - 1));
+  $("pe-next").addEventListener("click", () => openPanelEditor(panelCheck.editIndex + 1));
+  $("pe-close").addEventListener("click", () => $("panel-editor").close());
+  $("panel-editor").addEventListener("close", () => {
+    renderPanelGrid();
+    // Back to the page just edited, so keyboard users continue where they were.
+    const thumbs = [...document.querySelectorAll("#panel-grid .panel-thumb")];
+    const i = panelCheck.editIndex;
+    const back = thumbs.find((t) => t.textContent.startsWith(`Page ${i + 1} `));
+    (back || $("panel-check-btn")).focus();
+  });
+  window.addEventListener("resize", () => { if ($("panel-editor").open) layoutPanelEditor(); });
+  $("panel-check-btn").addEventListener("click", runPanelCheck);
+  $("panel-check-flagged").addEventListener("change", renderPanelGrid);
+}
+
+function setDrawMode(on) {
+  pe.draw = on;
+  $("pe-draw").setAttribute("aria-pressed", on ? "true" : "false");
+  $("pe-draw").classList.toggle("active", on);
+}
+
+/* Move the selected panel one step earlier (-1) or later (+1) in the reading order. From then on
+ * this page keeps the order the user set. */
+function movePanelInOrder(dir) {
+  const i = pe.sel, j = i + dir;
+  if (i < 0) { peAnnounce("Select a panel first."); return; }
+  if (j < 0 || j >= pe.boxes.length) { peAnnounce(`Panel ${i + 1} is already ${dir < 0 ? "first" : "last"}.`); return; }
+  [pe.boxes[i], pe.boxes[j]] = [pe.boxes[j], pe.boxes[i]];
+  pe.sel = j;
+  pe.manual = true;
+  commitPanelEdits();
+  peAnnounce(`Panel is now number ${j + 1} of ${pe.boxes.length}.`);
+}
+
+function deleteSelectedPanel() {
+  if (pe.sel < 0) { peAnnounce("Select a panel first."); return; }
+  pe.boxes.splice(pe.sel, 1);
+  pe.sel = -1;
+  commitPanelEdits();
+  peAnnounce(`Panel deleted. ${pe.boxes.length} left.`);
+}
+
 /* ── Page wiring ──────────────────────────────────────────────── */
 
 if (typeof document !== "undefined" && document.getElementById("manga-run")) {
@@ -1616,6 +2045,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-sharpen").checked = loadSetting("manga-sharpen", "0") === "1";
   $("manga-contrast").value = loadSetting("manga-contrast", "off");
   $("manga-preview-btn").addEventListener("click", showCleanupPreview);
+  wirePanelEditor();
   // A visible preview follows the settings as they change.
   for (const id of ["manga-levels", "manga-sharpen", "manga-contrast"]) {
     $(id).addEventListener("change", () => { if (!$("manga-preview").hidden) showCleanupPreview(); });
@@ -1640,6 +2070,9 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
       $("manga-file-label").textContent = files.length === 1 ? files[0].name
         : bookCount > 1 ? `${bookCount} books selected, converted one after another` : `${files.length} files selected`;
       showFileNameMeta();
+      panelEdits.clear();
+      panelCheck.pages = [];
+      $("panel-check").hidden = true;
       clearValidationWarnings();
     }
   });
