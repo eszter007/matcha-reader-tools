@@ -1,30 +1,45 @@
-/* Matcha Reader Tools — shared styles. Mobile-first, dark-mode aware. */
+/* Matcha Reader Tools — shared styles. Mobile-first, dark-mode aware.
+ * Look and colours follow the firmware's own web UI (src/network/html/assets/web.css). */
 
 :root {
-  --matcha: #4a7c59;
-  --matcha-dark: #3a6247;
-  --matcha-light: #e8f2ec;
-  --bg: #fafaf7;
-  --card: #ffffff;
-  --text: #22301f;
-  --muted: #6b7a6e;
-  --border: #d9e2da;
-  --warn: #9a6700;
-  --error: #b3261e;
+  color-scheme: light;
+  --matcha: #4a7a62;        /* buttons */
+  --matcha-dark: #3d6652;   /* accent: links, hover, focus */
+  --matcha-light: #f0f5f3;  /* tinted backgrounds */
+  --on-matcha: #fff;        /* text on a matcha button */
+  --bg: #fafaf9;
+  --card: #fff;
+  --text: #1c1917;
+  --label: #57534e;
+  --muted: #706963;
+  --border: #e7e5e4;
+  --control-border: #d6d3d1;
+  --warn: #78561d;
+  --warn-bg: #fdf6e6;
+  --warn-border: #e7d4a8;
+  --error: #b42318;
+  --card-shadow: 0 0 0 1px #1c19170d, 0 1px 3px #0000001a, 0 1px 2px -1px #0000001a;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --matcha: #7fb98f;
-    --matcha-dark: #9fcfae;
-    --matcha-light: #263a2c;
-    --bg: #161a16;
-    --card: #1f261f;
-    --text: #e4ece4;
-    --muted: #9aa89c;
-    --border: #37423a;
-    --warn: #e3b341;
-    --error: #f2827a;
+    color-scheme: dark;
+    --matcha: #8fb9a6;
+    --matcha-dark: #b3cfc2;
+    --matcha-light: #35473d;
+    --on-matcha: #1c1917;
+    --bg: #242321;
+    --card: #302e2b;
+    --text: #fafaf9;
+    --label: #d6d3d1;
+    --muted: #a8a29e;
+    --border: #504b45;
+    --control-border: #78716c;
+    --warn: #e7d4a8;
+    --warn-bg: #403728;
+    --warn-border: #7e6940;
+    --error: #fca5a5;
+    --card-shadow: 0 0 0 1px #504b45, 0 1px 3px #0000001a, 0 1px 2px -1px #0000001a;
   }
 }
 
@@ -32,60 +47,102 @@
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
   background: var(--bg);
   color: var(--text);
   line-height: 1.55;
 }
 
-header {
-  background: var(--matcha);
-  color: #fff;
-  padding: 0.9rem 1rem;
+:focus-visible { outline: 3px solid var(--matcha-dark); outline-offset: 3px; }
+
+/* Header: the firmware's brand bar, sticky and frosted. */
+.brand {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
 }
 
-header .inner {
-  max-width: 760px;
+.brand-inner {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 24px;
+  max-width: 80rem;
+  min-height: 64px;
   margin: 0 auto;
-  display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  flex-wrap: wrap;
+  padding: 0.875rem 2rem;
 }
 
-header h1 {
-  font-size: 1.15rem;
-  margin: 0;
+.brand h1 { margin: 0; font-family: Georgia, serif; font-weight: 400; font-size: 17px; line-height: 1.25; }
+.brand-link { display: flex; align-items: center; gap: 4px; white-space: nowrap; color: inherit; text-decoration: none; }
+.brand-reader { color: var(--matcha-dark); }
+.brand-link picture { display: contents; }
+.brand-logo { width: 28px; height: 28px; margin-right: 6px; flex-shrink: 0; }
+
+.nav-links { display: flex; flex-wrap: wrap; gap: 1.2rem; }
+.nav-links a { color: var(--label); text-decoration: none; font-size: 14px; }
+.nav-links a:hover, .nav-links a[aria-current="page"] { color: var(--text); }
+.nav-links a[aria-current="page"] { font-weight: 600; }
+.desktop-nav { justify-self: end; }
+
+.mobile-nav { display: none; }
+.mobile-nav summary { list-style: none; cursor: pointer; padding: 8px; color: var(--label); }
+.mobile-nav summary::-webkit-details-marker { display: none; }
+.mobile-nav .menu-close, .mobile-nav[open] .menu-open { display: none; }
+.mobile-nav[open] .menu-close { display: inline; }
+.mobile-links { flex-direction: column; gap: 0; }
+.mobile-links a { padding: 0.6rem 0.2rem; }
+.mobile-links a + a { border-top: 1px solid var(--border); }
+
+@media (max-width: 720px) {
+  .brand-inner { padding: 0.75rem 3.5rem 0.75rem 1.25rem; min-height: 56px; }
+  .desktop-nav { display: none; }
+  .mobile-nav { display: block; position: absolute; top: 8px; right: 10px; }
+  .mobile-nav[open] .mobile-links {
+    position: absolute;
+    top: 44px;
+    right: 0;
+    min-width: 220px;
+    padding: 0.4rem 1rem;
+    background: var(--card);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow), 0 8px 24px #0000002e;
+  }
 }
 
-header h1 a { color: inherit; text-decoration: none; }
-
-header nav { display: flex; gap: 0.9rem; font-size: 0.92rem; }
-header nav a { color: #ffffffd9; text-decoration: none; }
-header nav a:hover, header nav a.active { color: #fff; text-decoration: underline; }
+.icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; vertical-align: middle; }
 
 main {
-  max-width: 760px;
+  max-width: 800px;
   margin: 0 auto;
-  padding: 1.2rem 1rem 3rem;
+  padding: 2rem 1.25rem 3rem;
 }
 
-h2 { font-size: 1.35rem; margin: 0.4rem 0 0.3rem; }
-p.lede { color: var(--muted); margin-top: 0; }
+h2, h3 { font-family: Georgia, serif; font-weight: 400; color: var(--text); }
+h2 { font-size: 26px; line-height: 1.25; margin: 0.2rem 0 0.6rem; }
+p.lede { color: var(--muted); margin-top: 0; font-size: 1.02rem; }
 
 .card {
   background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1rem 1.1rem;
-  margin: 1rem 0;
+  border-radius: 16px;
+  padding: 24px;
+  margin: 20px 0;
+  box-shadow: var(--card-shadow);
 }
 
-.card h3 { margin: 0 0 0.4rem; font-size: 1.02rem; }
+.card h3 { margin: 0 0 0.5rem; font-size: 19px; }
+
+@media (max-width: 560px) { .card { padding: 18px; } }
 
 label { display: block; font-weight: 600; font-size: 0.9rem; margin: 0.7rem 0 0.2rem; }
 label .hint { font-weight: 400; color: var(--muted); }
 main a { color: var(--matcha-dark); }
+label { color: var(--label); }
 
 /* Hint under a <select>, swapped in place as the choice changes; .warn is the
  * amber variant used when the chosen value carries a cost worth reading. */
@@ -106,9 +163,9 @@ input[type="text"], input[type="password"], input[type="number"], select, textar
   width: 100%;
   padding: 0.5rem 0.6rem;
   font-size: 1rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
-  background: var(--bg);
+  background: var(--card);
   color: var(--text);
   font-family: inherit;
 }
@@ -157,11 +214,12 @@ textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
 button.primary {
   background: var(--matcha);
   border: none;
-  color: #fff;
-  font-size: 1.05rem;
+  color: var(--on-matcha);
+  font-size: 1rem;
   font-weight: 600;
   padding: 0.7rem 1.6rem;
-  border-radius: 10px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px #0000001a, 0 1px 2px -1px #0000001a;
   cursor: pointer;
   margin-top: 1rem;
 }
@@ -170,15 +228,17 @@ button.primary:hover:not(:disabled) { background: var(--matcha-dark); }
 button.primary:disabled { opacity: 0.55; cursor: default; }
 
 button.secondary {
-  background: transparent;
+  background: var(--card);
   border: 1px solid var(--border);
+  font-weight: 600;
   color: var(--text);
   font-size: 0.95rem;
   padding: 0.65rem 1.2rem;
-  border-radius: 10px;
+  border-radius: 8px;
   cursor: pointer;
   margin: 1rem 0 0 0.6rem;
 }
+button.secondary:hover { background: var(--matcha-light); border-color: var(--matcha-dark); }
 
 #progress {
   margin-top: 1rem;
@@ -233,24 +293,25 @@ details summary { cursor: pointer; font-weight: 600; font-size: 0.92rem; color: 
 .toolcard {
   display: block;
   background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1.1rem;
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+  padding: 1.25rem;
   text-decoration: none;
   color: var(--text);
 }
 
-.toolcard:hover { border-color: var(--matcha); }
+.toolcard:hover { box-shadow: 0 0 0 2px var(--matcha), 0 1px 3px #0000001a; }
 .toolcard .emoji { font-size: 1.8rem; }
-.toolcard h3 { margin: 0.4rem 0 0.3rem; color: var(--matcha-dark); }
+.toolcard h3 { margin: 0.4rem 0 0.3rem; color: var(--text); font-size: 20px; }
 .toolcard p { margin: 0; font-size: 0.9rem; color: var(--muted); }
 
+/* Footer: the firmware's tinted band. The inner width is set on its children. */
 footer {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 0 1rem 2rem;
+  background: color-mix(in srgb, var(--bg) 75%, var(--border));
+  border-top: 1px solid var(--border);
+  padding: 2rem max(1.25rem, calc((100% - 800px) / 2 + 1.25rem)) 1.5rem;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.85rem;
 }
 
 footer a { color: var(--matcha-dark); }
@@ -264,7 +325,7 @@ footer a { color: var(--matcha-dark); }
   padding: 0.5rem 1rem;
   border-radius: 10px;
   background: var(--matcha);
-  color: #fff !important;
+  color: var(--on-matcha) !important;
   font-size: 1rem;
   font-weight: 600;
   text-decoration: none;
@@ -283,8 +344,7 @@ footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid v
 }
 
 /* A notice about a limitation rather than a neutral aside, so it reads as a caution. */
-.notice.warn { background: #fdf3e2; border-left: 3px solid var(--warn); }
-@media (prefers-color-scheme: dark) { .notice.warn { background: #3a2f1a; } }
+.notice.warn { background: var(--warn-bg); border-left: 3px solid var(--warn-border); color: var(--warn); }
 
 /* A choice the current book type makes meaningless: still readable, visibly not in play. */
 .checks label.disabled { opacity: 0.5; }
