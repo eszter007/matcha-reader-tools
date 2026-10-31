@@ -677,7 +677,7 @@ async function buildMangaPdf({ title, author, epubPages }) {
  * Both depths are dithered (Floyd-Steinberg) rather than rounded per pixel: a plain threshold
  * turns screentone into flat black, and plain rounding to XTH's four grays into blotches. XTH additionally needs a height that is a multiple of 8, which
  * every device target already satisfies (800 and 792 both divide by 8). */
-function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = true, gamma = 1) {
+function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = true, gamma = 1, style = "floyd") {
   const [w, h] = target;
   const page = makeCanvas(w, h);
   const ctx = smoothScaling(page.getContext("2d", { willReadFrequently: true }));
@@ -697,12 +697,12 @@ function encodeXtcVariants(src, wantXtc, wantXtch, target, rotateLandscape = tru
     unsharpMask(applyGrayGamma(grayFromRGBA(ctx.getImageData(0, 0, w, h).data, w, h), gamma), w, h));
   const out = {};
   if (wantXtc) {
-    const dithered = floydSteinbergMono(gray, w, h);   // 0/1 per pixel, 1 = white
+    const dithered = ditherMono(gray, w, h, style);   // 0/1 per pixel, 1 = white
     const bw = new Uint8Array(w * h);
     for (let i = 0; i < bw.length; i++) bw[i] = dithered[i] ? 255 : 0;
     out.xtc = { bytes: encodeXtgPage(bw, w, h), w, h };
   }
-  if (wantXtch) out.xtch = { bytes: encodeXthPage(floydSteinbergLevels(gray, w, h, 4), w, h), w, h };
+  if (wantXtch) out.xtch = { bytes: encodeXthPage(ditherLevels(gray, w, h, 4, style), w, h), w, h };
   return out;
 }
 
@@ -774,6 +774,20 @@ function clearValidationWarnings() {
   if (!log) return;
   for (const el of log.querySelectorAll(".validation")) el.remove();
   if (!log.children.length) log.hidden = true;
+}
+
+/* Title/series/volume guessed from a single archive's file name; empty for a set of images. */
+function fileNameMeta(files) {
+  return files.length === 1 && !isImageName(files[0].name) ? metaFromFileName(files[0].name)
+    : { title: "", series: "", seriesIndex: null };
+}
+
+/* Show what the file name suggests as the placeholder of each empty metadata field. */
+function showFileNameMeta() {
+  const m = fileNameMeta($("manga-file").files);
+  $("manga-title").placeholder = m.title ? `from file: ${m.title}` : "auto";
+  $("manga-series").placeholder = m.series ? `from file: ${m.series}` : "auto";
+  $("manga-series-index").placeholder = m.seriesIndex !== null ? `from file: ${m.seriesIndex}` : "auto";
 }
 
 async function runMangaConversion() {
@@ -861,6 +875,7 @@ async function runMangaConversion() {
   // Dither brightness only reaches the dithered outputs (1-bit BMP, XTC, XTCH); the JPEG
   // and PNG paths are untouched by it.
   const ditherGamma = validDitherGamma($("manga-dither").value);
+  const ditherStyle = validDitherStyle($("manga-dither-style").value);
   const bookType = validBookType($("manga-booktype").value);
   if (!bookType) {
     logValidation("Pick a book type — manga, western comic, or webtoon/manhwa.");
@@ -890,6 +905,7 @@ async function runMangaConversion() {
   saveSetting("manga-format", [...formats].join(","));
   saveSetting("manga-booktype", bookType);
   saveSetting("manga-dither", $("manga-dither").value);
+  saveSetting("manga-dither-style", ditherStyle);
   saveSetting("manga-no-ocr", $("manga-no-ocr").checked ? "1" : "0");
   saveSetting("manga-ocr-out", $("manga-ocr-out").value);
   saveSetting("manga-res", resChoice);
@@ -942,6 +958,22 @@ async function runMangaConversion() {
         `${cut.pageH}px, ${cut.snapped} of ${cut.cuts} cuts landing in a gutter`);
     }
 
+    // The device takes page 0 as the cover, so a chosen cover page moves to the front; the
+    // chapters before it shift back by one.
+    const coverPage = parseInt($("manga-cover").value, 10);
+    if (Number.isInteger(coverPage) && coverPage > 1) {
+      if (isWebtoon) {
+        logLine("Cover page is ignored for webtoons: their pages are re-cut from the strip.", "warn");
+      } else if (coverPage > pages.length) {
+        logLine(`Cover page ${coverPage} is past the last page (${pages.length}); keeping the first page.`, "warn");
+      } else {
+        const ci = coverPage - 1;
+        pages = [pages[ci], ...pages.slice(0, ci), ...pages.slice(ci + 1)];
+        tocEntries = tocEntries.map(([p, t]) => [p === ci ? 0 : p < ci ? p + 1 : p, t]);
+        logLine(`Using page ${coverPage} as the cover`);
+      }
+    }
+
     if (Number.isInteger(maxPagesRaw) && maxPagesRaw > 0) pages = pages.slice(0, maxPagesRaw);
     logLine(`Found ${pages.length} pages in ${collected.sourceLabel}`);
 
@@ -958,12 +990,15 @@ async function runMangaConversion() {
       }
     }
 
-    const metaTitle = $("manga-title").value.trim() || collected.meta.title;
+    // What the user typed wins, then the book's own metadata, then a guess from the file name.
+    const fileMeta = fileNameMeta(files);
+    const metaTitle = $("manga-title").value.trim() || collected.meta.title || fileMeta.title;
     const metaAuthor = $("manga-author").value.trim() || collected.meta.author;
     const metaLanguage = $("manga-language").value.trim() || collected.meta.language;
-    const metaSeries = $("manga-series").value.trim() || collected.meta.series || "";
+    const metaSeries = $("manga-series").value.trim() || collected.meta.series || fileMeta.series;
     const seriesField = parseFloat($("manga-series-index").value);
-    const metaSeriesIndex = Number.isFinite(seriesField) ? seriesField : (collected.meta.seriesIndex ?? null);
+    const metaSeriesIndex = Number.isFinite(seriesField) ? seriesField
+      : (collected.meta.seriesIndex ?? fileMeta.seriesIndex);
     const folder = sanitizeFolderName(metaTitle || "Manga");
 
     // The book's own Language (step 5) is what tells the model which language to expect --
@@ -1125,7 +1160,7 @@ async function runMangaConversion() {
       if (!matchaFolder || !keepPageImage) {
         // nothing written for this page
       } else if (mono) {
-        addBookFile(`${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH, ditherGamma));
+        addBookFile(`${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH, ditherGamma, ditherStyle));
       } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized && !wasTrimmed) {
         addBookFile(`${pageBase}${ext}`, srcBytes);
       } else if (ext === ".png" && (wasResized || wasTrimmed)) {
@@ -1152,7 +1187,7 @@ async function runMangaConversion() {
       }
       if (anyXtc) xtcPageMap.set(pageIdx, wantXtc ? xtcPages.length : xtchPages.length);
       if (anyXtc && keepPageImage) {
-        const v = encodeXtcVariants(canvas, wantXtc, wantXtch, deviceTarget, true, ditherGamma);
+        const v = encodeXtcVariants(canvas, wantXtc, wantXtch, deviceTarget, true, ditherGamma, ditherStyle);
         if (v.xtc) xtcPages.push(v.xtc);
         if (v.xtch) xtchPages.push(v.xtch);
       }
@@ -1219,7 +1254,7 @@ async function runMangaConversion() {
           if (mono) {
             const cropRgba = cropCtx.getImageData(0, 0, pw, ph).data;
             if (matchaFolder) {
-              addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph, ditherGamma));
+              addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph, ditherGamma, ditherStyle));
             }
             // OCR still reads a full-colour JPEG crop: the dithered BMP would
             // only hurt text recognition (the --mono guidance to pair with
@@ -1245,7 +1280,7 @@ async function runMangaConversion() {
             epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: epw, h: eph });
           }
           if (anyXtc && cropInsteadOfPage) {
-            const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget, rotatePanels, ditherGamma);
+            const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget, rotatePanels, ditherGamma, ditherStyle);
             if (v.xtc) xtcPages.push(v.xtc);
             if (v.xtch) xtchPages.push(v.xtch);
           }
@@ -1444,6 +1479,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   }
   $("manga-booktype").value = validBookType(loadSetting("manga-booktype", ""));
   $("manga-dither").value = loadSetting("manga-dither", "normal");
+  $("manga-dither-style").value = validDitherStyle(loadSetting("manga-dither-style", "floyd"));
   $("manga-ocr-out").value = loadSetting("manga-ocr-out", "en");
   // Skip text recognition is the default: it needs no API key, sends nothing anywhere and
   // is the fast path, so the key field and the language pickers only appear once someone
@@ -1462,6 +1498,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     if (files.length) {
       $("manga-file-label").textContent = files.length === 1
         ? files[0].name : `${files.length} files selected`;
+      showFileNameMeta();
       clearValidationWarnings();
     }
   });

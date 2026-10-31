@@ -155,6 +155,12 @@
         </select>
         <p class="hint">Some scans dither darker than the original. Lighten them here. Affects
         1-bit BMP and XTC/XTCH only; JPEG and PNG pages are untouched.</p>
+        <label for="manga-dither-style">Dither style</label>
+        <select id="manga-dither-style">
+          <option value="floyd">Floyd-Steinberg (smooth)</option>
+          <option value="atkinson">Atkinson (crisper lines, cleaner paper)</option>
+          <option value="ordered">Ordered pattern (regular, good for screentone)</option>
+        </select>
       </div>
     </details>
   </div>
@@ -269,6 +275,11 @@
       <div>
         <label for="manga-series-index">Volume</label>
         <input type="number" id="manga-series-index" placeholder="auto" min="0" step="any">
+      </div>
+      <div>
+        <label for="manga-cover">Cover page</label>
+        <input type="number" id="manga-cover" placeholder="1" min="1" step="1" aria-describedby="manga-cover-hint">
+        <p class="hint" id="manga-cover-hint">When the cover isn't the first page: it moves to the front.</p>
       </div>
     </div>
     <p class="hint">Splits your reading stats by language, and tells text recognition which

@@ -829,6 +829,107 @@ function floydSteinbergLevels(gray, w, h, levels) {
   return out;
 }
 
+/* Dither styles other than Floyd-Steinberg, for the outputs that are dithered in the browser
+ * (1-bit BMP, XTC, XTCH). Atkinson diffuses only 6/8 of the error, so flat areas stay cleaner and
+ * line art crisper, at the cost of shadow detail; ordered dithering (8x8 Bayer) gives a regular
+ * pattern with no worms, which suits screentone. */
+const DITHER_STYLES = ["floyd", "atkinson", "ordered"];
+
+function validDitherStyle(v) { return DITHER_STYLES.includes(v) ? v : "floyd"; }
+
+const BAYER8 = (() => {
+  const m = [[0]];
+  let n = 1;
+  while (n < 8) {
+    const next = [];
+    for (let y = 0; y < n * 2; y++) next.push(new Array(n * 2));
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const v = m[y][x] * 4;
+        next[y][x] = v; next[y][x + n] = v + 2; next[y + n][x] = v + 3; next[y + n][x + n] = v + 1;
+      }
+    }
+    m.length = 0; m.push(...next); n *= 2;
+  }
+  return m.map((row) => row.map((v) => (v + 0.5) / 64));  // thresholds in (0, 1)
+})();
+
+/* Atkinson or ordered dither of 8-bit gray to `levels` evenly spaced grays (0..255 out). Like
+ * floydSteinbergLevels, pure white and pure black stay exact. */
+function ditherLevelsStyled(gray, w, h, levels, style) {
+  const step = 255 / (levels - 1);
+  const out = new Uint8Array(w * h);
+  if (style === "ordered") {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x, v = gray[i];
+        if (v === 255 || v === 0) { out[i] = v; continue; }
+        const scaled = v / step;
+        const base = Math.floor(scaled);
+        const q = Math.min(levels - 1, base + (scaled - base > BAYER8[y & 7][x & 7] ? 1 : 0));
+        out[i] = Math.round(q * step);
+      }
+    }
+    return out;
+  }
+  const acc = new Int32Array(gray);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (gray[i] === 255 || gray[i] === 0) { out[i] = gray[i]; continue; }
+      const q = Math.min(levels - 1, Math.max(0, Math.round(acc[i] / step)));
+      out[i] = Math.round(q * step);
+      const e = (acc[i] - out[i]) >> 3;  // Atkinson: 1/8 to six neighbours
+      if (e === 0) continue;
+      if (x + 1 < w) acc[i + 1] += e;
+      if (x + 2 < w) acc[i + 2] += e;
+      if (y + 1 < h) {
+        if (x > 0) acc[i + w - 1] += e;
+        acc[i + w] += e;
+        if (x + 1 < w) acc[i + w + 1] += e;
+      }
+      if (y + 2 < h) acc[i + 2 * w] += e;
+    }
+  }
+  return out;
+}
+
+/* 1-bit dither (1 = white) in the chosen style; Floyd-Steinberg is the Python tool's. */
+function ditherMono(gray, w, h, style = "floyd") {
+  if (validDitherStyle(style) === "floyd") return floydSteinbergMono(gray, w, h);
+  const levels = ditherLevelsStyled(gray, w, h, 2, style);
+  for (let i = 0; i < levels.length; i++) levels[i] = levels[i] ? 1 : 0;
+  return levels;
+}
+
+/* Dither to `levels` grays in the chosen style. */
+function ditherLevels(gray, w, h, levels, style = "floyd") {
+  return validDitherStyle(style) === "floyd" ? floydSteinbergLevels(gray, w, h, levels)
+    : ditherLevelsStyled(gray, w, h, levels, style);
+}
+
+/* Title, series and volume guessed from a file name, for books whose file carries no metadata:
+ * "Spy x Family v01.cbz" -> series "Spy x Family", volume 1, title "Spy x Family 1". Release
+ * tags in brackets ("(Digital)", "[Group]") are dropped. Any field it cannot tell is left empty. */
+function metaFromFileName(name) {
+  let base = String(name || "").replace(/\.[^./]+$/, "").replace(/_/g, " ");
+  base = base.replace(/\s*[\[(（【][^\])）】]*[\])）】]/g, " ").replace(/\s+/g, " ").trim();
+  const patterns = [
+    /^(.*?)[\s.,-]*(?:v|vol\.?|volume|tome|t\.)\s*0*(\d+(?:\.\d+)?)\b/i,
+    /^(.*?)\s*第?\s*0*(\d+)\s*[巻卷권]/,
+    /^(.*?)[\s.,-]+#?0*(\d{1,3}(?:\.\d+)?)$/,
+  ];
+  for (const re of patterns) {
+    const m = base.match(re);
+    if (m && m[1].trim()) {
+      const series = m[1].replace(/[\s.,-]+$/, "").trim();
+      const index = parseFloat(m[2]);
+      return { title: `${series} ${m[2].replace(/^0+(?=\d)/, "")}`, series, seriesIndex: index };
+    }
+  }
+  return { title: base, series: "", seriesIndex: null };
+}
+
 /* Pack a 1-bit mono buffer (1 = white) into a standard uncompressed BI_RGB BMP:
  * 14-byte file header, 40-byte BITMAPINFOHEADER, a 2-entry black/white palette,
  * then bottom-up rows padded to a 4-byte stride with MSB-first bit packing.
@@ -876,9 +977,9 @@ function encodeBmp1bit(mono, w, h) {
 }
 
 /* Convenience: RGBA pixels → 1-bit Floyd-Steinberg-dithered BMP bytes. */
-function encodeMonoBmpFromRGBA(rgba, w, h, gamma = 1) {
+function encodeMonoBmpFromRGBA(rgba, w, h, gamma = 1, style = "floyd") {
   const gray = applyGrayGamma(grayFromRGBA(rgba, w, h), gamma);
-  return encodeBmp1bit(floydSteinbergMono(gray, w, h), w, h);
+  return encodeBmp1bit(ditherMono(gray, w, h, style), w, h);
 }
 
 /* ── Binary output ────────────────────────────────────────────── */
@@ -1325,8 +1426,8 @@ if (typeof module !== "undefined") {
     MANGA_FORMAT_VERSION, isImageName, baseName, mangaFileExt,
     naturalSortKey, compareNaturalKeys, naturalSortPaths,
     grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
-    floydSteinbergMono, floydSteinbergLevels, stretchPaperAndInk, unsharpMask, encodeBmp1bit, encodeMonoBmpFromRGBA,
-    DITHER_GAMMAS, validDitherGamma, applyGrayGamma,
+    floydSteinbergMono, floydSteinbergLevels, ditherMono, ditherLevels, DITHER_STYLES, validDitherStyle, stretchPaperAndInk, unsharpMask, encodeBmp1bit, encodeMonoBmpFromRGBA,
+    DITHER_GAMMAS, validDitherGamma, applyGrayGamma, metaFromFileName,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
     yOverlapFrac, xOverlapFrac, sortPanelsReadingOrder,
     OCR_LANGUAGE_NAMES, ocrLanguageName, buildPanelOcrPrompt,
