@@ -384,6 +384,7 @@ const MANGA_DEVICE_TARGETS = {
   metalio: [480, 800],    // Metalio E-Ink 4 (3.97")
   x3: [528, 792],         // Xteink X3
   eego: [552, 768],       // EEGO Reader A4
+  metalio4plus: [684, 1216],  // Metalio E-Ink 4 Plus
 };
 
 /* Compute the fitted size for an image of w×h against a device target (a
