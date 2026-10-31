@@ -910,6 +910,7 @@ function cleanCrop(ctx, w, h, tone, sharpen) {
 /* Before/after of one page at the device size, with the current clean-up settings. The pages are
  * collected once per file selection. */
 let previewSource = null;
+let previewPage = 1;
 async function showCleanupPreview() {
   const files = $("manga-file").files;
   if (!files || !files.length) { logValidation("Choose a file first to preview a page."); return; }
@@ -920,7 +921,11 @@ async function showCleanupPreview() {
       previewSource = { files, collected: await collectPagesFromInput(files) };
     }
     const pages = previewSource.collected.pages;
-    const n = Math.min(pages.length, Math.max(1, parseInt($("manga-preview-page").value, 10) || 1));
+    previewPage = Math.min(pages.length, Math.max(1, previewPage));
+    const n = previewPage;
+    $("manga-preview-label").textContent = `Page ${n} of ${pages.length}`;
+    $("manga-preview-prev").disabled = n === 1;
+    $("manga-preview-next").disabled = n === pages.length;
     const bitmap = await decodeImage(await pages[n - 1].read(), mangaFileExt(pages[n - 1].name));
     const target = MANGA_DEVICE_TARGETS[validResChoice($("manga-res").value)] || [480, 800];
     const fit = fitToDeviceSize(bitmap.width, bitmap.height, target);
@@ -936,7 +941,8 @@ async function showCleanupPreview() {
     cleanPage(draw("manga-preview-after"), fit.w, fit.h, cleanupSettings());
     bitmap.close && bitmap.close();
     $("manga-preview").hidden = false;
-    announce(`Showing page ${n} before and after clean-up.`);
+    btn.textContent = "Hide preview";
+    btn.setAttribute("aria-expanded", "true");
   } catch (e) {
     logLine("Preview failed: " + e.message, "error");
   } finally {
@@ -1674,12 +1680,14 @@ async function panelCheckSettings() {
 }
 
 /* Why a page is worth a look, or "" when detection looks fine. */
+// Sound effects and gutter text often sit outside the panels; only a larger miss is worth a look.
+const PANEL_CHECK_MIN_COVERAGE = 0.9;
 function panelCheckReason(boxes, rgba, w, h) {
-  if (!boxes.length) return "no panels found";
+  if (!boxes.length) return "No panels found";
   if (boxes.length > 9) return `${boxes.length} panels, more than usual`;
   const margined = boxes.map(([x1, y1, x2, y2]) => [Math.max(0, x1 - 10), Math.max(0, y1 - 10), Math.min(w, x2 + 10), Math.min(h, y2 + 10)]);
   const coverage = panelInkCoverage(grayFromRGBA(rgba, w, h), w, h, margined);
-  return coverage < 0.95 ? `${Math.round((1 - coverage) * 100)}% of the artwork is outside every panel` : "";
+  return coverage < PANEL_CHECK_MIN_COVERAGE ? `${Math.round((1 - coverage) * 100)}% of the art is outside the panels` : "";
 }
 
 /* The boxes a page uses now: the user's edit, or what was detected. */
@@ -1692,16 +1700,19 @@ function panelCheckBoxes(p) {
 function drawPanelsOn(ctx, page, boxes, scale, selected = -1) {
   ctx.drawImage(page, 0, 0, page.width * scale, page.height * scale);
   ctx.lineWidth = Math.max(2, 3 * scale);
-  ctx.font = `bold ${Math.max(11, Math.round(28 * scale))}px system-ui, sans-serif`;
+  ctx.font = `bold ${Math.max(12, Math.round(26 * scale))}px system-ui, sans-serif`;
   boxes.forEach(([x1, y1, x2, y2], i) => {
     const sel = i === selected;
     ctx.strokeStyle = sel ? "#d9480f" : "#2f9e44";
-    ctx.fillStyle = sel ? "rgba(217,72,15,0.12)" : "rgba(47,158,68,0.10)";
-    ctx.fillRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+    // Only the selected panel is tinted: tinting every one muddies the art where panels overlap.
+    if (sel) {
+      ctx.fillStyle = "rgba(217,72,15,0.10)";
+      ctx.fillRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+    }
     ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
     const label = String(i + 1);
-    const tw = ctx.measureText(label).width + 8 * Math.max(0.5, scale);
-    const th = Math.max(14, Math.round(34 * scale));
+    const tw = ctx.measureText(label).width + 10 * Math.max(0.5, scale);
+    const th = Math.max(16, Math.round(34 * scale));
     ctx.fillStyle = sel ? "#d9480f" : "#2f9e44";
     ctx.fillRect(x1 * scale, y1 * scale, tw, th);
     ctx.fillStyle = "#fff";
@@ -1736,19 +1747,45 @@ function renderPanelGrid() {
     const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "panel-thumb" + (p.reason && !edited ? " flagged" : "") + (edited ? " edited" : "");
+    const flag = p.reason && !edited;
+    btn.className = "panel-thumb" + (flag ? " flagged" : "") + (edited ? " edited" : "");
+    const n = panelCheckBoxes(p).length;
+    const frame = document.createElement("span");
+    frame.className = "panel-thumb-frame";
     const img = document.createElement("img");
     img.src = p.thumb; img.alt = "";
+    frame.append(img);
+    if (flag || edited) {
+      const pill = document.createElement("span");
+      pill.className = "panel-thumb-pill";
+      pill.textContent = edited ? "Fixed" : "Check";
+      frame.append(pill);
+    }
     const cap = document.createElement("span");
-    const n = panelCheckBoxes(p).length;
-    cap.textContent = `Page ${i + 1} · ${n} panel${n === 1 ? "" : "s"}` + (edited ? " · fixed" : p.reason ? ` · ${p.reason}` : "");
-    btn.append(img, cap);
+    cap.className = "panel-thumb-cap";
+    const title = document.createElement("span");
+    title.className = "panel-thumb-title";
+    title.textContent = `Page ${i + 1}`;
+    const count = document.createElement("span");
+    count.className = "panel-thumb-count";
+    count.textContent = `${n} panel${n === 1 ? "" : "s"}`;
+    cap.append(title, count);
+    btn.append(frame, cap);
+    if (flag) {
+      const note = document.createElement("span");
+      note.className = "panel-thumb-note";
+      note.textContent = p.reason;
+      btn.append(note);
+    }
+    btn.setAttribute("aria-label", `Page ${i + 1}, ${n} panel${n === 1 ? "" : "s"}` +
+      (edited ? ", fixed by you" : flag ? `, worth a look: ${p.reason}` : ""));
     btn.addEventListener("click", () => openPanelEditor(i));
     li.append(btn);
     grid.append(li);
   });
-  $("panel-check-summary").textContent = flagged
-    ? `${flagged} of ${panelCheck.pages.length} pages may need a look.` : `All ${panelCheck.pages.length} pages look fine.`;
+  $("panel-check-summary").textContent = (flagged
+    ? `${flagged} of ${panelCheck.pages.length} pages may need a look.` : `All ${panelCheck.pages.length} pages look fine.`) +
+    " Click a page to fix its panels.";
 }
 
 async function runPanelCheck() {
@@ -1781,6 +1818,7 @@ async function runPanelCheck() {
       if (i % 4 === 3 || i === pages.length - 1) renderPanelGrid();
     }
     setProgress(pages.length, pages.length, "Panel check done");
+    btn.textContent = "Check again";
     announce($("panel-check-summary").textContent);
     if (collected.cleanup) collected.cleanup();
   } catch (e) {
@@ -1809,6 +1847,9 @@ async function openPanelEditor(i) {
   pe.sel = -1;
   setDrawMode(false);
   $("pe-title").textContent = `Page ${i + 1} of ${panelCheck.pages.length}`;
+  const reason = panelEdits.has(p.name) ? "" : p.reason;
+  $("pe-reason").hidden = !reason;
+  $("pe-reason").textContent = reason ? `Worth a look: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}.` : "";
   $("pe-prev").disabled = i === 0;
   $("pe-next").disabled = i === panelCheck.pages.length - 1;
   const dlg = $("panel-editor");
@@ -1841,6 +1882,11 @@ function drawPanelEditor() {
   }
   c.setAttribute("aria-label", `Page with ${pe.boxes.length} panel${pe.boxes.length === 1 ? "" : "s"}` +
     (pe.sel >= 0 ? `, panel ${pe.sel + 1} selected` : ""));
+  updatePanelFloat();
+  $("pe-help").textContent = pe.draw ? "Drag on the page to draw a panel."
+    : pe.sel >= 0 ? "Drag to move · drag the corner to resize · change the reading order above the panel."
+    : pe.boxes.length ? "Click a panel to move, resize or reorder it, or drag on empty space to draw one."
+    : "Drag on the page to draw a panel.";
 }
 
 function normBox([x1, y1, x2, y2]) {
@@ -1952,6 +1998,12 @@ function wirePanelEditor() {
       pe.sel = Number(ev.key) - 1;
       peAnnounce(`Panel ${pe.sel + 1} of ${n} selected.`);
       drawPanelEditor();
+    } else if (ev.key === "v" || ev.key === "V") {
+      setDrawMode(false);
+      peAnnounce("Select tool.");
+    } else if (ev.key === "r" || ev.key === "R") {
+      setDrawMode(true);
+      peAnnounce("Draw tool: drag on the page to draw a panel.");
     } else if (ev.key === "a" || ev.key === "A") {
       const W = pe.page.width, H = pe.page.height;
       pe.boxes.push(clampBox([W / 4, H / 4, (3 * W) / 4, (3 * H) / 4]));
@@ -1976,10 +2028,8 @@ function wirePanelEditor() {
   });
 
   $("pe-delete").addEventListener("click", deleteSelectedPanel);
-  $("pe-draw").addEventListener("click", () => {
-    setDrawMode(!pe.draw);
-    peAnnounce(pe.draw ? "Drag on the page to draw a panel." : "Draw panel off.");
-  });
+  $("pe-mode-select").addEventListener("click", () => { setDrawMode(false); $("pe-canvas").focus(); });
+  $("pe-mode-draw").addEventListener("click", () => { setDrawMode(true); $("pe-canvas").focus(); peAnnounce("Draw: drag on the page to draw a panel."); });
   $("pe-earlier").addEventListener("click", () => movePanelInOrder(-1));
   $("pe-later").addEventListener("click", () => movePanelInOrder(1));
   $("pe-whole").addEventListener("click", () => {
@@ -2016,8 +2066,28 @@ function wirePanelEditor() {
 
 function setDrawMode(on) {
   pe.draw = on;
-  $("pe-draw").setAttribute("aria-pressed", on ? "true" : "false");
-  $("pe-draw").classList.toggle("active", on);
+  $("pe-mode-select").setAttribute("aria-checked", on ? "false" : "true");
+  $("pe-mode-draw").setAttribute("aria-checked", on ? "true" : "false");
+  $("pe-canvas").classList.toggle("drawing", on);
+  if (pe.page) drawPanelEditor();
+}
+
+/* The small bar on the selected panel: its place in the reading order, and delete. It sits just
+ * above the panel, or inside its top edge when there is no room above. */
+function updatePanelFloat() {
+  const float = $("pe-float");
+  if (pe.sel < 0 || pe.drag) { float.hidden = true; return; }
+  const c = $("pe-canvas");
+  const [x1, y1] = pe.boxes[pe.sel];
+  $("pe-order").textContent = `${pe.sel + 1} / ${pe.boxes.length}`;
+  $("pe-earlier").disabled = pe.sel === 0;
+  $("pe-later").disabled = pe.sel === pe.boxes.length - 1;
+  float.hidden = false;
+  const fw = float.offsetWidth, fh = float.offsetHeight;
+  const left = c.offsetLeft + Math.min(Math.max(0, x1 * pe.scale), c.width - fw);
+  const above = y1 * pe.scale - fh - 6;
+  float.style.left = `${left}px`;
+  float.style.top = `${c.offsetTop + (above >= 0 ? above : y1 * pe.scale + 6)}px`;
 }
 
 /* Move the selected panel one step earlier (-1) or later (+1) in the reading order. From then on
@@ -2066,7 +2136,14 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-levels").checked = loadSetting("manga-levels", "0") === "1";
   $("manga-sharpen").checked = loadSetting("manga-sharpen", "0") === "1";
   $("manga-contrast").value = loadSetting("manga-contrast", "off");
-  $("manga-preview-btn").addEventListener("click", showCleanupPreview);
+  $("manga-preview-btn").addEventListener("click", () => {
+    if ($("manga-preview").hidden) { showCleanupPreview(); return; }
+    $("manga-preview").hidden = true;
+    $("manga-preview-btn").textContent = "Show preview";
+    $("manga-preview-btn").setAttribute("aria-expanded", "false");
+  });
+  $("manga-preview-prev").addEventListener("click", () => { previewPage--; showCleanupPreview(); });
+  $("manga-preview-next").addEventListener("click", () => { previewPage++; showCleanupPreview(); });
   wirePanelEditor();
   // Every setting that changes what Convert will do refreshes the line beside it.
   document.querySelector("main").addEventListener("change", updateRunSummary);
