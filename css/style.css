@@ -447,10 +447,10 @@ details { margin-top: 0.8rem; }
 .choice-sub { align-self: start; }
 .choice-art .page { fill: var(--card); stroke: var(--control-border); stroke-width: 1; }
 .choice-art .panels rect { fill: color-mix(in srgb, var(--muted) 30%, var(--card)); }
-.choice-art .order { fill: none; stroke: #d9480f; stroke-width: 1.2; stroke-opacity: 0.55; stroke-linejoin: round; }
-.choice-art .panels rect.first { fill: color-mix(in srgb, #d9480f 22%, var(--card)); }
-.choice-art .step circle { fill: #d9480f; }
-.choice-art .step text { fill: #fff; font: 700 8px system-ui, sans-serif; text-anchor: middle; }
+.choice-art .order { fill: none; stroke: var(--matcha); stroke-width: 1.2; stroke-opacity: 0.55; stroke-linejoin: round; }
+.choice-art .panels rect.first { fill: color-mix(in srgb, var(--matcha) 22%, var(--card)); }
+.choice-art .step circle { fill: var(--matcha); }
+.choice-art .step text { fill: var(--on-matcha); font: 700 8px system-ui, sans-serif; text-anchor: middle; }
 .choice:has(input:checked) .choice-art .page { stroke: var(--matcha-dark); }
 .choice-sub { color: var(--muted); font-size: 0.8rem; }
 
@@ -551,3 +551,9 @@ footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid v
 /* A choice the current book type makes meaningless: still readable, visibly not in play. */
 .checks label.disabled { opacity: 0.5; }
 .checks label.disabled input { cursor: not-allowed; }
+
+.callout-group { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 0.8rem 0; }
+.callout-group > .callout { margin: 0; border: 0; border-radius: 0; }
+.callout-group > .callout + .callout { border-top: 1px solid var(--border); }
+.panel-only-row { flex-wrap: nowrap; justify-content: flex-start; cursor: pointer; }
+.panel-only-row input { margin: 0.2rem 0 0; align-self: flex-start; flex: none; }

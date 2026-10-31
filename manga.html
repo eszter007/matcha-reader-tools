@@ -77,12 +77,6 @@
         <span class="hint">Same, in 4-level grayscale. Twice the size.</span></label>
     </div>
     </div>
-    <div class="subhead">Options</div>
-    <div class="checks stacked">
-      <label><input type="checkbox" id="manga-panels-only"> <span class="opt">Panels only</span>
-        <span class="hint">Skips the full pages, so the book is smaller and opens straight into panels.
-        The cover and pages whose panels miss art keep their full page.</span></label>
-    </div>
     <div id="manga-xtc-split-row">
       <label for="manga-xtc-split">Split XTC/XTCH into parts</label>
       <select id="manga-xtc-split" aria-describedby="manga-xtc-split-hint">
@@ -157,12 +151,21 @@
     <div class="notice warn" id="notice-booktype" hidden></div>
 
 
-    <div class="callout panel-check-row">
+    <div class="callout-group">
+      <label class="callout panel-only-row">
+        <input type="checkbox" id="manga-panels-only" aria-describedby="panels-only-hint">
+        <span class="callout-text">
+          <span class="callout-title">Panels only</span>
+          <span class="hint" id="panels-only-hint">Skip the full pages: a smaller book that opens straight into panels. The cover and pages with missed art keep their full page.</span>
+        </span>
+      </label>
+      <div class="callout panel-check-row">
       <div class="callout-text">
         <span class="callout-title">Check the panels <span class="hint">· optional</span></span>
         <span class="hint" id="panel-check-hint">See where they are and fix wrong ones before converting.</span>
       </div>
       <button type="button" class="secondary" id="panel-check-btn" aria-describedby="panel-check-hint">Check panels</button>
+    </div>
     </div>
     <div id="panel-check" hidden>
       <div class="panel-check-bar">
