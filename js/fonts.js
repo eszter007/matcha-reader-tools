@@ -791,8 +791,55 @@ async function runFontConversion() {
   }
 }
 
+/* The style a font file holds, from its name: "Literata-BoldItalic.ttf" -> "bolditalic". */
+function styleFromFileName(name) {
+  const base = name.replace(/\.(ttf|otf|ttc)$/i, "").toLowerCase().replace(/[\s_]+/g, "-");
+  const italic = /italic|oblique|-it$|-ital/.test(base);
+  const bold = /bold|-bd$|-heavy|-black/.test(base) && !/semibold|demibold/.test(base);
+  if (bold && italic) return "bolditalic";
+  if (bold) return "bold";
+  if (italic) return "italic";
+  return "regular";
+}
+
+/* The family a set of style files share: the file name without its style suffix. */
+function familyFromFileName(name) {
+  return name.replace(/\.(ttf|otf|ttc)$/i, "")
+    .replace(/[-_ ]?(regular|bold ?italic|bolditalic|bold|italic|oblique|book|roman)$/i, "");
+}
+
+/* "Add all files at once": sort the picked files into the four style inputs. */
+function quickAddFonts(files) {
+  const byStyle = {};
+  const skipped = [];
+  // The shortest name wins a style, so "Font-Regular" beats "Font-SemiBold-Regular".
+  for (const file of [...files].sort((a, b) => a.name.length - b.name.length)) {
+    const style = styleFromFileName(file.name);
+    if (byStyle[style]) skipped.push(file.name);
+    else byStyle[style] = file;
+  }
+  const found = [];
+  for (const s of FONT_STYLES) {
+    const file = byStyle[s.key];
+    if (!file) continue;
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    $(`font-${s.key}`).files = dt.files;
+    found.push(`${s.label}: ${file.name}`);
+  }
+  if (!$("font-name").value.trim() && (byStyle.regular || found.length)) {
+    $("font-name").value = familyFromFileName((byStyle.regular || Object.values(byStyle)[0]).name);
+  }
+  const result = $("font-quick-result");
+  result.hidden = false;
+  result.textContent = (found.length ? "Found " + found.join(" · ") : "No font files found.") +
+    (byStyle.regular ? "" : " No Regular style — pick one below.") +
+    (skipped.length ? ` Not used: ${skipped.join(", ")}.` : "");
+}
+
 if (typeof document !== "undefined" && document.getElementById("font-run")) {
   $("font-run").addEventListener("click", runFontConversion);
+  $("font-quick").addEventListener("change", (e) => quickAddFonts(e.target.files));
 
   // "all" is the one coverage choice that can quietly cost the device tens of KB of RAM for the
   // life of the font -- it records one interval per contiguous run of glyphs actually present,
@@ -811,6 +858,6 @@ if (typeof module !== "undefined") {
   module.exports = {
     INTERVAL_PRESETS, resolveIntervals, roundHalfEven, fp4FromDesignUnits,
     extractKerning, deriveKernClasses, extractLigatures,
-    packStyleSections, generateCpfontBytes,
+    packStyleSections, generateCpfontBytes, styleFromFileName, familyFromFileName,
   };
 }

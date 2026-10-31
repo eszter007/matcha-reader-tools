@@ -310,8 +310,24 @@ button.secondary:hover { background: var(--matcha-light); border-color: var(--ma
 #log .error { color: var(--error); }
 
 details { margin-top: 0.8rem; }
-ul.compact { padding-left: 1.2rem; margin: 0.4rem 0 0; }
-ul.compact li { margin: 0.35rem 0; }
+
+/* Two or three columns of checkboxes for a long, flat list (scripts on the fonts page). */
+.checks.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.5rem 1rem; }
+
+/* "or pick each style": a rule with a small caption, separating two ways to do one step. */
+.divider-label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.1rem 0 0.2rem;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.divider-label::before, .divider-label::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+ul.compact, ol.compact { padding-left: 1.2rem; margin: 0.4rem 0 0; }
+ul.compact li, ol.compact li { margin: 0.35rem 0; }
 details summary { cursor: pointer; font-weight: 600; font-size: 0.92rem; color: var(--muted); }
 
 .toolgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1rem; margin-top: 1.2rem; }

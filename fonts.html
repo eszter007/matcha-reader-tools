@@ -35,10 +35,30 @@
   SD card — including kerning and ligature data extracted from the font.</p>
 
   <div class="card">
-    <h3>1. Font files</h3>
+    <h3>1. Name your font</h3>
+    <label for="font-name">Font family name</label>
+    <input type="text" id="font-name" placeholder="e.g. Literata — filled in from the files if left empty">
+    <p class="hint">Letters and numbers. This is the name you pick in the reader's font settings.</p>
+    <details>
+      <summary>Pairing with the reader's Japanese and Chinese fonts</summary>
+      <p class="hint">Name a family <code>NotoSansJP</code>, <code>NotoSansSC</code>, <code>NotoSansTC</code> or
+      <code>NotoSansHK</code> (or the <code>NotoSerif…</code> equivalent) and it pairs with the reader's built-in
+      Noto entry as its Japanese, simplified- or traditional-Chinese half, chosen by each book's language.</p>
+    </details>
+  </div>
+
+  <div class="card">
+    <h3>2. Add the font files</h3>
+    <label for="font-quick">Add all files at once</label>
+    <input type="file" id="font-quick" accept=".ttf,.otf,.ttc" multiple>
+    <p class="hint">Select every style of the family together. Regular, Bold, Italic and Bold Italic are
+    recognised from the file names, e.g. <code>Literata-BoldItalic.ttf</code>.</p>
+    <p class="hint" id="font-quick-result" hidden></p>
+
+    <div class="divider-label">or pick each style</div>
     <div class="row">
       <div>
-        <label for="font-regular">Regular</label>
+        <label for="font-regular">Regular <span class="hint">(needed)</span></label>
         <input type="file" id="font-regular" accept=".ttf,.otf,.ttc">
       </div>
       <div>
@@ -57,74 +77,83 @@
       </div>
     </div>
     <details>
-      <summary>Fallback font (fills in glyphs the main font lacks)</summary>
+      <summary>Fallback font <span class="hint">(optional)</span></summary>
       <label for="font-fallback">Fallback font file</label>
       <input type="file" id="font-fallback" accept=".ttf,.otf,.ttc">
+      <p class="hint">Fills in characters the main font lacks, e.g. a Japanese font behind a Latin one.
+      Only its regular style is used.</p>
     </details>
   </div>
 
   <div class="card">
-    <h3>2. Sizes and coverage</h3>
-    <label>Point sizes <span class="hint">— the reader's font sizes are 12/14/16/18</span></label>
-    <div class="checks">
-      <label><input type="checkbox" id="font-size-12" checked> 12</label>
-      <label><input type="checkbox" id="font-size-14" checked> 14</label>
-      <label><input type="checkbox" id="font-size-16" checked> 16</label>
-      <label><input type="checkbox" id="font-size-18" checked> 18</label>
-    </div>
-    <label for="font-sizes-custom">Extra sizes <span class="hint">(comma-separated, optional)</span></label>
-    <input type="text" id="font-sizes-custom" placeholder="e.g. 10, 20">
-
-    <label>Unicode coverage</label>
-    <div class="checks">
-      <label><input type="checkbox" class="font-preset" value="latin-ext" checked> Latin (extended)</label>
-      <label><input type="checkbox" class="font-preset" value="cjk-ext"> Japanese / Chinese — full <span class="hint">(kana, all hanzi and kanji, bopomofo, vertical punctuation, symbols, rare characters; what the reader's own Noto JP, SC and TC fonts use)</span></label>
-      <label><input type="checkbox" class="font-preset" value="cjk"> Japanese / Chinese — basic <span class="hint">(kana and the common ideographs only)</span></label>
+    <h3>3. Languages and symbols</h3>
+    <p class="hint" style="margin-top:0">Pick the scripts your books use. Each one makes the files larger,
+    so leave out what you don't read.</p>
+    <div class="checks grid">
+      <label><input type="checkbox" class="font-preset" value="latin-ext" checked> Latin <span class="hint">(extended)</span></label>
+      <label><input type="checkbox" class="font-preset" value="cjk-ext"> Japanese &amp; Chinese <span class="hint">(full)</span></label>
+      <label><input type="checkbox" class="font-preset" value="cjk"> Japanese &amp; Chinese <span class="hint">(common)</span></label>
+      <label><input type="checkbox" class="font-preset" value="hangul"> Korean <span class="hint">(Hangul)</span></label>
+      <label><input type="checkbox" class="font-preset" value="vietnamese"> Vietnamese</label>
       <label><input type="checkbox" class="font-preset" value="greek"> Greek</label>
       <label><input type="checkbox" class="font-preset" value="cyrillic"> Cyrillic</label>
+      <label><input type="checkbox" class="font-preset" value="hebrew"> Hebrew</label>
       <label><input type="checkbox" class="font-preset" value="arabic"> Arabic</label>
-      <label><input type="checkbox" class="font-preset" value="hangul"> Hangul</label>
-      <label><input type="checkbox" class="font-preset" value="symbols"> Symbols</label>
-      <label><input type="checkbox" class="font-preset" value="all"> Everything in the font <span class="hint">— not recommended</span></label>
+      <label><input type="checkbox" class="font-preset" value="symbols"> Symbols &amp; arrows</label>
     </div>
-    <p class="hint" id="font-all-warning" hidden>
-      <strong>&ldquo;Everything in the font&rdquo; costs device RAM.</strong> It takes every glyph
-      present in the file and records one interval per contiguous run &mdash; for a Japanese font
-      that is thousands of intervals instead of a few dozen, and the reader keeps that table in
-      RAM for as long as the font is loaded. Measured on a Noto Sans JP build: 26,592 bytes
-      against 390 for the same coverage via <em>Japanese &mdash; full</em>, on a device whose
-      largest free block is often under 32&nbsp;KB. Prefer the script presets; reach for this only
-      when you know the font is narrowly subset already.
-    </p>
+    <p class="hint"><strong>Japanese &amp; Chinese (full)</strong> covers kana, all kanji and hanzi,
+    bopomofo, vertical punctuation and rare characters, like the reader's own Noto fonts. For Chinese
+    books use an SC or TC font: the reader's built-in CJK glyphs are the Japanese set, so characters
+    such as 这, 说 or 們 are missing without one. A full CJK build draws ~7,000 glyphs per size and style
+    and takes a few minutes.</p>
     <details>
-      <summary>Custom coverage</summary>
-      <label for="font-intervals-custom">Presets / hex ranges <span class="hint">— comma-separated, e.g. <code>reading,(0x2100-0x214F)</code>. Presets: ascii, latin1, latin-ext, greek, cyrillic, hebrew, georgian, armenian, ethiopic, vietnamese, punctuation, cjk, cjk-ext, hangul, cherokee, tifinagh, symbols, reading, builtin, all</span></label>
+      <summary>Advanced coverage</summary>
+      <div class="checks" style="margin-top:0.5rem">
+        <label><input type="checkbox" class="font-preset" value="all"> Everything in the font <span class="hint">— not recommended</span></label>
+      </div>
+      <p class="hint" id="font-all-warning" hidden>
+        <strong>&ldquo;Everything in the font&rdquo; costs device RAM.</strong> It records one interval per
+        run of glyphs present, and the reader keeps that table in RAM while the font is loaded. A Noto
+        Sans JP build measured 26,592 bytes, against 390 for the same coverage via <em>Japanese &amp;
+        Chinese (full)</em>, on a device whose largest free block is often under 32&nbsp;KB.
+      </p>
+      <label for="font-intervals-custom">Extra presets or hex ranges <span class="hint">— comma-separated, e.g. <code>georgian,(0x2100-0x214F)</code></span></label>
       <input type="text" id="font-intervals-custom" placeholder="">
+      <p class="hint">Presets: ascii, latin1, latin-ext, greek, cyrillic, hebrew, georgian, armenian,
+      ethiopic, vietnamese, punctuation, cjk, cjk-ext, hangul, cherokee, tifinagh, symbols, reading,
+      builtin, all.</p>
     </details>
-
-    <label for="font-name">Family name <span class="hint">(used for filenames and on-device UI; default: from the font filename). <code>NotoSansJP</code>, <code>NotoSansSC</code>, <code>NotoSansTC</code> / <code>NotoSansHK</code> and their <code>NotoSerif…</code> counterparts pair with the reader's built-in Noto entries as the Japanese, simplified- and traditional-Chinese halves, picked by the book's language.</span></label>
-    <input type="text" id="font-name" placeholder="auto">
   </div>
 
-  <button class="primary" id="font-run">Convert</button>
+  <div class="card">
+    <h3>4. Sizes</h3>
+    <p class="hint" style="margin-top:0">One file per size. The reader offers each size you build.</p>
+    <div class="checks">
+      <label><input type="checkbox" id="font-size-12" checked> 12 pt</label>
+      <label><input type="checkbox" id="font-size-14" checked> 14 pt</label>
+      <label><input type="checkbox" id="font-size-16" checked> 16 pt</label>
+      <label><input type="checkbox" id="font-size-18" checked> 18 pt</label>
+    </div>
+    <label for="font-sizes-custom">More sizes <span class="hint">(optional, comma-separated)</span></label>
+    <input type="text" id="font-sizes-custom" placeholder="e.g. 10, 20">
+  </div>
+
+  <button class="primary" id="font-run">Build font files</button>
 
   <div id="progress" hidden><div id="progress-bar"></div><div id="progress-text"></div></div>
   <div id="log" hidden></div>
 
-  <div class="notice">
-    Japanese and Chinese fonts with full CJK coverage rasterize ~7,000 glyphs per size and style —
-    this can take a few minutes. A Chinese book needs an SC or TC cut: the reader's built-in CJK
-    glyphs are the Japanese set, so everyday characters such as 这, 说 or 們 are missing without one. Glyphs are rendered by your browser's font engine, so pixel edges can
-    differ very slightly from the desktop (FreeType) tool; metrics, kerning, and ligatures are
-    extracted from the font file itself and match exactly.
-  </div>
-
   <div class="card info">
-    <h3>Install on the device</h3>
-    <p>The download is a zip containing <code>.fonts/FamilyName/FamilyName_&lt;size&gt;.cpfont</code>.
-    Unzip it at the SD card root (the <code>.fonts</code> folder may be hidden in your file
-    manager — that's normal), or upload via the reader's Wi-Fi web file transfer. The font then
-    appears in the reader's font settings.</p>
+    <h3>How to install</h3>
+    <ol class="compact">
+      <li>Unzip the download at the root of the SD card. It holds
+      <code>.fonts/&lt;Family&gt;/&lt;Family&gt;_&lt;size&gt;.cpfont</code>; the <code>.fonts</code> folder can be
+      hidden in your file manager, which is normal.</li>
+      <li>Or upload the files over Wi-Fi with the reader's <strong>Fonts</strong> page.</li>
+      <li>Pick the font in the reader's font settings.</li>
+    </ol>
+    <p class="hint">Glyphs are drawn by your browser's font engine, so edges can differ very slightly from
+    the desktop tool; metrics, kerning and ligatures come from the font file and match exactly.</p>
   </div>
 </main>
 <footer>
