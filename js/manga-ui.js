@@ -544,7 +544,7 @@ function applyResChoiceUi() {
 /* Explain what the chosen book type will actually do, rather than leaving the extra
  * behaviour (margin trimming, strip re-cutting) invisible until it shows up in the log. */
 const BOOK_TYPE_HINTS = {
-  "": "Sets the order panels are read in.",
+  "": "",
   [BOOK_MANGA]: "Panels read right to left within a row, then down the page.",
   [BOOK_WESTERN]: "Panels read left to right within a row, then down the page. The paper border " +
       "and page number are cropped off, so the artwork fills the screen.",
@@ -579,7 +579,12 @@ const BOOK_TYPE_WARNINGS = {
 function applyBookTypeUi() {
   const type = validBookType($("manga-booktype").value);
   const hint = $("manga-booktype-hint");
-  if (hint) hint.textContent = BOOK_TYPE_HINTS[type] || BOOK_TYPE_HINTS[""];
+  if (hint) {
+    hint.textContent = BOOK_TYPE_HINTS[type] || "";
+    hint.hidden = !hint.textContent;
+  }
+  // The cards show the hidden select's value.
+  for (const r of document.querySelectorAll('input[name="booktype"]')) r.checked = r.value === type;
   const warn = $("notice-booktype");
   if (warn) {
     warn.textContent = BOOK_TYPE_WARNINGS[type] || "";
@@ -966,6 +971,18 @@ function updateRunSummary() {
   if (!formats.length) missing.push("a format");
   if (!validBookType($("manga-booktype").value)) missing.push("the book type");
   if (!validResChoice(res.value)) missing.push("your device");
+  // The panel check needs a single book and its reading order; say so instead of failing on click.
+  const checkBtn = $("panel-check-btn");
+  if (!panelCheckRunning) {
+    const bt = validBookType($("manga-booktype").value);
+    const why = !files || !files.length ? "Choose your manga and how it reads first."
+      : !bt ? "Choose how it reads first."
+      : bt === BOOK_WEBTOON ? "Not needed for webtoons: their panels come from the strip's gutters."
+      : splitIntoBooks(files).length > 1 ? "Works on one book at a time."
+      : "";
+    checkBtn.disabled = !!why;
+    $("panel-check-hint").textContent = why || "See where they are and fix wrong ones before converting.";
+  }
   const el = $("manga-run-summary");
   if (missing.length) {
     el.textContent = `Still to choose: ${missing.join(", ")}.`;
@@ -1662,6 +1679,7 @@ const PE_HANDLE_PX = 14;      // corner grab size, in screen pixels
 const PE_MIN_SIDE = 16;       // smallest panel kept, in page pixels
 
 const panelCheck = { files: null, opts: null, pages: [], editIndex: -1 };
+let panelCheckRunning = false;
 
 /* The page settings the conversion would use, or null (with a message) when one is missing. */
 async function panelCheckSettings() {
@@ -1799,6 +1817,7 @@ async function runPanelCheck() {
   if (splitIntoBooks(files).length > 1) { logValidation("The panel check works on one book at a time."); return; }
   const btn = $("panel-check-btn");
   btn.disabled = true;
+  panelCheckRunning = true;
   try {
     const opts = await panelCheckSettings();
     if (!opts) return;
@@ -1830,6 +1849,7 @@ async function runPanelCheck() {
     logLine("Panel check failed: " + e.message, "error");
     console.error(e);
   } finally {
+    panelCheckRunning = false;
     btn.disabled = false;
   }
 }
@@ -2251,6 +2271,13 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-no-ocr").addEventListener("change", applyOcrUi);
   // Ticking 1-bit BMP is what brings a dithered output into play for the device folder.
   $("manga-mono").addEventListener("change", applyFormatVisibility);
+  for (const r of document.querySelectorAll('input[name="booktype"]')) {
+    r.addEventListener("change", () => {
+      const sel = $("manga-booktype");
+      sel.value = r.value;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
   $("manga-booktype").addEventListener("change", clearValidationWarnings);
   $("manga-booktype").addEventListener("change", applyBookTypeUi);
   $("manga-res").addEventListener("change", clearValidationWarnings);

@@ -130,8 +130,16 @@
 
   <div class="card">
     <h3>3. Panels</h3>
-    <label for="manga-booktype">Book type</label>
-    <select id="manga-booktype">
+    <p class="field-label" id="booktype-title">How does it read?</p>
+    <div class="choice-grid" role="radiogroup" aria-labelledby="booktype-title" aria-describedby="manga-booktype-hint">
+      <label class="choice"><input type="radio" name="booktype" value="manga"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="0.5" y="0.5" width="59" height="83" rx="3"/><g class="panels"><rect x="4" y="4" width="24" height="22" rx="1.5"/><rect x="32" y="4" width="24" height="22" rx="1.5"/><rect x="4" y="30" width="52" height="24" rx="1.5"/><rect x="4" y="58" width="24" height="22" rx="1.5"/><rect x="32" y="58" width="24" height="22" rx="1.5"/></g><g class="path"><path d="M44.0 15.0 L16.0 15.0 L30.0 42.0 L44.0 69.0 L16.0 69.0"/><circle cx="16.0" cy="15.0" r="2.8"/><circle cx="30.0" cy="42.0" r="2.8"/><circle cx="44.0" cy="69.0" r="2.8"/><rect x="41.6" y="12.6" width="4.8" height="4.8"/><path class="head" d="M13.0 69.0 L19.0 66.0 L19.0 72.0 Z"/></g></svg><span class="choice-title">Manga</span><span class="choice-sub">Right to left</span></label>
+      <label class="choice"><input type="radio" name="booktype" value="western"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="0.5" y="0.5" width="59" height="83" rx="3"/><g class="panels"><rect x="4" y="4" width="24" height="22" rx="1.5"/><rect x="32" y="4" width="24" height="22" rx="1.5"/><rect x="4" y="30" width="52" height="24" rx="1.5"/><rect x="4" y="58" width="24" height="22" rx="1.5"/><rect x="32" y="58" width="24" height="22" rx="1.5"/></g><g class="path"><path d="M16.0 15.0 L44.0 15.0 L30.0 42.0 L16.0 69.0 L44.0 69.0"/><circle cx="44.0" cy="15.0" r="2.8"/><circle cx="30.0" cy="42.0" r="2.8"/><circle cx="16.0" cy="69.0" r="2.8"/><rect x="13.6" y="12.6" width="4.8" height="4.8"/><path class="head" d="M47.0 69.0 L41.0 72.0 L41.0 66.0 Z"/></g></svg><span class="choice-title">Comic</span><span class="choice-sub">Left to right</span></label>
+      <label class="choice"><input type="radio" name="booktype" value="webtoon"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="0.5" y="0.5" width="59" height="83" rx="3"/><g class="panels"><rect x="14" y="4" width="32" height="22" rx="1.5"/><rect x="14" y="30" width="32" height="24" rx="1.5"/><rect x="14" y="58" width="32" height="22" rx="1.5"/></g><g class="path"><path d="M30.0 15.0 L30.0 42.0 L30.0 69.0"/><circle cx="30.0" cy="42.0" r="2.8"/><rect x="27.6" y="12.6" width="4.8" height="4.8"/><path class="head" d="M30.0 72.0 L27.0 66.0 L33.0 66.0 Z"/></g></svg><span class="choice-title">Webtoon</span><span class="choice-sub">One long strip</span></label>
+      <label class="choice"><input type="radio" name="booktype" value="yonkoma"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="0.5" y="0.5" width="59" height="83" rx="3"/><g class="panels"><rect x="32" y="4.0" width="24" height="16.5" rx="1.5"/><rect x="32" y="23.5" width="24" height="16.5" rx="1.5"/><rect x="32" y="43.0" width="24" height="16.5" rx="1.5"/><rect x="32" y="62.5" width="24" height="16.5" rx="1.5"/><rect x="4" y="4.0" width="24" height="16.5" rx="1.5"/><rect x="4" y="23.5" width="24" height="16.5" rx="1.5"/><rect x="4" y="43.0" width="24" height="16.5" rx="1.5"/><rect x="4" y="62.5" width="24" height="16.5" rx="1.5"/></g><g class="path"><path d="M44.0 12.2 L44.0 31.8 L44.0 51.2 L44.0 70.8 L16.0 12.2 L16.0 31.8 L16.0 51.2 L16.0 70.8"/><circle cx="44.0" cy="31.8" r="2.8"/><circle cx="44.0" cy="51.2" r="2.8"/><circle cx="44.0" cy="70.8" r="2.8"/><circle cx="16.0" cy="12.2" r="2.8"/><circle cx="16.0" cy="31.8" r="2.8"/><circle cx="16.0" cy="51.2" r="2.8"/><rect x="41.6" y="9.8" width="4.8" height="4.8"/><path class="head" d="M16.0 73.8 L13.0 67.8 L19.0 67.8 Z"/></g></svg><span class="choice-title">4-koma</span><span class="choice-sub">Columns, right to left</span></label>
+      <label class="choice"><input type="radio" name="booktype" value="yonkoma-ltr"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="0.5" y="0.5" width="59" height="83" rx="3"/><g class="panels"><rect x="4" y="4.0" width="24" height="16.5" rx="1.5"/><rect x="4" y="23.5" width="24" height="16.5" rx="1.5"/><rect x="4" y="43.0" width="24" height="16.5" rx="1.5"/><rect x="4" y="62.5" width="24" height="16.5" rx="1.5"/><rect x="32" y="4.0" width="24" height="16.5" rx="1.5"/><rect x="32" y="23.5" width="24" height="16.5" rx="1.5"/><rect x="32" y="43.0" width="24" height="16.5" rx="1.5"/><rect x="32" y="62.5" width="24" height="16.5" rx="1.5"/></g><g class="path"><path d="M16.0 12.2 L16.0 31.8 L16.0 51.2 L16.0 70.8 L44.0 12.2 L44.0 31.8 L44.0 51.2 L44.0 70.8"/><circle cx="16.0" cy="31.8" r="2.8"/><circle cx="16.0" cy="51.2" r="2.8"/><circle cx="16.0" cy="70.8" r="2.8"/><circle cx="44.0" cy="12.2" r="2.8"/><circle cx="44.0" cy="31.8" r="2.8"/><circle cx="44.0" cy="51.2" r="2.8"/><rect x="13.6" y="9.8" width="4.8" height="4.8"/><path class="head" d="M44.0 73.8 L41.0 67.8 L47.0 67.8 Z"/></g></svg><span class="choice-title">4-koma</span><span class="choice-sub">Columns, left to right</span></label>
+    </div>
+    <!-- The page's state for the book type: the cards above set it. -->
+    <select id="manga-booktype" hidden aria-hidden="true" tabindex="-1">
       <option value="">Please select</option>
       <option value="manga">Manga — read right to left</option>
       <option value="western">Western comic — read left to right</option>
@@ -139,20 +147,21 @@
       <option value="yonkoma">4-koma, right to left — columns read top to bottom</option>
       <option value="yonkoma-ltr">4-koma, left to right — columns read top to bottom</option>
     </select>
-    <p class="hint" id="manga-booktype-hint">
-      Sets the order panels are read in.</p>
+    <p class="hint" id="manga-booktype-hint"></p>
     <div class="notice warn" id="notice-booktype" hidden></div>
 
     <div class="checks stacked" style="margin-top:0.6rem">
-      <label><input type="checkbox" id="manga-panels-only"> <span class="opt">Panels only (no full pages)</span>
-        <span class="hint">Panel crops only. Much smaller, and opens straight into panel reading.
-        The cover keeps its full page, as does any page whose panels miss part of the
-        artwork.</span></label>
+      <label><input type="checkbox" id="manga-panels-only"> <span class="opt">Panels only</span>
+        <span class="hint">Skips the full pages, so the book is smaller and opens straight into panels.
+        The cover and pages whose panels miss art keep their full page.</span></label>
     </div>
 
-    <div class="panel-check-row">
-      <button type="button" class="secondary" id="panel-check-btn">Check panels</button>
-      <span class="hint" id="panel-check-hint">Optional: see the panels and fix wrong ones before converting.</span>
+    <div class="callout panel-check-row">
+      <div class="callout-text">
+        <span class="callout-title">Check the panels <span class="hint">· optional</span></span>
+        <span class="hint" id="panel-check-hint">See where they are and fix wrong ones before converting.</span>
+      </div>
+      <button type="button" class="secondary" id="panel-check-btn" aria-describedby="panel-check-hint">Check panels</button>
     </div>
     <div id="panel-check" hidden>
       <div class="panel-check-bar">

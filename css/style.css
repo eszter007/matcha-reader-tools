@@ -293,7 +293,8 @@ button.secondary {
   cursor: pointer;
   margin: 1rem 0 0 0.6rem;
 }
-button.secondary:hover { background: var(--matcha-light); border-color: var(--matcha-dark); }
+button.secondary:hover:not(:disabled) { background: var(--matcha-light); border-color: var(--matcha-dark); }
+button.secondary:disabled { opacity: 0.45; cursor: default; }
 
 #progress {
   margin-top: 1rem;
@@ -354,8 +355,6 @@ details { margin-top: 0.8rem; }
 .preview-pair figcaption { text-align: center; font-size: 12px; color: var(--muted); margin-top: 0.35rem; }
 
 /* Panel check: a grid of page thumbnails, and the editor dialog. */
-.panel-check-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 1rem; }
-.panel-check-row button.secondary { margin: 0; }
 .panel-check-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.8rem; }
 .panel-check-bar label { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; font-weight: 400; }
 .panel-grid { list-style: none; padding: 4px; margin: 0.6rem -4px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
@@ -428,6 +427,37 @@ details { margin-top: 0.8rem; }
   .pe-head { grid-template-columns: 1fr auto; }
   .pe-head .segmented { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
 }
+
+/* A question above a set of choices, styled like a field label. */
+.field-label { margin: 0.2rem 0 0.5rem; color: var(--label); font-size: 0.9rem; font-weight: 600; }
+
+/* Choice cards: a radio group shown as tappable cards, for a choice worth seeing at once. */
+.choice-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+.choice { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; margin: 0; padding: 0.65rem 0.8rem;
+  border-radius: 10px; background: var(--card); box-shadow: 0 0 0 1px var(--control-border); cursor: pointer;
+  transition: box-shadow .15s, background-color .15s; }
+.choice input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.choice:hover { box-shadow: 0 0 0 1px var(--matcha-dark); }
+.choice:has(input:checked) { background: var(--matcha-light); box-shadow: 0 0 0 2px var(--matcha-dark); }
+.choice:has(input:focus-visible) { outline: 3px solid var(--matcha-dark); outline-offset: 3px; }
+.choice-title { font-weight: 600; color: var(--text); font-size: 0.95rem; }
+/* Reading-order diagram: a page, its panels, and the path through them. */
+.choice-art { display: block; width: 58px; height: 81px; margin-bottom: 0.55rem; overflow: visible; }
+.choice-art .page { fill: var(--card); stroke: var(--control-border); stroke-width: 1; }
+.choice-art .panels rect { fill: color-mix(in srgb, var(--muted) 30%, var(--card)); }
+.choice-art .path { stroke: #d9480f; fill: #d9480f; }
+.choice-art .path > path:first-child { fill: none; stroke-width: 2; stroke-linejoin: round; }
+.choice-art .path .head { stroke: none; }
+.choice:has(input:checked) .choice-art .page { stroke: var(--matcha-dark); }
+.choice-sub { color: var(--muted); font-size: 0.8rem; }
+@media (max-width: 560px) { .choice-grid { grid-template-columns: 1fr 1fr; } }
+
+/* A quiet row offering an optional action: text on the left, its button on the right. */
+.callout { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem 1rem;
+  margin-top: 1rem; padding: 0.75rem 0.9rem; border-radius: 10px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); }
+.callout-text { display: flex; flex-direction: column; gap: 0.15rem; flex: 1 1 14rem; min-width: 0; }
+.callout-title { font-weight: 600; font-size: 0.92rem; color: var(--text); }
+.callout button.secondary { margin: 0; }
 
 /* A small pill beside an option name. */
 .badge { display: inline-block; margin-left: 0.4rem; padding: 0 0.45rem; border-radius: 999px; background: var(--matcha-light);
