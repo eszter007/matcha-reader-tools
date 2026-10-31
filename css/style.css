@@ -432,8 +432,8 @@ details { margin-top: 0.8rem; }
 .field-label { margin: 0.2rem 0 0.5rem; color: var(--label); font-size: 0.9rem; font-weight: 600; }
 
 /* Choice cards: a radio group shown as tappable cards, for a choice worth seeing at once. */
-.choice-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
-.choice { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; margin: 0; padding: 0.65rem 0.8rem;
+.choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.5rem; }
+.choice { position: relative; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; align-content: center; column-gap: 0.8rem; row-gap: 0.1rem; margin: 0; padding: 0.65rem 0.8rem;
   border-radius: 10px; background: var(--card); box-shadow: 0 0 0 1px var(--control-border); cursor: pointer;
   transition: box-shadow .15s, background-color .15s; }
 .choice input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
@@ -442,16 +442,18 @@ details { margin-top: 0.8rem; }
 .choice:has(input:focus-visible) { outline: 3px solid var(--matcha-dark); outline-offset: 3px; }
 .choice-title { font-weight: 600; color: var(--text); font-size: 0.95rem; }
 /* Reading-order diagram: a page, its panels, and the path through them. */
-.choice-art { display: block; width: 58px; height: 81px; margin-bottom: 0.55rem; overflow: visible; }
+.choice-art { grid-row: 1 / span 2; align-self: center; display: block; width: 52px; height: 73px; overflow: visible; }
+.choice-title { align-self: end; }
+.choice-sub { align-self: start; }
 .choice-art .page { fill: var(--card); stroke: var(--control-border); stroke-width: 1; }
 .choice-art .panels rect { fill: color-mix(in srgb, var(--muted) 30%, var(--card)); }
-.choice-art .path { stroke: #d9480f; fill: #d9480f; }
-.choice-art .path > path:first-child { fill: none; stroke-width: 2; stroke-linejoin: round; }
-.choice-art .path .head { stroke: none; }
+.choice-art .order { fill: none; stroke: #d9480f; stroke-width: 1.2; stroke-opacity: 0.55; stroke-linejoin: round; }
 .choice-art .panels rect.first { fill: color-mix(in srgb, #d9480f 22%, var(--card)); }
+.choice-art .step circle { fill: #d9480f; }
+.choice-art .step text { fill: #fff; font: 700 8px system-ui, sans-serif; text-anchor: middle; }
 .choice:has(input:checked) .choice-art .page { stroke: var(--matcha-dark); }
 .choice-sub { color: var(--muted); font-size: 0.8rem; }
-@media (max-width: 560px) { .choice-grid { grid-template-columns: 1fr 1fr; } }
+
 
 /* A quiet row offering an optional action: text on the left, its button on the right. */
 .callout { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem 1rem;
