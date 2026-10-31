@@ -139,6 +139,33 @@ p.lede { color: var(--muted); margin-top: 0; font-size: 1.02rem; }
 
 @media (max-width: 560px) { .card { padding: 18px; } }
 
+/* Information only: nothing to click or fill in, so it sits flat and quiet behind the steps. */
+.card.info {
+  background: color-mix(in srgb, var(--bg) 55%, var(--border));
+  box-shadow: none;
+  border-radius: 12px;
+  padding: 16px 20px;
+  color: var(--label);
+  font-size: 14px;
+}
+.card.info h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 16px;
+  color: var(--label);
+}
+.card.info h3::before {
+  content: "i";
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  font: 600 11px/15px Georgia, serif;
+  text-align: center;
+}
+
 label { display: block; font-weight: 600; font-size: 0.9rem; margin: 0.7rem 0 0.2rem; }
 label .hint { font-weight: 400; color: var(--muted); }
 main a { color: var(--matcha-dark); }
