@@ -91,10 +91,6 @@
     so leave out what you don't read.</p>
     <div class="checks grid">
       <label><input type="checkbox" class="font-preset" value="latin-ext" checked> Latin <span class="hint">(extended)</span></label>
-      <label><input type="checkbox" class="font-preset" value="cjk-ext"> Japanese <span class="hint">(full)</span></label>
-      <label><input type="checkbox" class="font-preset" value="cjk"> Japanese <span class="hint">(common)</span></label>
-      <label><input type="checkbox" class="font-preset" value="chinese"> Chinese <span class="hint">(simplified)</span></label>
-      <label><input type="checkbox" class="font-preset" value="chinese"> Chinese <span class="hint">(traditional)</span></label>
       <label><input type="checkbox" class="font-preset" value="hangul"> Korean <span class="hint">(Hangul)</span></label>
       <label><input type="checkbox" class="font-preset" value="vietnamese"> Vietnamese</label>
       <label><input type="checkbox" class="font-preset" value="greek"> Greek</label>
@@ -103,13 +99,20 @@
       <label><input type="checkbox" class="font-preset" value="arabic"> Arabic</label>
       <label><input type="checkbox" class="font-preset" value="symbols"> Symbols &amp; arrows</label>
     </div>
-    <p class="hint"><strong>Japanese (full)</strong> covers kana, all kanji, vertical punctuation and the
-    rare kanji books print, like the reader's own Noto JP fonts. <strong>Chinese</strong> covers the hanzi including the rarer
-    Extension A, bopomofo and Chinese punctuation forms, without the kana. Simplified and traditional need the
-    same characters; what differs is the font, so convert an SC font for simplified and a TC (or HK)
-    font for traditional. The reader's built-in CJK glyphs are the Japanese set, so characters such as
-    这, 说 or 們 are missing without one. A CJK build draws thousands of glyphs per size and style and
-    takes a few minutes.</p>
+
+    <div class="subhead">Japanese and Chinese</div>
+    <div class="checks stacked">
+      <label><input type="checkbox" class="font-preset" value="cjk-ext"> <span class="opt">Japanese</span>
+        <span class="hint">Kana, all kanji and the rare ones books print.</span></label>
+      <label><input type="checkbox" class="font-preset" value="cjk"> <span class="opt">Japanese, common only</span>
+        <span class="hint">Kana and everyday kanji. Smaller files.</span></label>
+      <label><input type="checkbox" class="font-preset" value="chinese"> <span class="opt">Chinese, simplified</span>
+        <span class="hint">All hanzi, bopomofo and Chinese punctuation. Convert an SC font.</span></label>
+      <label><input type="checkbox" class="font-preset" value="chinese"> <span class="opt">Chinese, traditional</span>
+        <span class="hint">The same characters. Convert a TC or HK font.</span></label>
+    </div>
+    <p class="hint">Chinese books need one of these: the reader's built-in CJK font is Japanese and
+    lacks characters like 这 or 們. Each takes a few minutes to build.</p>
     <details>
       <summary>Advanced coverage</summary>
       <div class="checks" style="margin-top:0.5rem">
@@ -118,7 +121,7 @@
       <p class="hint" id="font-all-warning" hidden>
         <strong>&ldquo;Everything in the font&rdquo; costs device RAM.</strong> It records one interval per
         run of glyphs present, and the reader keeps that table in RAM while the font is loaded. A Noto
-        Sans JP build measured 26,592 bytes, against 390 for the same coverage via <em>Japanese (full)</em>, on a device whose largest free block is often under 32&nbsp;KB.
+        Sans JP build measured 26,592 bytes, against 390 for the same coverage via <em>Japanese</em>, on a device whose largest free block is often under 32&nbsp;KB.
       </p>
       <label for="font-intervals-custom">Extra presets or hex ranges <span class="hint">— comma-separated, e.g. <code>georgian,(0x2100-0x214F)</code></span></label>
       <input type="text" id="font-intervals-custom" placeholder="">

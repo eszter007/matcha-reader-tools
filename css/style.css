@@ -314,6 +314,9 @@ details { margin-top: 0.8rem; }
 /* Two or three columns of checkboxes for a long, flat list (scripts on the fonts page). */
 .checks.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.5rem 1rem; }
 
+/* A small caption heading a group of options inside a card. */
+.subhead { margin: 1.1rem 0 0.5rem; color: var(--label); font-size: 13px; font-weight: 600; }
+
 /* "or pick each style": a rule with a small caption, separating two ways to do one step. */
 .divider-label {
   display: flex;
