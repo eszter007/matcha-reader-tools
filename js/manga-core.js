@@ -949,6 +949,76 @@ function partStarts(total, size, chapterStarts = []) {
   return starts;
 }
 
+/* ── Image clean-up (browser only) ───────────────────────────────── */
+
+/* Midtone darkening presets, as gamma exponents (above 1 darkens). Black and white stay put, so
+ * paper stays paper and line art keeps its blacks; pale screentone gains weight on e-ink. */
+const CONTRAST_GAMMAS = { off: 1, light: 1.15, medium: 1.3, strong: 1.5 };
+
+/* One tone curve per colour channel for a page: auto-levels (each channel's darkest and lightest
+ * 0.5% become black and white, which also whitens yellowed paper) and/or midtone darkening.
+ * Built from the whole page and reused for its panel crops, so a crop matches its page. Returns
+ * null when it would change nothing. Without enough ink for a black point, only the paper is
+ * brought to white. */
+function toneCurve(rgba, { levels = false, contrast = "off" } = {}) {
+  const gamma = CONTRAST_GAMMAS[contrast] || 1;
+  const bounds = [[0, 255], [0, 255], [0, 255]];
+  if (levels) {
+    const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+    let n = 0;
+    for (let i = 0; i < rgba.length; i += 16) {  // every 4th pixel is plenty for a histogram
+      hist[0][rgba[i]]++; hist[1][rgba[i + 1]]++; hist[2][rgba[i + 2]]++;
+      n++;
+    }
+    const cut = n * 0.005;
+    for (let c = 0; c < 3; c++) {
+      let lo = 0, hi = 255, acc = 0;
+      for (; lo < 255 && (acc += hist[c][lo]) < cut; lo++);
+      acc = 0;
+      for (; hi > 0 && (acc += hist[c][hi]) < cut; hi--);
+      // Too little ink to find a black point (a blank or text-only page): still whiten the paper.
+      if (hi - lo >= 64) bounds[c] = [lo, hi];
+      else if (hi >= 128) bounds[c] = [0, hi];
+    }
+  }
+  const identity = bounds.every(([lo, hi]) => lo === 0 && hi === 255) && gamma === 1;
+  if (identity) return null;
+  return bounds.map(([lo, hi]) => {
+    const lut = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) {
+      const t = Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
+      lut[v] = Math.round(255 * Math.pow(t, gamma));
+    }
+    return lut;
+  });
+}
+
+/* Apply per-channel tone curves to RGBA pixels, in place. */
+function applyToneCurve(rgba, luts) {
+  const [r, g, b] = luts;
+  for (let i = 0; i < rgba.length; i += 4) {
+    rgba[i] = r[rgba[i]]; rgba[i + 1] = g[rgba[i + 1]]; rgba[i + 2] = b[rgba[i + 2]];
+  }
+}
+
+/* unsharpMask() for RGBA, per colour channel, in place. */
+function sharpenRGBA(rgba, w, h, amount = 0.6, threshold = 3) {
+  const src = new Uint8ClampedArray(rgba);
+  for (let y = 0; y < h; y++) {
+    const up = Math.max(0, y - 1) * w, row = y * w, down = Math.min(h - 1, y + 1) * w;
+    for (let x = 0; x < w; x++) {
+      const l = Math.max(0, x - 1), r = Math.min(w - 1, x + 1);
+      for (let c = 0; c < 3; c++) {
+        const at = (p) => src[p * 4 + c];
+        const blur = (at(up + l) + 2 * at(up + x) + at(up + r) + 2 * at(row + l) + 4 * at(row + x) +
+          2 * at(row + r) + at(down + l) + 2 * at(down + x) + at(down + r)) / 16;
+        const v = at(row + x), diff = v - blur;
+        if (Math.abs(diff) > threshold) rgba[(row + x) * 4 + c] = Math.round(v + amount * diff);
+      }
+    }
+  }
+}
+
 /* Pack a 1-bit mono buffer (1 = white) into a standard uncompressed BI_RGB BMP:
  * 14-byte file header, 40-byte BITMAPINFOHEADER, a 2-entry black/white palette,
  * then bottom-up rows padded to a 4-byte stride with MSB-first bit packing.
@@ -1447,6 +1517,7 @@ if (typeof module !== "undefined") {
     grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
     floydSteinbergMono, floydSteinbergLevels, ditherMono, ditherLevels, DITHER_STYLES, validDitherStyle, stretchPaperAndInk, unsharpMask, encodeBmp1bit, encodeMonoBmpFromRGBA,
     DITHER_GAMMAS, validDitherGamma, applyGrayGamma, metaFromFileName, partStarts,
+    CONTRAST_GAMMAS, toneCurve, applyToneCurve, sharpenRGBA,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
     yOverlapFrac, xOverlapFrac, sortPanelsReadingOrder,
     OCR_LANGUAGE_NAMES, ocrLanguageName, buildPanelOcrPrompt,

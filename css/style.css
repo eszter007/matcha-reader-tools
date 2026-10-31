@@ -334,6 +334,16 @@ details { margin-top: 0.8rem; }
 /* Two or three columns of checkboxes for a long, flat list (scripts on the fonts page). */
 .checks.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.5rem 1rem; }
 
+/* Before/after preview of the image clean-up. */
+.preview-row { display: flex; flex-wrap: wrap; align-items: end; gap: 0.6rem; margin-top: 0.9rem; }
+.preview-row label { margin: 0; }
+.preview-row input { width: 5rem; }
+.preview-row button.secondary { margin: 0; }
+.preview-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 0.8rem; }
+.preview-pair figure { margin: 0; }
+.preview-pair canvas { width: 100%; height: auto; border-radius: 8px; box-shadow: var(--card-shadow); background: #fff; }
+.preview-pair figcaption { text-align: center; font-size: 13px; color: var(--muted); margin-top: 0.3rem; }
+
 /* A small caption heading a group of options inside a card. */
 .subhead { margin: 1.1rem 0 0.5rem; color: var(--label); font-size: 13px; font-weight: 600; }
 

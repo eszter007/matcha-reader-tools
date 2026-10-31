@@ -777,6 +777,68 @@ function clearValidationWarnings() {
   if (!log.children.length) log.hidden = true;
 }
 
+/* ── Image clean-up ───────────────────────────────────────────────── */
+
+function cleanupSettings() {
+  return { levels: $("manga-levels").checked, sharpen: $("manga-sharpen").checked,
+    contrast: Object.prototype.hasOwnProperty.call(CONTRAST_GAMMAS, $("manga-contrast").value) ? $("manga-contrast").value : "off" };
+}
+
+/* Clean a page canvas in place; returns its tone curve (null when levels/contrast change nothing). */
+function cleanPage(ctx, w, h, cleanup) {
+  const img = ctx.getImageData(0, 0, w, h);
+  const tone = toneCurve(img.data, cleanup);
+  if (tone) applyToneCurve(img.data, tone);
+  if (cleanup.sharpen) sharpenRGBA(img.data, w, h);
+  ctx.putImageData(img, 0, 0);
+  return tone;
+}
+
+/* Clean a panel crop with its page's tone curve, so the two match. */
+function cleanCrop(ctx, w, h, tone, sharpen) {
+  const img = ctx.getImageData(0, 0, w, h);
+  if (tone) applyToneCurve(img.data, tone);
+  if (sharpen) sharpenRGBA(img.data, w, h);
+  ctx.putImageData(img, 0, 0);
+}
+
+/* Before/after of one page at the device size, with the current clean-up settings. The pages are
+ * collected once per file selection. */
+let previewSource = null;
+async function showCleanupPreview() {
+  const files = $("manga-file").files;
+  if (!files || !files.length) { logValidation("Choose a file first to preview a page."); return; }
+  const btn = $("manga-preview-btn");
+  btn.disabled = true;
+  try {
+    if (!previewSource || previewSource.files !== files) {
+      previewSource = { files, collected: await collectPagesFromInput(files) };
+    }
+    const pages = previewSource.collected.pages;
+    const n = Math.min(pages.length, Math.max(1, parseInt($("manga-preview-page").value, 10) || 1));
+    const bitmap = await decodeImage(await pages[n - 1].read(), mangaFileExt(pages[n - 1].name));
+    const target = MANGA_DEVICE_TARGETS[validResChoice($("manga-res").value)] || [480, 800];
+    const fit = fitToDeviceSize(bitmap.width, bitmap.height, target);
+    const draw = (id) => {
+      const c = $(id);
+      c.width = fit.w; c.height = fit.h;
+      const ctx = smoothScaling(c.getContext("2d", { willReadFrequently: true }));
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, fit.w, fit.h);
+      ctx.drawImage(bitmap, 0, 0, fit.w, fit.h);
+      return ctx;
+    };
+    draw("manga-preview-before");
+    cleanPage(draw("manga-preview-after"), fit.w, fit.h, cleanupSettings());
+    bitmap.close && bitmap.close();
+    $("manga-preview").hidden = false;
+    announce(`Showing page ${n} before and after clean-up.`);
+  } catch (e) {
+    logLine("Preview failed: " + e.message, "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /* Title/series/volume guessed from a single archive's file name; empty for a set of images. */
 function fileNameMeta(files) {
   return files.length === 1 && !isImageName(files[0].name) ? metaFromFileName(files[0].name)
@@ -878,6 +940,8 @@ async function runMangaConversion() {
   const ditherGamma = validDitherGamma($("manga-dither").value);
   const ditherStyle = validDitherStyle($("manga-dither-style").value);
   const xtcSplit = parseInt($("manga-xtc-split").value, 10) || 0;
+  const cleanup = cleanupSettings();
+  const cleanupOn = cleanup.levels || cleanup.contrast !== "off" || cleanup.sharpen;
   const bookType = validBookType($("manga-booktype").value);
   if (!bookType) {
     logValidation("Pick a book type — manga, western comic, or webtoon/manhwa.");
@@ -909,6 +973,9 @@ async function runMangaConversion() {
   saveSetting("manga-dither", $("manga-dither").value);
   saveSetting("manga-dither-style", ditherStyle);
   saveSetting("manga-xtc-split", String(xtcSplit));
+  saveSetting("manga-levels", cleanup.levels ? "1" : "0");
+  saveSetting("manga-sharpen", cleanup.sharpen ? "1" : "0");
+  saveSetting("manga-contrast", cleanup.contrast);
   saveSetting("manga-no-ocr", $("manga-no-ocr").checked ? "1" : "0");
   saveSetting("manga-ocr-out", $("manga-ocr-out").value);
   saveSetting("manga-res", resChoice);
@@ -1091,6 +1158,9 @@ async function runMangaConversion() {
       const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
       if (wasResized) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, imgW, imgH); }
       ctx.drawImage(bitmap, 0, 0, origW, origH, 0, 0, imgW, imgH);
+      // Image clean-up: one tone curve per page, from the page itself, reused for its crops.
+      const tone = cleanupOn ? cleanPage(ctx, imgW, imgH, cleanup) : null;
+      const tuned = !!tone || cleanup.sharpen;
       // The source bitmap stays open until after detection: the full-resolution
       // panel-crop canvas is only built for pages that actually have a panel to
       // crop (see below), so a cover / full-page spread never allocates it.
@@ -1164,9 +1234,9 @@ async function runMangaConversion() {
         // nothing written for this page
       } else if (mono) {
         addBookFile(`${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH, ditherGamma, ditherStyle));
-      } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized && !wasTrimmed) {
+      } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized && !wasTrimmed && !tuned) {
         addBookFile(`${pageBase}${ext}`, srcBytes);
-      } else if (ext === ".png" && (wasResized || wasTrimmed)) {
+      } else if (ext === ".png" && (wasResized || wasTrimmed || tuned)) {
         addBookFile(`${pageBase}.png`, await canvasToPngBytes(canvas));
       } else {
         const outExt = (ext === ".jpg" || ext === ".jpeg") ? ext : ".jpg";
@@ -1182,8 +1252,8 @@ async function runMangaConversion() {
       // in both formats -- including keeping the page wherever its panels miss content.
       if (epub && keepPageImage) {
         let pageBytes, pageMime;
-        if (!wasResized && (ext === ".jpg" || ext === ".jpeg")) { pageBytes = srcBytes; pageMime = "image/jpeg"; }
-        else if (!wasResized && ext === ".png") { pageBytes = srcBytes; pageMime = "image/png"; }
+        if (!wasResized && !tuned && (ext === ".jpg" || ext === ".jpeg")) { pageBytes = srcBytes; pageMime = "image/jpeg"; }
+        else if (!wasResized && !tuned && ext === ".png") { pageBytes = srcBytes; pageMime = "image/png"; }
         else if (ext === ".png") { pageBytes = await canvasToPngBytes(canvas); pageMime = "image/png"; }
         else { pageBytes = await canvasToJpegBytes(canvas, 0.92); pageMime = "image/jpeg"; }
         epubImages.push({ bytes: pageBytes, mime: pageMime, w: imgW, h: imgH });
@@ -1250,6 +1320,7 @@ async function runMangaConversion() {
           // White under the draw, as sourceCanvas has: the bitmap fallback may carry transparency.
           ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, pf.w, pf.h);
           ctx.drawImage(sourceCanvas || bitmap, fx1, fy1, fw, fh, 0, 0, pf.w, pf.h);
+          if (tuned) cleanCrop(ctx, pf.w, pf.h, tone, cleanup.sharpen);
           return { canvas, ctx, w: pf.w, h: pf.h };
         };
         if (needsCrop(boxes[panelIdx])) {
@@ -1491,6 +1562,14 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-dither").value = loadSetting("manga-dither", "normal");
   $("manga-dither-style").value = validDitherStyle(loadSetting("manga-dither-style", "floyd"));
   $("manga-xtc-split").value = loadSetting("manga-xtc-split", "0");
+  $("manga-levels").checked = loadSetting("manga-levels", "0") === "1";
+  $("manga-sharpen").checked = loadSetting("manga-sharpen", "0") === "1";
+  $("manga-contrast").value = loadSetting("manga-contrast", "off");
+  $("manga-preview-btn").addEventListener("click", showCleanupPreview);
+  // A visible preview follows the settings as they change.
+  for (const id of ["manga-levels", "manga-sharpen", "manga-contrast"]) {
+    $(id).addEventListener("change", () => { if (!$("manga-preview").hidden) showCleanupPreview(); });
+  }
   $("manga-ocr-out").value = loadSetting("manga-ocr-out", "en");
   // Skip text recognition is the default: it needs no API key, sends nothing anywhere and
   // is the fast path, so the key field and the language pickers only appear once someone

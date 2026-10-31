@@ -178,8 +178,35 @@
     </details>
   </div>
 
+  <div class="card" id="card-cleanup">
+    <h3>4. Image clean-up</h3>
+    <p class="hint" style="margin-top:0">Optional. Helps old or faded scans read better on e-ink.</p>
+    <div class="checks stacked">
+      <label><input type="checkbox" id="manga-levels"> <span class="opt">Clean up faded scans</span>
+        <span class="hint">Makes yellowed paper white and grey ink black.</span></label>
+      <label><input type="checkbox" id="manga-sharpen"> <span class="opt">Sharpen</span>
+        <span class="hint">Crisper lines and small text after shrinking to the screen.</span></label>
+    </div>
+    <label for="manga-contrast">Darker midtones</label>
+    <select id="manga-contrast">
+      <option value="off">Off</option>
+      <option value="light">Light</option>
+      <option value="medium">Medium</option>
+      <option value="strong">Strong</option>
+    </select>
+    <div class="preview-row">
+      <label for="manga-preview-page">Preview page</label>
+      <input type="number" id="manga-preview-page" value="1" min="1" step="1">
+      <button type="button" class="secondary" id="manga-preview-btn">Show before / after</button>
+    </div>
+    <div id="manga-preview" class="preview-pair" hidden>
+      <figure><canvas id="manga-preview-before"></canvas><figcaption>Before</figcaption></figure>
+      <figure><canvas id="manga-preview-after"></canvas><figcaption>After</figcaption></figure>
+    </div>
+  </div>
+
   <div class="card" id="card-ocr">
-    <h3>4. Text recognition (Gemini)</h3>
+    <h3>5. Text recognition (Gemini)</h3>
     <div class="checks stacked">
       <label><input type="checkbox" id="manga-no-ocr" checked> <span class="opt">Skip text recognition</span>
         <span class="hint">Finds the panels but doesn't read the text. No API key, nothing leaves
@@ -234,7 +261,7 @@
   </div>
 
   <div class="card" id="card-book">
-    <h3>5. Book details <span class="hint" style="font-weight:400">(optional — auto-detected from EPUB/ComicInfo when present)</span></h3>
+    <h3>6. Book details <span class="hint" style="font-weight:400">(optional — auto-detected from EPUB/ComicInfo when present)</span></h3>
     <div class="row">
       <div>
         <label for="manga-title">Title</label>
