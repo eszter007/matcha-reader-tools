@@ -1024,7 +1024,10 @@ function writeMetaBin(title, author, language, series = "", seriesIndex = null) 
   if (authorBytes.length > 0xffff) authorBytes = authorBytes.subarray(0, 0xffff);
   if (languageBytes.length > 0xffff) languageBytes = languageBytes.subarray(0, 0xffff);
   let seriesBytes = mangaEncoder.encode(series || "");
-  if (seriesBytes.length > 255) seriesBytes = seriesBytes.subarray(0, 255);
+  // Whole characters only, as convert_manga.py trims.
+  if (seriesBytes.length > 255) {
+    seriesBytes = mangaEncoder.encode(new TextDecoder().decode(seriesBytes.subarray(0, 255)).replace(/\uFFFD$/, ""));
+  }
   const trailerLen = languageBytes.length || seriesBytes.length ? 2 + languageBytes.length : 0;
   const seriesLen = seriesBytes.length ? 2 + seriesBytes.length + 4 : 0;
   const out = new ByteWriter(8 + titleBytes.length + authorBytes.length + trailerLen + seriesLen);
@@ -1041,7 +1044,8 @@ function writeMetaBin(title, author, language, series = "", seriesIndex = null) 
     out.u16(seriesBytes.length);
     out.bytes(seriesBytes);
     const index = new Uint8Array(4);
-    new DataView(index.buffer).setFloat32(0, Number.isFinite(seriesIndex) ? seriesIndex : NaN, true);
+    const inRange = Number.isFinite(seriesIndex) && Math.abs(seriesIndex) < 3.0e38;  // float32
+    new DataView(index.buffer).setFloat32(0, inRange ? seriesIndex : NaN, true);
     out.bytes(index);
   }
   return out.toUint8Array();
@@ -1149,8 +1153,15 @@ function epubMetadataFromOpf(opf) {
   if (l) language = xmlUnescape(l[1]).trim();
   // Calibre's series meta, else EPUB 3's belongs-to-collection.
   let series = "", seriesIndex = null;
-  let s = opf.match(/<meta[^>]*name="calibre:series"[^>]*content="([^"]+)"/);
-  let i = opf.match(/<meta[^>]*name="calibre:series_index"[^>]*content="([^"]+)"/);
+  // Attributes in any order: <meta name="calibre:series" content="..."/> or content first.
+  const calibreMeta = (name) => {
+    for (const tag of opf.match(/<meta\b[^>]*>/g) || []) {
+      if (tag.includes(`name="${name}"`)) return tag.match(/\bcontent="([^"]*)"/);
+    }
+    return null;
+  };
+  let s = calibreMeta("calibre:series");
+  let i = calibreMeta("calibre:series_index");
   if (!s) {
     s = opf.match(/<meta[^>]*property="belongs-to-collection"[^>]*>([^<]+)<\/meta>/);
     i = opf.match(/<meta[^>]*property="group-position"[^>]*>([^<]+)<\/meta>/);
