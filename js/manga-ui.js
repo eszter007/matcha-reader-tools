@@ -821,7 +821,7 @@ async function runMangaConversion() {
   // order as the EPUB) and assembled once at the end, since the page table needs every size.
   const xtcPages = [], xtchPages = [];
   const xtcPageMap = new Map();   // source page index -> position in the exported XTC sequence
-  // Target resolution: RES_FULL (keep the source pixels), a device preset ("x3"/"x4"), or
+  // Target resolution: RES_FULL (keep the source pixels), a device preset (a MANGA_DEVICE_TARGETS key), or
   // RES_CUSTOM with a typed width/height. Anything but full resolution downscales pages and panels
   // before detection so the device decodes fewer pixels; it never upscales. Nothing is
   // preselected, so an unanswered dropdown is a user error rather than a default to guess at.
@@ -1367,7 +1367,7 @@ async function runMangaConversion() {
     setProgress(pagesDone, pages.length, "Packaging…");
     const summary = `Done: ${pagesDone} pages, ${totalPanels} panels` +
       (noOcr ? "" : `, ${totalTextBlocks} text blocks`) +
-      (deviceTarget ? `, ${resChoice.toUpperCase()} resolution` : "") +
+      (deviceTarget ? `, ${deviceTarget[0]}×${deviceTarget[1]}` : "") +
       (mono && matchaFolder ? ", 1-bit dithered BMP" : "") +
       (pagesKeptForCoverage ? `, ${pagesKeptForCoverage} full page(s) kept where panels missed content` : "");
 

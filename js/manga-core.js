@@ -373,7 +373,18 @@ function isFullPagePanel(box, pageW, pageH, threshold = 0.95) {
 /* Device screen sizes (portrait width × height), mirroring DEVICE_TARGETS in
  * convert_manga.py. Used to downscale pages/panels so the device never decodes
  * more pixels than its screen can show. */
-const MANGA_DEVICE_TARGETS = { x3: [528, 792], x4: [480, 800] };
+/* Screen size per device the firmware supports, in portrait. One key per device so the page can
+ * name it and restore the exact pick; several devices share a size. */
+const MANGA_DEVICE_TARGETS = {
+  x4: [480, 800],         // Xteink X4 / X4C
+  x4pro: [480, 800],      // Xteink X4 Pro
+  sticky: [480, 800],
+  papermono: [480, 800],
+  picco: [480, 800],      // BOOX Picco
+  metalio: [480, 800],    // Metalio E-Ink 4 (3.97")
+  x3: [528, 792],         // Xteink X3
+  eego: [552, 768],       // EEGO Reader A4
+};
 
 /* Compute the fitted size for an image of w×h against a device target (a
  * [tw, th] pair, or null to keep the original). Never upscales, never changes

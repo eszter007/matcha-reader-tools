@@ -93,13 +93,27 @@
         artwork.</span></label>
     </div>
 
-    <label for="manga-res" style="margin-top:0.6rem">Target resolution</label>
+    <label for="manga-res" style="margin-top:0.6rem">Your device <span class="hint">(sets the target resolution)</span></label>
     <select id="manga-res">
       <option value="">Please select</option>
-      <option value="full">Full resolution — High file size</option>
-      <option value="x4">Xteink X4 — 480×800</option>
-      <option value="x3">Xteink X3 — 528×792</option>
-      <option value="custom">Custom — enter your own size</option>
+      <optgroup label="480 × 800">
+        <option value="x4">Xteink X4 / X4C</option>
+        <option value="x4pro">Xteink X4 Pro</option>
+        <option value="sticky">Sticky</option>
+        <option value="papermono">Papermono</option>
+        <option value="picco">BOOX Picco</option>
+        <option value="metalio">Metalio E-Ink 4 (3.97")</option>
+      </optgroup>
+      <optgroup label="528 × 792">
+        <option value="x3">Xteink X3</option>
+      </optgroup>
+      <optgroup label="552 × 768">
+        <option value="eego">EEGO Reader A4</option>
+      </optgroup>
+      <optgroup label="Other">
+        <option value="full">Full resolution — High file size</option>
+        <option value="custom">Custom — enter your own size</option>
+      </optgroup>
     </select>
     <div class="res-custom" id="manga-res-custom" hidden>
       <label for="manga-res-w">Width (px)
