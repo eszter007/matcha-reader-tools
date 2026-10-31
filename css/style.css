@@ -255,6 +255,8 @@ footer {
 
 footer a { color: var(--matcha-dark); }
 
+.coffee { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 0.8rem 0 0; }
+
 footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border); font-size: 0.78rem; }
 
 .notice {
