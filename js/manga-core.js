@@ -1012,25 +1012,37 @@ function normalizeLanguage(language) {
  * the extra bytes instead of rejecting the file. Newer firmware detects the
  * trailer by checking whether any bytes remain. Any future field must follow
  * the same rule -- append only, never reorder or resize what comes before. */
-function writeMetaBin(title, author, language) {
+/* series/seriesIndex go in an optional trailer after the language one (see convert_manga.py):
+ * u16 seriesLen + UTF-8 name + float32 volume (NaN when unknown). */
+function writeMetaBin(title, author, language, series = "", seriesIndex = null) {
   const lang = normalizeLanguage(language);
-  if (!title && !author && !lang) return null;
+  if (!title && !author && !lang && !series) return null;
   let titleBytes = mangaEncoder.encode(title || "");
   let authorBytes = mangaEncoder.encode(author || "");
   let languageBytes = mangaEncoder.encode(lang);
   if (titleBytes.length > 0xffff) titleBytes = titleBytes.subarray(0, 0xffff);
   if (authorBytes.length > 0xffff) authorBytes = authorBytes.subarray(0, 0xffff);
   if (languageBytes.length > 0xffff) languageBytes = languageBytes.subarray(0, 0xffff);
-  const trailerLen = languageBytes.length ? 2 + languageBytes.length : 0;
-  const out = new ByteWriter(8 + titleBytes.length + authorBytes.length + trailerLen);
+  let seriesBytes = mangaEncoder.encode(series || "");
+  if (seriesBytes.length > 255) seriesBytes = seriesBytes.subarray(0, 255);
+  const trailerLen = languageBytes.length || seriesBytes.length ? 2 + languageBytes.length : 0;
+  const seriesLen = seriesBytes.length ? 2 + seriesBytes.length + 4 : 0;
+  const out = new ByteWriter(8 + titleBytes.length + authorBytes.length + trailerLen + seriesLen);
   out.u32(META_FORMAT_VERSION);
   out.u16(titleBytes.length);
   out.u16(authorBytes.length);
   out.bytes(titleBytes);
   out.bytes(authorBytes);
-  if (languageBytes.length) {
+  if (languageBytes.length || seriesBytes.length) {
     out.u16(languageBytes.length);
     out.bytes(languageBytes);
+  }
+  if (seriesBytes.length) {
+    out.u16(seriesBytes.length);
+    out.bytes(seriesBytes);
+    const index = new Uint8Array(4);
+    new DataView(index.buffer).setFloat32(0, Number.isFinite(seriesIndex) ? seriesIndex : NaN, true);
+    out.bytes(index);
   }
   return out.toUint8Array();
 }
@@ -1135,7 +1147,19 @@ function epubMetadataFromOpf(opf) {
   if (a) author = xmlUnescape(a[1]).trim();
   const l = opf.match(/<dc:language[^>]*>([^<]+)<\/dc:language>/);
   if (l) language = xmlUnescape(l[1]).trim();
-  return { title, author, language };
+  // Calibre's series meta, else EPUB 3's belongs-to-collection.
+  let series = "", seriesIndex = null;
+  let s = opf.match(/<meta[^>]*name="calibre:series"[^>]*content="([^"]+)"/);
+  let i = opf.match(/<meta[^>]*name="calibre:series_index"[^>]*content="([^"]+)"/);
+  if (!s) {
+    s = opf.match(/<meta[^>]*property="belongs-to-collection"[^>]*>([^<]+)<\/meta>/);
+    i = opf.match(/<meta[^>]*property="group-position"[^>]*>([^<]+)<\/meta>/);
+  }
+  if (s) {
+    series = xmlUnescape(s[1]).trim();
+    seriesIndex = i && Number.isFinite(parseFloat(i[1])) ? parseFloat(i[1]) : null;
+  }
+  return { title, author, language, series, seriesIndex };
 }
 
 function cbzMetadataFromComicInfo(xml) {
@@ -1146,7 +1170,14 @@ function cbzMetadataFromComicInfo(xml) {
   if (a) author = xmlUnescape(a[1]).trim();
   const l = xml.match(/<LanguageISO>([^<]+)<\/LanguageISO>/);
   if (l) language = xmlUnescape(l[1]).trim();
-  return { title, author, language };
+  let series = "", seriesIndex = null;
+  const s = xml.match(/<Series>([^<]+)<\/Series>/);
+  if (s) {
+    series = xmlUnescape(s[1]).trim();
+    const n = xml.match(/<Number>([^<]+)<\/Number>/);
+    seriesIndex = n && Number.isFinite(parseFloat(n[1])) ? parseFloat(n[1]) : null;
+  }
+  return { title, author, language, series, seriesIndex };
 }
 
 /* Chapter starts a ComicInfo.xml marks with <Page Image="N" Bookmark="Title"/>, as

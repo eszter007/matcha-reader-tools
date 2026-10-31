@@ -961,6 +961,9 @@ async function runMangaConversion() {
     const metaTitle = $("manga-title").value.trim() || collected.meta.title;
     const metaAuthor = $("manga-author").value.trim() || collected.meta.author;
     const metaLanguage = $("manga-language").value.trim() || collected.meta.language;
+    const metaSeries = $("manga-series").value.trim() || collected.meta.series || "";
+    const seriesField = parseFloat($("manga-series-index").value);
+    const metaSeriesIndex = Number.isFinite(seriesField) ? seriesField : (collected.meta.seriesIndex ?? null);
     const folder = sanitizeFolderName(metaTitle || "Manga");
 
     // The book's own Language (step 5) is what tells the model which language to expect --
@@ -1324,7 +1327,7 @@ async function runMangaConversion() {
     for (const chunk of datChunks) { dat.set(chunk, off); off += chunk.length; }
     if (matchaFolder) {
       addBookFile(`panels.dat`, dat);
-      const metaBin = writeMetaBin(metaTitle, metaAuthor, metaLanguage);
+      const metaBin = writeMetaBin(metaTitle, metaAuthor, metaLanguage, metaSeries, metaSeriesIndex);
       if (metaBin) addBookFile(`meta.bin`, metaBin);
       if (tocEntries.length) addBookFile(`toc.idx`, writeTocIdx(tocEntries));
     }
