@@ -156,14 +156,13 @@ p.lede { color: var(--muted); margin-top: 0; font-size: 1.02rem; }
   color: var(--label);
 }
 .card.info h3::before {
-  content: "i";
+  content: "";
   flex: none;
   width: 18px;
   height: 18px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-  font: 600 11px/15px Georgia, serif;
-  text-align: center;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 11v6'/%3E%3Ccircle cx='12' cy='7.5' r='0.6' fill='black'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 11v6'/%3E%3Ccircle cx='12' cy='7.5' r='0.6' fill='black'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 label { display: block; font-weight: 600; font-size: 0.9rem; margin: 0.7rem 0 0.2rem; }
