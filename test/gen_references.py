@@ -95,6 +95,13 @@ def make_manga_pages():
     print(f"manga pages: {out}")
 
 
+def legacy_flag(script):
+    """--legacy where the converter has it: it then writes the folder these references compare,
+    not one .matcha file. Older firmware checkouts write the folder anyway."""
+    with open(script, encoding="utf-8") as f:
+        return ["--legacy"] if '"--legacy"' in f.read() else []
+
+
 def grid_only_env():
     """Environment that forces convert_manga.py onto its grid-heuristic path
     even when ultralytics/huggingface_hub are installed: a stub module that
@@ -117,7 +124,7 @@ def run_manga_reference():
     subprocess.run([sys.executable, script,
                     "--input", os.path.join(FIXTURES, "manga_pages"),
                     "--output-dir", out,
-                    "--no-ocr",
+                    "--no-ocr", *legacy_flag(script),
                     "--title", "Test Manga", "--author", "Test Author"],
                    check=True, env=grid_only_env())
     print(f"manga reference: {out}")
@@ -249,7 +256,7 @@ def run_manga_epub_reference():
     subprocess.run([sys.executable, script,
                     "--input", os.path.join(FIXTURES, "manga.epub"),
                     "--output-dir", out,
-                    "--no-ocr"],
+                    "--no-ocr", *legacy_flag(script)],
                    check=True, env=grid_only_env())
     print(f"manga epub reference: {out}")
 
@@ -394,7 +401,7 @@ def run_manga_pdf_reference():
     subprocess.run([sys.executable, script,
                     "--input", os.path.join(FIXTURES, "manga.pdf"),
                     "--output-dir", out,
-                    "--no-ocr"],
+                    "--no-ocr", *legacy_flag(script)],
                    check=True, env=grid_only_env())
     print(f"manga pdf reference: {out}")
 
