@@ -926,6 +926,11 @@ async function showCleanupPreview() {
     $("manga-preview-label").textContent = `Page ${n} of ${pages.length}`;
     $("manga-preview-prev").disabled = n === 1;
     $("manga-preview-next").disabled = n === pages.length;
+    // Stepping onto the first or last page disables the button in hand: hand focus to the other.
+    const held = document.activeElement;
+    if (held && held.disabled && (held.id === "manga-preview-prev" || held.id === "manga-preview-next")) {
+      $(held.id === "manga-preview-prev" ? "manga-preview-next" : "manga-preview-prev").focus();
+    }
     const bitmap = await decodeImage(await pages[n - 1].read(), mangaFileExt(pages[n - 1].name));
     const target = MANGA_DEVICE_TARGETS[validResChoice($("manga-res").value)] || [480, 800];
     const fit = fitToDeviceSize(bitmap.width, bitmap.height, target);
@@ -1833,7 +1838,8 @@ async function runPanelCheck() {
 
 // manual: the user set this page's reading order, so it is kept rather than re-sorted.
 // draw: the next drag draws a new panel even where it starts inside one.
-const pe = { page: null, boxes: [], sel: -1, drag: null, scale: 1, manual: false, draw: false };
+// pending: the first corner of a panel being drawn by two clicks.
+const pe = { page: null, boxes: [], sel: -1, drag: null, scale: 1, manual: false, draw: false, pending: null };
 
 async function openPanelEditor(i) {
   const p = panelCheck.pages[i];
@@ -1874,6 +1880,11 @@ function drawPanelEditor() {
   const ctx = c.getContext("2d");
   ctx.clearRect(0, 0, c.width, c.height);
   drawPanelsOn(ctx, pe.page, pe.boxes, pe.scale, pe.sel);
+  if (pe.pending) {
+    const [px, py] = pe.pending;
+    ctx.fillStyle = "#d9480f";
+    ctx.beginPath(); ctx.arc(px * pe.scale, py * pe.scale, 5, 0, Math.PI * 2); ctx.fill();
+  }
   if (pe.drag && pe.drag.mode === "new") {
     const [x1, y1, x2, y2] = normBox(pe.drag.box);
     ctx.setLineDash([6, 4]); ctx.strokeStyle = "#d9480f";
@@ -1883,7 +1894,9 @@ function drawPanelEditor() {
   c.setAttribute("aria-label", `Page with ${pe.boxes.length} panel${pe.boxes.length === 1 ? "" : "s"}` +
     (pe.sel >= 0 ? `, panel ${pe.sel + 1} selected` : ""));
   updatePanelFloat();
-  $("pe-help").textContent = pe.draw ? "Drag on the page to draw a panel."
+  keepEditorFocus();
+  $("pe-help").textContent = pe.pending ? "Now click the opposite corner (Escape cancels)."
+    : pe.draw ? "Drag on the page to draw a panel, or click two opposite corners."
     : pe.sel >= 0 ? "Drag to move · drag the corner to resize · change the reading order above the panel."
     : pe.boxes.length ? "Click a panel to move, resize or reorder it, or drag on empty space to draw one."
     : "Drag on the page to draw a panel.";
@@ -1971,6 +1984,21 @@ function wirePanelEditor() {
     pe.drag = null;
     if (d.mode === "new") {
       const b = normBox(d.box);
+      // A click without a drag: the first sets a corner, the second the opposite one -- so a
+      // panel can be drawn without dragging.
+      if (b[2] - b[0] < 4 && b[3] - b[1] < 4) {
+        if (!pe.draw) { drawPanelEditor(); return; }  // Select tool: a click on empty space deselects
+        if (!pe.pending) {
+          pe.pending = [b[0], b[1]];
+          peAnnounce("Corner set. Click the opposite corner.");
+          drawPanelEditor();
+          return;
+        }
+        d.box = [pe.pending[0], pe.pending[1], b[0], b[1]];
+        pe.pending = null;
+        return finishNewBox(normBox(d.box));
+      }
+      pe.pending = null;
       if (b[2] - b[0] >= PE_MIN_SIDE && b[3] - b[1] >= PE_MIN_SIDE) {
         pe.boxes.push(clampBox(b));
         pe.sel = pe.boxes.length - 1;
@@ -1984,6 +2012,19 @@ function wirePanelEditor() {
     }
     commitPanelEdits();
   };
+  // A finished two-click (or drag) box: added when big enough.
+  function finishNewBox(b) {
+    if (b[2] - b[0] >= PE_MIN_SIDE && b[3] - b[1] >= PE_MIN_SIDE) {
+      pe.boxes.push(clampBox(b));
+      pe.sel = pe.boxes.length - 1;
+      setDrawMode(false);
+      commitPanelEdits();
+      peAnnounce(`Panel added as number ${pe.sel + 1} of ${pe.boxes.length}.`);
+    } else {
+      peAnnounce("Too small for a panel.");
+      drawPanelEditor();
+    }
+  }
   c.addEventListener("pointerup", end);
   c.addEventListener("pointercancel", end);
 
@@ -1997,6 +2038,10 @@ function wirePanelEditor() {
     } else if (/^[1-9]$/.test(ev.key) && Number(ev.key) <= n) {
       pe.sel = Number(ev.key) - 1;
       peAnnounce(`Panel ${pe.sel + 1} of ${n} selected.`);
+      drawPanelEditor();
+    } else if (ev.key === "Escape" && pe.pending) {
+      pe.pending = null;
+      peAnnounce("Corner cleared.");
       drawPanelEditor();
     } else if (ev.key === "v" || ev.key === "V") {
       setDrawMode(false);
@@ -2028,6 +2073,15 @@ function wirePanelEditor() {
   });
 
   $("pe-delete").addEventListener("click", deleteSelectedPanel);
+  // Arrow keys move between the two tools, as in any radio group.
+  for (const id of ["pe-mode-select", "pe-mode-draw"]) {
+    $(id).addEventListener("keydown", (ev) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(ev.key)) return;
+      ev.preventDefault();
+      setDrawMode(id === "pe-mode-select");
+      $(pe.draw ? "pe-mode-draw" : "pe-mode-select").focus();
+    });
+  }
   $("pe-mode-select").addEventListener("click", () => { setDrawMode(false); $("pe-canvas").focus(); });
   $("pe-mode-draw").addEventListener("click", () => { setDrawMode(true); $("pe-canvas").focus(); peAnnounce("Draw: drag on the page to draw a panel."); });
   $("pe-earlier").addEventListener("click", () => movePanelInOrder(-1));
@@ -2068,6 +2122,10 @@ function setDrawMode(on) {
   pe.draw = on;
   $("pe-mode-select").setAttribute("aria-checked", on ? "false" : "true");
   $("pe-mode-draw").setAttribute("aria-checked", on ? "true" : "false");
+  // Radio group: only the checked tool is a Tab stop; arrow keys move between the two.
+  $("pe-mode-select").tabIndex = on ? -1 : 0;
+  $("pe-mode-draw").tabIndex = on ? 0 : -1;
+  if (!on) pe.pending = null;
   $("pe-canvas").classList.toggle("drawing", on);
   if (pe.page) drawPanelEditor();
 }
@@ -2088,6 +2146,15 @@ function updatePanelFloat() {
   const above = y1 * pe.scale - fh - 6;
   float.style.left = `${left}px`;
   float.style.top = `${c.offsetTop + (above >= 0 ? above : y1 * pe.scale + 6)}px`;
+}
+
+/* A focused control that just got disabled or hidden would drop focus out of the dialog: move it
+ * to its partner (the other order button) or back to the page. */
+function keepEditorFocus() {
+  const a = document.activeElement;
+  if (!a || !$("panel-editor").contains(a) || !(a.disabled || a.closest("[hidden]"))) return;
+  const partner = a.id === "pe-later" ? $("pe-earlier") : a.id === "pe-earlier" ? $("pe-later") : null;
+  (partner && !partner.disabled && !$("pe-float").hidden ? partner : $("pe-canvas")).focus();
 }
 
 /* Move the selected panel one step earlier (-1) or later (+1) in the reading order. From then on

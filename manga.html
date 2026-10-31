@@ -391,14 +391,14 @@
       <button type="button" class="tool-btn" id="pe-next" aria-label="Next page" title="Next page"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6l-6 6"/></svg></button>
     </div>
     <div class="segmented" role="radiogroup" aria-label="Tool">
-      <button type="button" class="tool-btn" role="radio" aria-checked="true" id="pe-mode-select" title="Select and move panels (V)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.904 17.563a1.2 1.2 0 0 0 2.228 .308l2.09 -3.093l4.907 4.907a1.067 1.067 0 0 0 1.509 0l1.047 -1.047a1.067 1.067 0 0 0 0 -1.509l-4.907 -4.907l3.113 -2.09a1.2 1.2 0 0 0 -.309 -2.228l-13.582 -3.904l3.904 13.563z"/></svg><span>Select</span></button>
-      <button type="button" class="tool-btn" role="radio" aria-checked="false" id="pe-mode-draw" title="Draw a new panel (R)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 12h6"/><path d="M12 9v6"/><path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14z"/></svg><span>Draw</span></button>
+      <button type="button" class="tool-btn" role="radio" aria-checked="true" tabindex="0" id="pe-mode-select" title="Select and move panels (V)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.904 17.563a1.2 1.2 0 0 0 2.228 .308l2.09 -3.093l4.907 4.907a1.067 1.067 0 0 0 1.509 0l1.047 -1.047a1.067 1.067 0 0 0 0 -1.509l-4.907 -4.907l3.113 -2.09a1.2 1.2 0 0 0 -.309 -2.228l-13.582 -3.904l3.904 13.563z"/></svg><span>Select</span></button>
+      <button type="button" class="tool-btn" role="radio" aria-checked="false" tabindex="-1" id="pe-mode-draw" title="Draw a new panel (R)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 12h6"/><path d="M12 9v6"/><path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14z"/></svg><span>Draw</span></button>
     </div>
     <button type="button" class="primary pe-done" id="pe-close">Done</button>
   </div>
   <p class="pe-reason" id="pe-reason" hidden></p>
   <div class="pe-stage">
-    <canvas id="pe-canvas" tabindex="0" role="img" aria-describedby="pe-help pe-status"></canvas>
+    <canvas id="pe-canvas" tabindex="0" role="application" aria-roledescription="panel editor" aria-describedby="pe-help pe-status"></canvas>
     <div class="pe-float" id="pe-float" role="toolbar" aria-label="Selected panel" hidden>
       <button type="button" class="tool-btn" id="pe-earlier" aria-label="Read earlier" title="Read earlier (,)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6l6 6"/></svg></button>
       <span class="pe-order" id="pe-order"></span>
