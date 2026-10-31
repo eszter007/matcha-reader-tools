@@ -727,7 +727,7 @@ function applyFormatVisibility() {
   // Before anything is picked, show everything: the steps only start disappearing once the user
   // has said what they want, so an untouched page never looks like it is missing parts.
   const nothingPicked = f.size === 0;
-  const matcha = nothingPicked || f.has("matcha");
+  const matcha = nothingPicked || f.has("matcha") || f.has("matchafile");
   const show = (id, on) => { const el = document.getElementById(id); if (el) el.hidden = !on; };
   show("card-ocr", matcha);
   show("notice-ocr", matcha);
@@ -795,12 +795,14 @@ async function runMangaConversion() {
   // OCR text and translations are only ever stored in panels.dat, so without the device folder
   // there is nowhere for them to go -- skip OCR implicitly rather than demanding an API key for
   // output that would be discarded. (The OCR section is hidden in that case too.)
-  const noOcr = $("manga-no-ocr").checked || !formats.has("matcha");
+  const matchaFile = formats.has("matchafile");
+  const noOcr = $("manga-no-ocr").checked || !(formats.has("matcha") || matchaFile);
   const mono = $("manga-mono").checked;
   const pdf = formats.has("pdf");
   // The PDF is built from the same page/panel images as the EPUB, so either one collects them.
   const epub = formats.has("epub") || pdf;
-  const matchaFolder = formats.has("matcha");
+  // matchaFolder: any device output. The legacy folder and the .matcha file hold the same entries.
+  const matchaFolder = formats.has("matcha") || matchaFile;
   const wantXtc = formats.has("xtc");
   const wantXtch = formats.has("xtch");
   const anyXtc = wantXtc || wantXtch;
@@ -975,6 +977,13 @@ async function runMangaConversion() {
     }
 
     const zip = new ZipWriter();
+    const matchaVolume = matchaFile ? new MatchaWriter() : null;
+    const legacyFolder = formats.has("matcha");
+    // One book entry, written to every device output picked.
+    const addBookFile = (path, data) => {
+      if (legacyFolder) zip.addFile(`${folder}/${path}`, data);
+      if (matchaVolume) matchaVolume.addFile(path, data);
+    };
     const idxRecords = [];
     const datChunks = [];
     let datOffset = 0;
@@ -1113,14 +1122,14 @@ async function runMangaConversion() {
       if (!matchaFolder || !keepPageImage) {
         // nothing written for this page
       } else if (mono) {
-        zip.addFile(`${folder}/${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH, ditherGamma));
+        addBookFile(`${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH, ditherGamma));
       } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized && !wasTrimmed) {
-        zip.addFile(`${folder}/${pageBase}${ext}`, srcBytes);
+        addBookFile(`${pageBase}${ext}`, srcBytes);
       } else if (ext === ".png" && (wasResized || wasTrimmed)) {
-        zip.addFile(`${folder}/${pageBase}.png`, await canvasToPngBytes(canvas));
+        addBookFile(`${pageBase}.png`, await canvasToPngBytes(canvas));
       } else {
         const outExt = (ext === ".jpg" || ext === ".jpeg") ? ext : ".jpg";
-        zip.addFile(`${folder}/${pageBase}${outExt}`, await canvasToJpegBytes(canvas, 0.92));
+        addBookFile(`${pageBase}${outExt}`, await canvasToJpegBytes(canvas, 0.92));
       }
 
       // The EPUB always uses a widely-supported core media type (JPEG/PNG); the
@@ -1207,7 +1216,7 @@ async function runMangaConversion() {
           if (mono) {
             const cropRgba = cropCtx.getImageData(0, 0, pw, ph).data;
             if (matchaFolder) {
-              zip.addFile(`${folder}/${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph, ditherGamma));
+              addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph, ditherGamma));
             }
             // OCR still reads a full-colour JPEG crop: the dithered BMP would
             // only hurt text recognition (the --mono guidance to pair with
@@ -1215,7 +1224,7 @@ async function runMangaConversion() {
             if (!noOcr) cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
           } else {
             cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
-            if (matchaFolder) zip.addFile(`${folder}/${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
+            if (matchaFolder) addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
           }
           // A full-page panel is normally left out of the pre-rendered books: the full page
           // image in front of it already carries the same artwork, so the crop would only
@@ -1309,15 +1318,15 @@ async function runMangaConversion() {
 
     if (!pagesDone) throw new Error("No pages were processed");
 
-    zip.addFile(`${folder}/panels.idx`, writePanelsIdx(idxRecords));
+    addBookFile(`panels.idx`, writePanelsIdx(idxRecords));
     const dat = new Uint8Array(datOffset);
     let off = 0;
     for (const chunk of datChunks) { dat.set(chunk, off); off += chunk.length; }
     if (matchaFolder) {
-      zip.addFile(`${folder}/panels.dat`, dat);
+      addBookFile(`panels.dat`, dat);
       const metaBin = writeMetaBin(metaTitle, metaAuthor, metaLanguage);
-      if (metaBin) zip.addFile(`${folder}/meta.bin`, metaBin);
-      if (tocEntries.length) zip.addFile(`${folder}/toc.idx`, writeTocIdx(tocEntries));
+      if (metaBin) addBookFile(`meta.bin`, metaBin);
+      if (tocEntries.length) addBookFile(`toc.idx`, writeTocIdx(tocEntries));
     }
 
     // Extra single-file outputs (EPUB / PDF / XTC / XTCH). They ride inside the zip when the device
@@ -1359,7 +1368,23 @@ async function runMangaConversion() {
       (mono && matchaFolder ? ", 1-bit dithered BMP" : "") +
       (pagesKeptForCoverage ? `, ${pagesKeptForCoverage} full page(s) kept where panels missed content` : "");
 
-    if (matchaFolder) {
+    if (matchaVolume) {
+      const volume = matchaVolume.toBlob();
+      const files = [{ name: `${folder}.matcha`, blob: volume }];
+      if (legacyFolder) files.push({ name: `${folder}.zip`, blob: zip.toBlob() });
+      for (const e of extras) files.push({ name: e.name, blob: new Blob([e.bytes], { type: e.type }) });
+      logLine(`${summary} — ${formatBytes(volume.size)}`);
+      logLine(`Copy "${folder}.matcha" anywhere on the SD card (e.g. /manga/) or upload it via the device's web ` +
+        "file transfer. It needs firmware 2.0.0-rc-4 or later.");
+      if (files.length === 1) {
+        downloadBlob(volume, `${folder}.matcha`);
+      } else {
+        const outZip = new ZipWriter();
+        for (const f of files) outZip.addFile(f.name, new Uint8Array(await f.blob.arrayBuffer()));
+        logLine(`The download is a zip holding ${files.map((f) => `"${f.name}"`).join(", ")}.`);
+        downloadBlob(outZip.toBlob(), `${folder}-export.zip`);
+      }
+    } else if (matchaFolder) {
       for (const e of extras) zip.addFile(e.name, e.bytes);
       const blob = zip.toBlob();
       logLine(`${summary}${extras.length ? `, + ${extras.map((e) => e.name.split(".").pop().toUpperCase()).join(" + ")}` : ""} — ${formatBytes(blob.size)}`);

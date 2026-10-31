@@ -9,7 +9,7 @@ to Gemini when you supply your own API key, and a book's text when you choose AI
 
 | Tool | Input | Output |
 |---|---|---|
-| 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | Manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.pdf`, `.xtc` or `.xtch` |
+| 📖 **Manga Converter** | CBZ / ZIP / EPUB / PDF / page images | One `.matcha` file (firmware 2.0.0-rc-4 and up; a plain stored ZIP, rename to `.zip` to unpack) or the legacy manga folder: renamed pages, panel crops, `panels.idx`/`panels.dat` (with OCR text + translations), `meta.bin`, `toc.idx` — and/or a portable `.epub`, `.pdf`, `.xtc` or `.xtch` |
 | 📚 **Dictionary Converter** | Chinese and Cantonese: nothing — pick the simplified, traditional or Cantonese edition, built from sources served with the page. Or your own files — Japanese: Yomitan `.zip` (Jitendex, JMnedict, grammar), jmdict-simplified `.json`/`.json.tgz`, MDict `.mdx`. Chinese and Cantonese: CC-CEDICT / CC-Canto text, the MoE `dict-revised.json`, Yomitan, MDict, a `headword<TAB>definition` TSV, with optional frequency, level, example-sentence and jyutping lists | `dict/<name>.idx` + `.dat` + `.spx` for Japanese; `dictionaries/zh/` or `dictionaries/yue/` with `vocab.*`, `names.*` and `.title` files for Chinese |
 | 🔤 **Font Converter** | TTF / OTF (up to 4 styles + fallback font) | `.fonts/<Family>/<Family>_<size>.cpfont` (v4, with kerning + ligatures) |
 | 🈷 **Furigana & Pinyin** | A Japanese or Chinese EPUB (+ optionally your own CC-CEDICT and a frequency list) | The same EPUB with furigana, or pinyin / zhuyin, as `<ruby>` over the text |
@@ -107,7 +107,7 @@ changed, and 21 MB for the model alone. Bump their paths if one is replaced.
 
 | Control | Desktop flag | Effect |
 |---|---|---|
-| **Export format** | — | Any combination of Matcha Reader folder, EPUB, PDF, XTC, XTCH. Nothing preselected. Later steps adapt to the pick. |
+| **Export format** | — | Any combination of Matcha Reader `.matcha` file (preselected, firmware 2.0.0-rc-4 and up), Matcha Reader legacy folder, EPUB, PDF, XTC, XTCH. Later steps adapt to the pick. |
 | **Book type** | `--ltr` `--trim-margins` `--webtoon` | Manga reads right to left. Western comic reads left to right and trims the paper border; the detector is manga-trained, so it misses panels on dense strip layouts and the page warns about it. Webtoon reassembles the strip and re-cuts it at the artwork's gutters, no model involved. Nothing preselected. |
 | **Panels only** | *(browser only)* | Ships panel crops without full pages. A page whose panels miss artwork keeps its full page; so does the cover. |
 | **Target resolution** | `--x3` `--x4` | Downscales before detection. X4 480×800, X3 528×792, or a custom 1–4096 px size. Never upscales. Full resolution warns: the Xteink firmware struggles with it. |

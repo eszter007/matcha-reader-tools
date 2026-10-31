@@ -42,9 +42,11 @@
   <div class="card">
     <h3>2. Export format</h3>
     <div class="checks stacked" id="manga-format">
-      <label><input type="checkbox" class="fmt" value="matcha" checked> <span class="opt">Matcha Reader format</span>
-        <span class="hint">Panel-by-panel navigation, with offline dictionary lookup and
-        translations.</span></label>
+      <label><input type="checkbox" class="fmt" value="matchafile" checked> <span class="opt">Matcha Reader, firmware 2.0.0-rc-4 and up</span>
+        <span class="hint">One <code>.matcha</code> file: panel-by-panel navigation, with offline
+        dictionary lookup and translations. Copies much faster than a folder.</span></label>
+      <label><input type="checkbox" class="fmt" value="matcha"> <span class="opt">Matcha Reader, legacy folder</span>
+        <span class="hint">The same book as a folder, for firmware older than 2.0.0-rc-4.</span></label>
       <label><input type="checkbox" class="fmt" value="epub"> <span class="opt">EPUB</span>
         <span class="hint">Fixed-layout <code>.epub</code>. Reads panel by panel on any e-reader,
         without dictionary, translations or panel zoom.</span></label>
@@ -255,10 +257,11 @@
 
   <div class="card" id="card-install">
     <h3>Install on the device</h3>
-    <p>The download is a zip holding one folder, named after the title. Put it anywhere on the SD
-    card, by card reader or over the reader's Wi-Fi file transfer. <code>/manga/YourTitle/</code>
-    is a nice convention. The device finds any folder containing <code>panels.idx</code>, at any
-    depth.</p>
+    <p>Copy the <code>.matcha</code> file anywhere on the SD card, by card reader or over the
+    reader's Wi-Fi file transfer. <code>/manga/</code> is a nice convention. A <code>.matcha</code>
+    is a normal zip: rename it to <code>.zip</code> to unpack it on your computer.</p>
+    <p>The legacy download is a zip holding one folder, named after the title. Unzip it onto the
+    card; the device finds any folder containing <code>panels.idx</code>, at any depth.</p>
   </div>
 </main>
 <footer>

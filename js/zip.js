@@ -226,6 +226,62 @@ function parseTar(bytes) {
   return files;
 }
 
+
+/* A .matcha volume: a stored zip whose first entry, matcha.idx, maps fnv1a(entry name) to the
+ * entry's data offset and size, sorted by hash, so the firmware finds a file in a few reads.
+ * Same layout as scripts/pack_matcha.py in the firmware repo. Directories get their own record
+ * (size 0xFFFFFFFF) so the device can tell a folder exists. */
+const MATCHA_INDEX_NAME = "matcha.idx";
+const MATCHA_DIRECTORY_SIZE = 0xffffffff;
+
+function matchaHash(nameBytes) {
+  let h = 0x811c9dc5;
+  for (const b of nameBytes) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+  return h;
+}
+
+class MatchaWriter {
+  constructor() { this.files = new Map(); }
+
+  addFile(path, data) { this.files.set(path, data); }
+
+  toBlob() {
+    const encoder = new TextEncoder();
+    const dirs = new Set();
+    for (const path of this.files.keys()) {
+      for (let i = path.indexOf("/"); i >= 0; i = path.indexOf("/", i + 1)) dirs.add(path.slice(0, i + 1));
+    }
+    const entries = [...dirs].map((name) => ({ name, data: new Uint8Array(0), dir: true }))
+      .concat([...this.files].map(([name, data]) => ({ name, data, dir: false })))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+    const indexSize = 12 + 12 * entries.length;
+    let offset = 30 + MATCHA_INDEX_NAME.length + indexSize;
+    const records = [];
+    for (const e of entries) {
+      const nameBytes = encoder.encode(e.name);
+      const dataOffset = offset + 30 + nameBytes.length;
+      records.push({ hash: matchaHash(nameBytes), offset: e.dir ? 0 : dataOffset,
+        size: e.dir ? MATCHA_DIRECTORY_SIZE : e.data.length });
+      offset = dataOffset + e.data.length;
+    }
+    records.sort((a, b) => a.hash - b.hash);
+    for (let i = 1; i < records.length; i++) {
+      if (records[i].hash === records[i - 1].hash) throw new Error("Two file names share a hash; rename one");
+    }
+    const index = new ByteWriter(indexSize);
+    index.bytes(encoder.encode("MTCH"));
+    index.u32(1);
+    index.u32(records.length);
+    for (const r of records) { index.u32(r.hash); index.u32(r.offset); index.u32(r.size); }
+
+    const zip = new ZipWriter();
+    zip.addFile(MATCHA_INDEX_NAME, index.toUint8Array());
+    for (const e of entries) zip.addFile(e.name, e.data);
+    return zip.toBlob();
+  }
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { ZipReader, ZipWriter, crc32, parseTar, gunzip, inflateRaw, decodeCp437 };
+  module.exports = { ZipReader, ZipWriter, MatchaWriter, matchaHash, crc32, parseTar, gunzip, inflateRaw, decodeCp437 };
 }
