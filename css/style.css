@@ -256,6 +256,21 @@ footer {
 footer a { color: var(--matcha-dark); }
 
 .coffee { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 0.8rem 0 0; }
+/* Drawn here rather than with Buy Me a Coffee's embed script, which loads its font from Google. */
+.coffee-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  background: var(--matcha);
+  color: #fff !important;
+  font-size: 1rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.coffee-btn:hover { background: var(--matcha-dark); }
 
 footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border); font-size: 0.78rem; }
 
