@@ -228,3 +228,5 @@ node test/browser/e2e.mjs
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Icons: [Tabler Icons](https://tabler.io/icons) by Paweł Kuna, MIT License.

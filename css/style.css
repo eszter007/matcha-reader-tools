@@ -346,7 +346,11 @@ details summary { cursor: pointer; font-weight: 600; font-size: 0.92rem; color: 
 }
 
 .toolcard:hover { box-shadow: 0 0 0 2px var(--matcha), 0 1px 3px #0000001a; }
-.toolcard .emoji { font-size: 1.8rem; }
+/* Tabler Icons (MIT, tabler.io/icons), drawn inline in the accent colour. */
+.tool-icon, .title-icon { fill: none; stroke: var(--matcha-dark); stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.tool-icon { display: block; width: 30px; height: 30px; }
+.title-icon { width: 28px; height: 28px; flex: none; }
+h2.with-icon { display: flex; align-items: center; gap: 0.5rem; }
 .toolcard h3 { margin: 0.4rem 0 0.3rem; color: var(--text); font-size: 20px; }
 .toolcard p { margin: 0; font-size: 0.9rem; color: var(--muted); }
 
