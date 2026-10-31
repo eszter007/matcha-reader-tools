@@ -107,7 +107,7 @@ changed, and 21 MB for the model alone. Bump their paths if one is replaced.
 
 | Control | Desktop flag | Effect |
 |---|---|---|
-| **Export format** | — | Any combination of Matcha Reader `.matcha` file (preselected, firmware 2.0.0-rc-4 and up), Matcha Reader legacy folder, EPUB, PDF, XTC, XTCH. Later steps adapt to the pick. |
+| **Export format** | — | Any combination of Matcha Reader `.matcha` file (firmware 2.0.0-rc-4 and up), Matcha Reader legacy folder, EPUB, PDF, XTC, XTCH. Nothing preselected. Later steps adapt to the pick. |
 | **Book type** | `--ltr` `--trim-margins` `--webtoon` | Manga reads right to left. Western comic reads left to right and trims the paper border; the detector is manga-trained, so it misses panels on dense strip layouts and the page warns about it. Webtoon reassembles the strip and re-cuts it at the artwork's gutters, no model involved. Nothing preselected. |
 | **Panels only** | *(browser only)* | Ships panel crops without full pages. A page whose panels miss artwork keeps its full page; so does the cover. |
 | **Target resolution** | `--x3` `--x4` | Downscales before detection. X4 480×800, X3 528×792, or a custom 1–4096 px size. Never upscales. Full resolution warns: the Xteink firmware struggles with it. |
