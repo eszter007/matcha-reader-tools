@@ -553,4 +553,3 @@ footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid v
 .checks label.disabled input { cursor: not-allowed; }
 
 #content-title { margin-top: 1.3rem; }
-.choice-art .panels.loose rect { stroke: var(--matcha); }
