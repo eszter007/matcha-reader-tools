@@ -151,6 +151,11 @@ const INTERVAL_PRESETS = {
 };
 // Chinese: cjk-ext plus Extension A and the small and vertical punctuation forms.
 INTERVAL_PRESETS["cjk-zh"] = [...INTERVAL_PRESETS["cjk-ext"], [0x3400, 0x4DBF], [0xFE10, 0xFE1F], [0xFE50, 0xFE6F]];
+// Browser only: cjk-zh without what only Japanese uses -- hiragana, katakana and its extensions,
+// kanbun marks, and the JIS X 0213 rare kanji outside the BMP. For the Chinese checkboxes.
+const JAPANESE_ONLY = [[0x3040, 0x309F], [0x30A0, 0x30FF], [0x3190, 0x319F], [0x31F0, 0x31FF], ...JISX0213_PLANE2];
+INTERVAL_PRESETS["chinese"] = INTERVAL_PRESETS["cjk-zh"].filter(
+  ([a, b]) => !JAPANESE_ONLY.some(([c, d]) => a === c && b === d));
 
 /* Standard Unicode ligature codepoints for known input sequences. */
 const STANDARD_LIGATURE_MAP = new Map([
