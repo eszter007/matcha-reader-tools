@@ -13,6 +13,17 @@ function logLine(text, cls) {
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
   log.hidden = false;
+  // Screen readers hear warnings, errors and the outcome, not every progress line.
+  if (/\b(warn|error|validation)\b/.test(cls || "") || /^(Done|Error)\b/.test(text)) announce(text);
+}
+
+/* Read text out through the page's polite status region, if it has one. */
+function announce(text) {
+  const status = $("sr-status");
+  if (!status) return;
+  // Clear first so the same message twice is still announced.
+  status.textContent = "";
+  setTimeout(() => { status.textContent = text; }, 50);
 }
 
 function clearLog() {
@@ -29,6 +40,8 @@ function setProgress(done, total, label) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   bar.style.width = pct + "%";
   text.textContent = label !== undefined ? label : `${done} / ${total}`;
+  wrap.setAttribute("aria-valuenow", String(pct));
+  wrap.setAttribute("aria-valuetext", text.textContent);
 }
 
 function hideProgress() {

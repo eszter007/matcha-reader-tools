@@ -56,6 +56,23 @@ body {
 
 :focus-visible { outline: 3px solid var(--matcha-dark); outline-offset: 3px; }
 
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* "Skip to content": the first stop for keyboard users, visible only when focused. */
+.skip-link { position: absolute; left: 1rem; top: -4rem; z-index: 50; padding: 0.6rem 1rem; border-radius: 8px;
+  background: var(--card); color: var(--text); box-shadow: var(--card-shadow); font-weight: 600; }
+.skip-link:focus { top: 0.75rem; }
+/* The skip link's target: focusable so screen readers move there, but not ringed like a control. */
+main:focus { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
 /* Header: the firmware's brand bar, sticky and frosted. */
 .brand {
   position: sticky;
@@ -211,7 +228,10 @@ textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
   text-align: center;
 }
 
-.filebtn input { display: none; }
+/* Visually hidden but still in the tab order, so the big label works as a keyboard file picker. */
+.filebtn { position: relative; }
+.filebtn input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.filebtn:focus-within { outline: 3px solid var(--matcha-dark); outline-offset: 3px; }
 
 .row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
 .row > div { flex: 1 1 160px; }

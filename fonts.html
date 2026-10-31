@@ -9,6 +9,7 @@
 <link rel="icon" type="image/svg+xml" href="images/matcha-icon-dark.svg" media="(prefers-color-scheme: dark)">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="brand">
   <div class="brand-inner">
     <h1><a class="brand-link" href="./"><picture><source srcset="images/matcha-icon-dark.svg" media="(prefers-color-scheme: dark)"><img class="brand-logo" src="images/matcha-icon.svg" alt="" width="28" height="28"></picture>Matcha <span class="brand-reader">Reader</span>&nbsp;Tools</a></h1>
@@ -29,7 +30,7 @@
     </nav>
   </details>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <h2 class="with-icon"><svg class="title-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l3 0"/><path d="M14 20l7 0"/><path d="M6.9 15l6.9 0"/><path d="M10.2 6.3l5.8 13.7"/><path d="M5 20l6 -16l2 0l7 16"/></svg>Font Converter</h2>
   <p class="lede">Converts TTF/OTF fonts into <code>.cpfont</code> files the reader loads from the
   SD card — including kerning and ligature data extracted from the font.</p>
@@ -53,7 +54,7 @@
     <input type="file" id="font-quick" accept=".ttf,.otf,.ttc" multiple>
     <p class="hint">Select every style of the family together. Regular, Bold, Italic and Bold Italic are
     recognised from the file names, e.g. <code>Literata-BoldItalic.ttf</code>.</p>
-    <p class="hint" id="font-quick-result" hidden></p>
+    <p class="hint" id="font-quick-result" role="status" hidden></p>
 
     <div class="divider-label">or pick each style</div>
     <div class="row">
@@ -144,8 +145,9 @@
 
   <button class="primary" id="font-run">Build font files</button>
 
-  <div id="progress" hidden><div id="progress-bar"></div><div id="progress-text"></div></div>
-  <div id="log" hidden></div>
+  <div id="progress" hidden role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar"></div><div id="progress-text" aria-hidden="true"></div></div>
+  <div id="log" hidden role="log" aria-label="Conversion log" tabindex="0"></div>
+  <div id="sr-status" class="sr-only" role="status" aria-live="polite"></div>
 
   <div class="card info">
     <h3>How to install</h3>
