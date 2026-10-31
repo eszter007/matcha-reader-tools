@@ -740,6 +740,7 @@ function applyFormatVisibility() {
     nothingPicked || f.has("xtc") || f.has("xtch") || (matcha && $("manga-mono").checked));
   // Panel rotation only exists in the pre-rendered exports; the device folder's crops are rotated
   // by the firmware at display time, so the option would mean nothing there.
+  show("manga-xtc-split-row", f.has("xtc") || f.has("xtch"));
   show("manga-rotate-row", nothingPicked || f.has("epub") || f.has("pdf") || f.has("xtc") || f.has("xtch"));
   renumberSteps();
 }
@@ -876,6 +877,7 @@ async function runMangaConversion() {
   // and PNG paths are untouched by it.
   const ditherGamma = validDitherGamma($("manga-dither").value);
   const ditherStyle = validDitherStyle($("manga-dither-style").value);
+  const xtcSplit = parseInt($("manga-xtc-split").value, 10) || 0;
   const bookType = validBookType($("manga-booktype").value);
   if (!bookType) {
     logValidation("Pick a book type — manga, western comic, or webtoon/manhwa.");
@@ -906,6 +908,7 @@ async function runMangaConversion() {
   saveSetting("manga-booktype", bookType);
   saveSetting("manga-dither", $("manga-dither").value);
   saveSetting("manga-dither-style", ditherStyle);
+  saveSetting("manga-xtc-split", String(xtcSplit));
   saveSetting("manga-no-ocr", $("manga-no-ocr").checked ? "1" : "0");
   saveSetting("manga-ocr-out", $("manga-ocr-out").value);
   saveSetting("manga-res", resChoice);
@@ -1389,15 +1392,22 @@ async function runMangaConversion() {
       .map(([pageIndex, chapterTitle]) => ({ title: chapterTitle, page: xtcPageMap.get(pageIndex) }))
       .filter((c) => c.page !== undefined)
       .sort((a, b) => a.page - b.page);
-    const xtcMeta = { title: metaTitle, author: metaAuthor, language: metaLanguage, toc: xtcToc };
-    if (wantXtc && xtcPages.length) {
-      extras.push({ name: `${folder}.xtc`, bytes: buildXtcFile(xtcPages, { ...xtcMeta, isHq: false }), type: "application/octet-stream" });
-      logLine(`Built ${folder}.xtc (${xtcPages.length} pages, 1-bit).`);
-    }
-    if (wantXtch && xtchPages.length) {
-      extras.push({ name: `${folder}.xtch`, bytes: buildXtcFile(xtchPages, { ...xtcMeta, isHq: true }), type: "application/octet-stream" });
-      logLine(`Built ${folder}.xtch (${xtchPages.length} pages, 2-bit grayscale).`);
-    }
+    // One file, or parts of about `xtcSplit` pages that each start at a chapter where one is close.
+    const addXtcParts = (xpages, ext, isHq, depth) => {
+      const starts = partStarts(xpages.length, xtcSplit, xtcToc.map((c) => c.page));
+      starts.forEach((start, i) => {
+        const end = i + 1 < starts.length ? starts[i + 1] : xpages.length;
+        const many = starts.length > 1;
+        const name = many ? `${folder} - part ${i + 1}.${ext}` : `${folder}.${ext}`;
+        const toc = xtcToc.filter((c) => c.page >= start && c.page < end).map((c) => ({ ...c, page: c.page - start }));
+        const title = many ? `${metaTitle} (${i + 1}/${starts.length})` : metaTitle;
+        extras.push({ name, type: "application/octet-stream",
+          bytes: buildXtcFile(xpages.slice(start, end), { title, author: metaAuthor, language: metaLanguage, toc, isHq }) });
+        logLine(`Built ${name} (${end - start} pages, ${depth}).`);
+      });
+    };
+    if (wantXtc && xtcPages.length) addXtcParts(xtcPages, "xtc", false, "1-bit");
+    if (wantXtch && xtchPages.length) addXtcParts(xtchPages, "xtch", true, "2-bit grayscale");
 
     setProgress(pagesDone, pages.length, "Packaging…");
     const summary = `Done: ${pagesDone} pages, ${totalPanels} panels` +
@@ -1480,6 +1490,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-booktype").value = validBookType(loadSetting("manga-booktype", ""));
   $("manga-dither").value = loadSetting("manga-dither", "normal");
   $("manga-dither-style").value = validDitherStyle(loadSetting("manga-dither-style", "floyd"));
+  $("manga-xtc-split").value = loadSetting("manga-xtc-split", "0");
   $("manga-ocr-out").value = loadSetting("manga-ocr-out", "en");
   // Skip text recognition is the default: it needs no API key, sends nothing anywhere and
   // is the fast path, so the key field and the language pickers only appear once someone

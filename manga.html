@@ -70,6 +70,19 @@
       <label><input type="checkbox" class="fmt" value="xtch"> <span class="opt">XTCH</span>
         <span class="hint">Same, in 4-level grayscale. Twice the size.</span></label>
     </div>
+    <div id="manga-xtc-split-row">
+      <label for="manga-xtc-split">Split XTC/XTCH into parts</label>
+      <select id="manga-xtc-split" aria-describedby="manga-xtc-split-hint">
+        <option value="0">No, one file</option>
+        <option value="100">About 100 pages each</option>
+        <option value="150">About 150 pages each</option>
+        <option value="200">About 200 pages each</option>
+        <option value="300">About 300 pages each</option>
+        <option value="500">About 500 pages each</option>
+      </select>
+      <p class="hint" id="manga-xtc-split-hint">For readers that run out of memory on a big file. Parts
+      start at a chapter where one is close.</p>
+    </div>
   </div>
 
   <div class="card">

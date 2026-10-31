@@ -930,6 +930,25 @@ function metaFromFileName(name) {
   return { title: base, series: "", seriesIndex: null };
 }
 
+/* Where to cut a book of `total` pages into parts of about `size` pages, for readers that run out
+ * of memory on one big XTC/XTCH. Each cut lands on a chapter start when one lies within 40% of
+ * the target, so parts open at a chapter; otherwise it falls at the target. Returns the start
+ * index of every part (always beginning with 0). */
+function partStarts(total, size, chapterStarts = []) {
+  const starts = [0];
+  if (!(size > 0) || total <= size) return starts;
+  const chapters = [...new Set(chapterStarts)].filter((p) => p > 0 && p < total).sort((a, b) => a - b);
+  let start = 0;
+  while (total - start > size * 1.4) {
+    const target = start + size;
+    const near = chapters.filter((p) => p >= start + size * 0.6 && p <= start + size * 1.4);
+    const cut = near.length ? near.reduce((a, b) => (Math.abs(b - target) < Math.abs(a - target) ? b : a)) : target;
+    starts.push(cut);
+    start = cut;
+  }
+  return starts;
+}
+
 /* Pack a 1-bit mono buffer (1 = white) into a standard uncompressed BI_RGB BMP:
  * 14-byte file header, 40-byte BITMAPINFOHEADER, a 2-entry black/white palette,
  * then bottom-up rows padded to a 4-byte stride with MSB-first bit packing.
@@ -1427,7 +1446,7 @@ if (typeof module !== "undefined") {
     naturalSortKey, compareNaturalKeys, naturalSortPaths,
     grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
     floydSteinbergMono, floydSteinbergLevels, ditherMono, ditherLevels, DITHER_STYLES, validDitherStyle, stretchPaperAndInk, unsharpMask, encodeBmp1bit, encodeMonoBmpFromRGBA,
-    DITHER_GAMMAS, validDitherGamma, applyGrayGamma, metaFromFileName,
+    DITHER_GAMMAS, validDitherGamma, applyGrayGamma, metaFromFileName, partStarts,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
     yOverlapFrac, xOverlapFrac, sortPanelsReadingOrder,
     OCR_LANGUAGE_NAMES, ocrLanguageName, buildPanelOcrPrompt,
