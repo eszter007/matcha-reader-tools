@@ -448,6 +448,7 @@ details { margin-top: 0.8rem; }
 .choice-art .path { stroke: #d9480f; fill: #d9480f; }
 .choice-art .path > path:first-child { fill: none; stroke-width: 2; stroke-linejoin: round; }
 .choice-art .path .head { stroke: none; }
+.choice-art .panels rect.first { fill: color-mix(in srgb, #d9480f 22%, var(--card)); }
 .choice:has(input:checked) .choice-art .page { stroke: var(--matcha-dark); }
 .choice-sub { color: var(--muted); font-size: 0.8rem; }
 @media (max-width: 560px) { .choice-grid { grid-template-columns: 1fr 1fr; } }
