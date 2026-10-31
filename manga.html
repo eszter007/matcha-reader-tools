@@ -32,11 +32,12 @@
 </header>
 <main id="main" tabindex="-1">
   <h2 class="with-icon"><svg class="title-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0"/><path d="M3 6l0 13"/><path d="M12 6l0 13"/><path d="M21 6l0 13"/></svg>Manga Converter</h2>
-  <p class="lede">Turns a manga, manhua or comic into a book you read panel by panel on your Matcha
-  Reader. Everything runs in your browser; your pages are not uploaded anywhere.</p>
+  <p class="lede">Turns a manga, manhua or comic into an e-reader book that reads panel by panel. Matcha Reader
+  adds dictionary lookup, translations and panel zoom. Everything runs in the browser; pages are
+  not uploaded anywhere.</p>
 
   <div class="card">
-    <h3>1. Choose your manga</h3>
+    <h3>1. Choose a manga</h3>
     <label class="filebtn">
       <span id="manga-file-label">Tap to choose a .cbz / .zip / .epub / .pdf — or select page images</span>
       <input type="file" id="manga-file" multiple
@@ -54,7 +55,7 @@
   <div class="card">
     <h3>2. Format and device</h3>
     <div id="manga-format">
-    <div class="subhead" id="fmt-matcha-title">For your Matcha Reader</div>
+    <div class="subhead" id="fmt-matcha-title">For Matcha Reader</div>
     <div class="checks stacked" role="group" aria-labelledby="fmt-matcha-title">
       <label><input type="checkbox" class="fmt" value="matchafile"> <span class="opt"><code>.matcha</code> file <span class="badge">recommended</span></span>
         <span class="hint">Panel-by-panel reading with offline dictionary lookup and translations. One file,
@@ -91,7 +92,7 @@
       start at a chapter where one is close.</p>
     </div>
     <div class="field-gap"></div>
-    <label for="manga-res">Your device <span class="hint">(sets the page size)</span></label>
+    <label for="manga-res">Device <span class="hint">(sets the page size)</span></label>
     <select id="manga-res">
       <option value="">Please select</option>
       <optgroup label="480 × 800">
@@ -113,7 +114,7 @@
       </optgroup>
       <optgroup label="Other">
         <option value="full">Full resolution — High file size</option>
-        <option value="custom">Custom — enter your own size</option>
+        <option value="custom">Custom — enter a size</option>
       </optgroup>
     </select>
     <div class="res-custom" id="manga-res-custom" hidden>
@@ -178,7 +179,7 @@
       <div class="checks stacked">
         <label id="manga-yolo-row"><input type="checkbox" id="manga-yolo" checked> <span class="opt">AI panel detection</span>
           <span class="hint">Spots panels more reliably, including ones without white borders. It
-          runs here in your browser: your pages are not uploaded anywhere and no AI company sees
+          runs here in the browser: pages are not uploaded anywhere and no AI company sees
           them. The detector is downloaded once from this site (~21&nbsp;MB) and kept for next time.
           Untick to use the faster white-border detection instead.</span></label>
         <label id="manga-rotate-row"><input type="checkbox" id="manga-rotate-panels" checked> <span class="opt">Rotate wide panels to portrait</span>
@@ -245,7 +246,7 @@
     <div class="checks stacked">
       <label><input type="checkbox" id="manga-no-ocr" checked> <span class="opt">Skip text recognition</span>
         <span class="hint">Finds the panels but doesn't read the text. No API key, nothing leaves
-        your browser, much faster. You lose dictionary lookup and translations on the device.
+        the browser, much faster. Without it, dictionary lookup and translations on the device are off.
         Untick to have Gemini read each panel.</span></label>
     </div>
 
@@ -359,7 +360,7 @@
           <option value="uk">Ukrainian</option>
           <option value="vi">Vietnamese</option>
         </datalist>
-        <p class="hint" id="manga-language-hint">Splits your reading stats by language and tells text
+        <p class="hint" id="manga-language-hint">Splits reading stats by language and tells text
         recognition what to expect. Most files don't say; fill it in.</p>
       </div>
       <div>
@@ -389,7 +390,7 @@
     <h3>Install on the device</h3>
     <p>Copy the <code>.matcha</code> file anywhere on the SD card, by card reader or over the
     reader's Wi-Fi file transfer. <code>/manga/</code> is a nice convention. A <code>.matcha</code>
-    is a normal zip: rename it to <code>.zip</code> to unpack it on your computer.</p>
+    is a normal zip: rename it to <code>.zip</code> to unpack it on a computer.</p>
     <p>The legacy download is a zip holding one folder, named after the title. Unzip it onto the
     card; the device finds any folder containing <code>panels.idx</code>, at any depth.</p>
   </div>

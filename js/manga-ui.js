@@ -524,9 +524,9 @@ function customResTarget() {
  * full resolution is the one that needs a warning rather than a description. */
 const RES_HINT_DEFAULT = "Downscales to the device screen: smaller download, faster page turns, " +
   "no visible quality loss. Never upscales.";
-const RES_HINT_FULL = "Warning: high file size — don't use this if you want to read the book on " +
+const RES_HINT_FULL = "Warning: high file size — not suited to reading on " +
   "an Xteink device.";
-const RES_HINT_CUSTOM = "Downscales to the size you enter, for a screen that isn't listed above. " +
+const RES_HINT_CUSTOM = "Downscales to the entered size, for a screen that isn't listed above. " +
   "Never upscales. XTCH also needs a height that is a multiple of 8.";
 
 /* Keep the hint and the custom width/height fields in step with the dropdown: the fields only
@@ -556,7 +556,7 @@ const BOOK_TYPE_HINTS = {
       "bottom, then the column to its right.",
 };
 
-const YOLO_HINT = "Runs the YOLO26 model in your browser, ~21 MB once, then cached. " +
+const YOLO_HINT = "Runs the YOLO26 model in the browser, ~21 MB once, then cached. " +
   "Untick for the faster white-gutter heuristic.";
 const YOLO_HINT_WEBTOON = "Not used for webtoons. Their panels come from the strip's gutters, " +
   "and the model only finds bordered panels on a page.";
@@ -967,15 +967,15 @@ function updateRunSummary() {
   const formats = [...selectedFormats()];
   const res = $("manga-res");
   const missing = [];
-  if (!files || !files.length) missing.push("your manga");
+  if (!files || !files.length) missing.push("a manga");
   if (!formats.length) missing.push("a format");
   if (!validBookType($("manga-booktype").value)) missing.push("the book type");
-  if (!validResChoice(res.value)) missing.push("your device");
+  if (!validResChoice(res.value)) missing.push("a device");
   // The panel check needs a single book and its reading order; say so instead of failing on click.
   const checkBtn = $("panel-check-btn");
   if (!panelCheckRunning) {
     const bt = validBookType($("manga-booktype").value);
-    const why = !files || !files.length ? "Choose your manga and how it reads first."
+    const why = !files || !files.length ? "Choose a manga and how it reads first."
       : !bt ? "Choose how it reads first."
       : bt === BOOK_WEBTOON ? "Not needed for webtoons: their panels come from the strip's gutters."
       : splitIntoBooks(files).length > 1 ? "Works on one book at a time."
@@ -1300,7 +1300,7 @@ async function runMangaConversion() {
         // Panels fixed by hand in the panel check replace what the detector found.
         const edited = panelEdits.get(page.name);
         const boxes = edited ? scaleBoxes(edited.boxes, edited.w, edited.h, imgW, imgH) : prep.boxes;
-        if (edited) logLine(`  Using ${boxes.length} panel(s) you set in the panel check.`);
+        if (edited) logLine(`  Using ${boxes.length} panel(s) set in the panel check.`);
 
         // Panel boxes stay in resized page space (panels.idx records the page at that
         // size); only the crop comes from the original, so map the rect back across.
@@ -1621,14 +1621,14 @@ async function runMangaConversion() {
         const only = extras[0];
         const blob = new Blob([only.bytes], { type: only.type });
         logLine(`${summary} — ${formatBytes(blob.size)}`);
-        logLine(`Copy "${only.name}" to your reader.`);
+        logLine(`Copy "${only.name}" to the reader.`);
         downloadBlob(blob, only.name);
       } else if (extras.length) {
         const outZip = new ZipWriter();
         for (const e of extras) outZip.addFile(e.name, e.bytes);
         const blob = outZip.toBlob();
         logLine(`${summary} — ${formatBytes(blob.size)}`);
-        logLine(`Unzip and copy ${extras.map((e) => `"${e.name}"`).join(" / ")} to your reader.`);
+        logLine(`Unzip and copy ${extras.map((e) => `"${e.name}"`).join(" / ")} to the reader.`);
         downloadBlob(blob, `${folder}.zip`);
       } else {
         throw new Error("Nothing to export: no pages were produced");
@@ -1801,7 +1801,7 @@ function renderPanelGrid() {
       btn.append(note);
     }
     btn.setAttribute("aria-label", `Page ${i + 1}, ${n} panel${n === 1 ? "" : "s"}` +
-      (edited ? ", fixed by you" : flag ? `, worth a look: ${p.reason}` : ""));
+      (edited ? ", fixed by hand" : flag ? `, worth a look: ${p.reason}` : ""));
     btn.addEventListener("click", () => openPanelEditor(i));
     li.append(btn);
     grid.append(li);
@@ -1813,7 +1813,7 @@ function renderPanelGrid() {
 
 async function runPanelCheck() {
   const files = $("manga-file").files;
-  if (!files || !files.length) { logValidation("Choose your manga first."); return; }
+  if (!files || !files.length) { logValidation("Choose a manga first."); return; }
   if (splitIntoBooks(files).length > 1) { logValidation("The panel check works on one book at a time."); return; }
   const btn = $("panel-check-btn");
   btn.disabled = true;
