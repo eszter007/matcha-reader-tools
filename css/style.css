@@ -435,7 +435,7 @@ details { margin-top: 0.8rem; }
 .choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.5rem; }
 .choice { position: relative; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; align-content: center; column-gap: 0.8rem; row-gap: 0.1rem; margin: 0; padding: 0.65rem 0.8rem;
   border-radius: 10px; background: var(--card); box-shadow: 0 0 0 1px var(--control-border); cursor: pointer;
-  transition: box-shadow .15s, background-color .15s; }
+  transition: box-shadow .15s; }
 .choice input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
 .choice:hover { box-shadow: 0 0 0 1px var(--matcha-dark); }
 .choice:has(input:checked) { background: var(--matcha-light); box-shadow: 0 0 0 2px var(--matcha-dark); }
@@ -452,6 +452,7 @@ details { margin-top: 0.8rem; }
 .choice-art .step circle { fill: var(--matcha); }
 .choice-art .step text { fill: var(--on-matcha); font: 700 8px system-ui, sans-serif; text-anchor: middle; }
 .choice:has(input:checked) .choice-art .page { stroke: var(--matcha-dark); }
+.choice:has(input:checked) .choice-sub { color: var(--label); }
 .choice-sub { color: var(--muted); font-size: 0.8rem; }
 
 
