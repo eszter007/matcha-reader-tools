@@ -151,21 +151,20 @@
     <div class="notice warn" id="notice-booktype" hidden></div>
 
 
-    <div class="callout-group">
-      <label class="callout panel-only-row">
-        <input type="checkbox" id="manga-panels-only" aria-describedby="panels-only-hint">
-        <span class="callout-text">
-          <span class="callout-title">Panels only</span>
-          <span class="hint" id="panels-only-hint">Skip the full pages: a smaller book that opens straight into panels. The cover and pages with missed art keep their full page.</span>
-        </span>
-      </label>
-      <div class="callout panel-check-row">
+    <p class="field-label" id="content-title">What goes in the book?</p>
+    <div class="choice-grid" role="radiogroup" aria-labelledby="content-title">
+      <label class="choice"><input type="radio" name="pagemode" value="full"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="0.5" y="0.5" width="59" height="83" rx="3"/><g class="panels"><rect x="4" y="4" width="24" height="22" rx="1.5"/><rect x="32" y="4" width="24" height="22" rx="1.5"/><rect x="4" y="30" width="52" height="24" rx="1.5"/><rect x="4" y="58" width="24" height="22" rx="1.5"/><rect x="32" y="58" width="24" height="22" rx="1.5"/></g></svg><span class="choice-title">Pages and panels</span><span class="choice-sub">Full page, then its panels</span></label>
+      <label class="choice"><input type="radio" name="pagemode" value="panels"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><g class="panels loose"><rect x="6" y="3" width="48" height="22" rx="2"/><rect x="6" y="31" width="48" height="22" rx="2"/><rect x="6" y="59" width="48" height="22" rx="2"/></g></svg><span class="choice-title">Panels only</span><span class="choice-sub">Smaller, opens in panels</span></label>
+    </div>
+    <input type="checkbox" id="manga-panels-only" hidden aria-hidden="true" tabindex="-1">
+    <p class="hint">With panels only, the cover and pages whose panels miss art still keep their full page.</p>
+
+    <div class="callout panel-check-row">
       <div class="callout-text">
         <span class="callout-title">Check the panels <span class="hint">· optional</span></span>
         <span class="hint" id="panel-check-hint">See where they are and fix wrong ones before converting.</span>
       </div>
       <button type="button" class="secondary" id="panel-check-btn" aria-describedby="panel-check-hint">Check panels</button>
-    </div>
     </div>
     <div id="panel-check" hidden>
       <div class="panel-check-bar">

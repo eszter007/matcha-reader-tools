@@ -552,8 +552,5 @@ footer .legal { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid v
 .checks label.disabled { opacity: 0.5; }
 .checks label.disabled input { cursor: not-allowed; }
 
-.callout-group { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 0.8rem 0; }
-.callout-group > .callout { margin: 0; border: 0; border-radius: 0; }
-.callout-group > .callout + .callout { border-top: 1px solid var(--border); }
-.panel-only-row { flex-wrap: nowrap; justify-content: flex-start; cursor: pointer; }
-.panel-only-row input { margin: 0.2rem 0 0; align-self: flex-start; flex: none; }
+#content-title { margin-top: 1.3rem; }
+.choice-art .panels.loose rect { stroke: var(--matcha); }

@@ -2278,6 +2278,17 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
       sel.dispatchEvent(new Event("change", { bubbles: true }));
     });
   }
+  const panelsOnlyBox = $("manga-panels-only");
+  const syncPageMode = () => {
+    for (const r of document.querySelectorAll('input[name="pagemode"]')) r.checked = (r.value === "panels") === panelsOnlyBox.checked;
+  };
+  for (const r of document.querySelectorAll('input[name="pagemode"]')) {
+    r.addEventListener("change", () => {
+      panelsOnlyBox.checked = r.value === "panels";
+      panelsOnlyBox.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+  syncPageMode();
   $("manga-booktype").addEventListener("change", clearValidationWarnings);
   $("manga-booktype").addEventListener("change", applyBookTypeUi);
   $("manga-res").addEventListener("change", clearValidationWarnings);
