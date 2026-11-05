@@ -36,6 +36,12 @@ above needs no environment variable. Set it if the firmware lives elsewhere.
 `gen_references.py` prints `SKIPPED (...)` for anything it cannot build and carries on.
 A partial install is fine — you just get fewer comparisons.
 
+The references are only as new as that firmware checkout. Point `MATCHA_READER` at an
+up-to-date `develop`, and run `gen_references.py` again whenever the firmware's Python tools
+change. A stale checkout shows up as byte differences that look like JS bugs: on 6 Nov 2026,
+12 Chinese dictionary and pinyin cases failed against a September checkout and all passed once
+the references were rebuilt from `develop`.
+
 ## Running
 
 ```sh
