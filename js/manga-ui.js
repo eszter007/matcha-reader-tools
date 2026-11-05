@@ -21,7 +21,7 @@ function validBookType(v) { return BOOK_TYPES.includes(v) ? v : ""; }
 
 const EXT_MIME = {
   ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-  ".webp": "image/webp", ".bmp": "image/bmp",
+  ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp",
 };
 
 async function decodeImage(bytes, ext) {
@@ -316,7 +316,49 @@ async function collectFromPdf(bytes, name) {
   };
 }
 
+const isMokuroName = (name) => /\.mokuro$/i.test(name);
+
+/* A Mokuro volume picked as its .mokuro file plus the page images. Images are matched by path
+ * (from a folder pick) or, failing that, by file name. */
+async function collectFromMokuroFiles(files) {
+  const mokuroFiles = files.filter((f) => isMokuroName(f.name));
+  if (mokuroFiles.length !== 1) throw new Error("Pick one .mokuro file with its page images (one volume at a time).");
+  const volume = parseMokuroVolume(new TextDecoder().decode(await readFileBytes(mokuroFiles[0])), mokuroFiles[0].name);
+  const images = files.filter((f) => isImageName(f.name));
+  const byPath = new Map(images.map((f) => [pathNorm(f.webkitRelativePath || f.name), f]));
+  const byName = new Map(images.map((f) => [f.name, f]));
+  return mokuroCollected(volume, mokuroFiles[0].name, (rel) => {
+    const f = [...byPath.entries()].find(([p]) => p.endsWith(`${volume.folder}/${rel}`))?.[1] || byName.get(baseName(rel));
+    return f ? () => readFileBytes(f) : null;
+  });
+}
+
+/* A Mokuro volume in a .zip/.cbz: the .mokuro file with its image folder beside it. */
+async function collectFromMokuroZip(zip, mokuroEntry, fileName) {
+  const volume = parseMokuroVolume(new TextDecoder().decode(await zip.readEntry(mokuroEntry)), mokuroEntry.name);
+  const dir = pathDirname(pathNorm(mokuroEntry.name));
+  const byPath = new Map(zip.entries.filter((e) => !e.isDir).map((e) => [pathNorm(e.name), e]));
+  return mokuroCollected(volume, fileName, (rel) => {
+    const e = byPath.get(pathJoinNorm(dir, `${volume.folder}/${rel}`));
+    return e ? () => zip.readEntry(e) : null;
+  });
+}
+
+function mokuroCollected(volume, label, readerFor) {
+  const pages = [];
+  for (const p of volume.pages) {
+    const read = readerFor(p.imgPath);
+    if (!read) { logLine(`Page image ${p.imgPath} not found next to the .mokuro file; skipped.`, "warn"); continue; }
+    pages.push({ name: p.imgPath, read, mokuro: p });
+  }
+  if (!pages.length) throw new Error(`None of the pages listed in ${baseName(label)} were found. ` +
+    `Its image folder (${volume.folder}/) must be included.`);
+  logLine(`Mokuro volume: ${pages.length} page(s) with their text already read, so Gemini is not used.`);
+  return { pages, meta: mokuroMeta(volume), tocEntries: [], sourceLabel: baseName(label), mokuro: true };
+}
+
 async function collectPagesFromInput(files) {
+  if ([...files].some((f) => isMokuroName(f.name))) return collectFromMokuroFiles([...files]);
   if (files.length === 1 && !isImageName(files[0].name)) {
     const ext = mangaFileExt(files[0].name);
     const bytes = await readFileBytes(files[0]);
@@ -340,6 +382,9 @@ async function collectPagesFromInput(files) {
 
 async function collectFromCbz(bytes, fileName) {
   const zip = new ZipReader(bytes);
+  const mokuroEntries = zip.entries.filter((e) => !e.isDir && isMokuroName(e.name));
+  if (mokuroEntries.length > 1) throw new Error(`${fileName} holds ${mokuroEntries.length} Mokuro volumes; zip one volume at a time.`);
+  if (mokuroEntries.length === 1) return collectFromMokuroZip(zip, mokuroEntries[0], fileName);
   // Keyed by FULL path, not basename. Archives that give each chapter its own folder
   // restart page numbering inside it, so ch01/001.jpg and ch08/001.jpg share a basename
   // -- flattening on that silently kept only the last one, dropping most of the book and
@@ -608,7 +653,29 @@ function applyOcrUi() {
   if (fields) fields.hidden = $("manga-no-ocr").checked;
 }
 
-const mangaState = { running: false, cancelled: false };
+// mokuroInput: the chosen files are Mokuro volumes, which bring their own text (no Gemini).
+const mangaState = { running: false, cancelled: false, mokuroInput: false };
+
+/* Whether the selection is Mokuro: a .mokuro file, or archives naming one. An archive's file
+ * list sits at its end, so only the last 256 KB are read rather than the whole book. */
+async function selectionIsMokuro(files) {
+  const list = [...files];
+  if (list.some((f) => isMokuroName(f.name))) return true;
+  const archives = list.filter((f) => [".zip", ".cbz"].includes(mangaFileExt(f.name)));
+  if (!archives.length || archives.length !== list.length) return false;
+  const needle = new TextEncoder().encode(".mokuro");
+  for (const f of archives) {
+    const tail = new Uint8Array(await f.slice(Math.max(0, f.size - 262144)).arrayBuffer());
+    let found = false;
+    for (let i = 0; i + needle.length <= tail.length && !found; i++) {
+      let j = 0;
+      while (j < needle.length && (tail[i + j] | 0x20) === needle[j]) j++;
+      found = j === needle.length;
+    }
+    if (!found) return false;
+  }
+  return true;
+}
 
 /* Assemble the collected page/panel images into a fixed-layout EPUB 3 (a zip
  * with the mandatory STORE-first mimetype). epubPages is [{pageIdx, images:
@@ -735,8 +802,9 @@ function applyFormatVisibility() {
   const nothingPicked = f.size === 0;
   const matcha = nothingPicked || f.has("matcha") || f.has("matchafile");
   const show = (id, on) => { const el = document.getElementById(id); if (el) el.hidden = !on; };
-  show("card-ocr", matcha);
-  show("notice-ocr", matcha);
+  // A Mokuro volume already has its text, so the Gemini card has nothing to do.
+  show("card-ocr", matcha && !mangaState.mokuroInput);
+  show("notice-ocr", matcha && !mangaState.mokuroInput);
   show("card-install", matcha);
   show("card-book", matcha || nothingPicked || f.has("epub") || f.has("pdf") || f.has("xtc") || f.has("xtch"));
   show("manga-mono-row", matcha);
@@ -803,6 +871,8 @@ async function preparePage(page, o) {
   const srcBytes = await page.read();
   let ext = mangaFileExt(page.name);
   let bitmap = await decodeImage(srcBytes, ext);
+  const srcW = bitmap.width, srcH = bitmap.height;
+  let trimX = 0, trimY = 0;
 
   // Crop the blank paper border (and the page number sitting in it) before anything
   // else, so every coordinate downstream lives in the trimmed page's space. It fills
@@ -818,6 +888,7 @@ async function preparePage(page, o) {
     const box = trimMarginsBox(gray, bitmap.width, bitmap.height);
     if (box) {
       const [tx1, ty1, tx2, ty2] = box;
+      trimX = tx1; trimY = ty1;
       const cropped = makeCanvas(tx2 - tx1, ty2 - ty1);
       const cctx = cropped.getContext("2d");
       cctx.fillStyle = "#ffffff";
@@ -855,6 +926,17 @@ async function preparePage(page, o) {
 
   const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
 
+  // A Mokuro page's text, in its source image's pixels: undo the trim, then scale to the page.
+  let pageText = null;
+  if (page.mokuro) {
+    const kx = page.mokuro.width ? srcW / page.mokuro.width : 1;
+    const ky = page.mokuro.height ? srcH / page.mokuro.height : 1;
+    const sx = imgW / origW, sy = imgH / origH;
+    const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
+    pageText = mokuroTextBlocks(page.mokuro.blocks,
+      (x, y) => [clamp((x * kx - trimX) * sx, imgW), clamp((y * ky - trimY) * sy, imgH)]);
+  }
+
   let boxes = null;
   if (o.detect === false) {
     // The panel editor only needs the page image.
@@ -879,13 +961,16 @@ async function preparePage(page, o) {
       const gray = grayFromRGBA(rgba, imgW, imgH);
       boxes = detectPanelsGrid(gray, imgW, imgH);
     }
+    if (!boxes.length) boxes = [[0, 0, imgW, imgH]];
+    // Mokuro's blocks mark the bubbles too, so panel crops grow over them.
+    if (pageText) textBoxes = textBoxes.concat(pageText.map((b) => b.box));
     // Order on the frames as drawn -- growing a box moves its centre, which
     // sortPanelsReadingOrder() tiers and orders on -- then grow the crops over the
     // bubbles. yoloExpandPanelsOverText() is index-preserving, so the order survives.
     boxes = sortPanelsReadingOrder(boxes, o.rtl, o.columnMajor);
     boxes = yoloExpandPanelsOverText(boxes, textBoxes, imgW, imgH);
   }
-  return { srcBytes, ext, bitmap, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba, boxes };
+  return { srcBytes, ext, bitmap, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba, boxes, pageText };
 }
 
 /* ── Image clean-up ───────────────────────────────────────────────── */
@@ -1126,7 +1211,7 @@ async function runMangaConversion() {
 
   const apiKey = $("manga-key").value.trim();
   const model = $("manga-model").value.trim() || GEMINI_DEFAULT_MODEL;
-  if (!noOcr && !apiKey) {
+  if (!noOcr && !apiKey && !mangaState.mokuroInput) {
     logValidation("Enter a Gemini API key, or tick \"Skip text recognition\" for panels-only output.");
     return;
   }
@@ -1183,6 +1268,11 @@ async function runMangaConversion() {
       logLine("Collecting pages…");
       collected = await collectPagesFromInput(files);
       let pages = collected.pages;
+      // A Mokuro volume brings its own text, so Gemini is never called for it.
+      const bookNoOcr = noOcr || !!collected.mokuro;
+      if (collected.mokuro && isWebtoon) {
+        throw new Error("Webtoon re-cuts the pages, which would separate Mokuro's text from its page. Pick another book type.");
+      }
 
       // Resolve TOC before any max-pages truncation (indices stay correct).
       let tocEntries = collected.tocEntries;
@@ -1262,7 +1352,7 @@ async function runMangaConversion() {
       const ocrSourceLang = metaLanguage;
       const ocrTargetLang = $("manga-ocr-out").value || "en";
       const ocrPrompt = buildPanelOcrPrompt(ocrSourceLang, ocrTargetLang, rtl && !isWebtoon);
-      if (!noOcr && !ocrSourceLang) {
+      if (!bookNoOcr && !ocrSourceLang) {
         logLine("No book language set, so the model is not told which one to expect. " +
           "Filling in Language in Book details improves recognition.", "warn");
       }
@@ -1440,7 +1530,7 @@ async function runMangaConversion() {
               // OCR still reads a full-colour JPEG crop: the dithered BMP would
               // only hurt text recognition (the --mono guidance to pair with
               // --no-ocr still applies, but OCR stays usable when both are on).
-              if (!noOcr) cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
+              if (!bookNoOcr) cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
             } else {
               cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
               if (matchaFolder) addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
@@ -1466,7 +1556,7 @@ async function runMangaConversion() {
               if (v.xtch) xtchPages.push(v.xtch);
             }
           }
-          if (!cropBytes && !noOcr) {
+          if (!cropBytes && !bookNoOcr) {
             // A full-page panel has no crop, but its text still needs reading: a splash page, or
             // every page when detection finds no borders (the grid fallback without the AI model),
             // used to come through with no text and so no word lookup at all. OCR the same margin
@@ -1482,13 +1572,14 @@ async function runMangaConversion() {
         if (epub) epubPages.push({ pageIdx, images: epubImages });
 
         let ocrResults;
-        if (!noOcr) {
+        if (!bookNoOcr) {
           ocrResults = await mapLimit(panelCrops, Math.min(8, Math.max(1, panelCrops.length)),
             (crop) => crop ? geminiOcrPanel(crop, apiKey, model, ocrPrompt) : Promise.resolve({ blocks: [], translation: "" }));
         } else {
           ocrResults = panelCrops.map(() => ({ blocks: [], translation: "" }));
         }
 
+        const mokuroOwned = prep.pageText ? assignBlocksToPanels(prep.pageText, boxes) : null;
         const panelsWithText = [];
         for (let panelIdx = 0; panelIdx < boxes.length; panelIdx++) {
           const [x1, y1, x2, y2] = boxes[panelIdx];
@@ -1496,7 +1587,7 @@ async function runMangaConversion() {
           const ocr = ocrResults[panelIdx];
           const panelW = mx2 - mx1, panelH = my2 - my1;
 
-          const textBlocks = [];
+          const textBlocks = mokuroOwned ? mokuroOwned[panelIdx].slice() : [];
           for (const b of ocr.blocks || []) {
             const text = String(b.text ?? "").trim();
             if (!text) continue;
@@ -1589,7 +1680,7 @@ async function runMangaConversion() {
 
       setProgress(pagesDone, pages.length, "Packaging…");
       const summary = `Done: ${pagesDone} pages, ${totalPanels} panels` +
-        (noOcr ? "" : `, ${totalTextBlocks} text blocks`) +
+        (bookNoOcr && !collected.mokuro ? "" : `, ${totalTextBlocks} text blocks`) +
         (deviceTarget ? `, ${deviceTarget[0]}×${deviceTarget[1]}` : "") +
         (mono && matchaFolder ? ", 1-bit dithered BMP" : "") +
         (pagesKeptForCoverage ? `, ${pagesKeptForCoverage} full page(s) kept where panels missed content` : "");
@@ -2284,7 +2375,14 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-cancel").addEventListener("click", () => { mangaState.cancelled = true; });
   $("manga-file").addEventListener("change", () => {
     const files = $("manga-file").files;
+    mangaState.mokuroInput = false;
+    applyFormatVisibility();
     if (files.length) {
+      selectionIsMokuro(files).then((isMokuro) => {
+        if ($("manga-file").files !== files) return;  // a newer pick replaced this one
+        mangaState.mokuroInput = isMokuro;
+        applyFormatVisibility();
+      }).catch(() => {});
       const bookCount = splitIntoBooks(files).length;
       $("manga-file-label").textContent = files.length === 1 ? files[0].name
         : bookCount > 1 ? `${bookCount} books selected, converted one after another` : `${files.length} files selected`;

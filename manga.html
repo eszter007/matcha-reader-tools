@@ -39,9 +39,9 @@
   <div class="card">
     <h3>1. Choose a manga</h3>
     <label class="filebtn">
-      <span id="manga-file-label">Tap to choose a .cbz / .zip / .epub / .pdf — or select page images</span>
+      <span id="manga-file-label">Tap to choose a .cbz / .zip / .epub / .pdf / .mokuro — or select page images</span>
       <input type="file" id="manga-file" multiple
-             accept=".cbz,.zip,.epub,.pdf,application/pdf,image/jpeg,image/png,image/webp,image/bmp">
+             accept=".cbz,.zip,.epub,.pdf,.mokuro,application/pdf,image/jpeg,image/png,image/webp,image/avif,image/bmp">
     </label>
     <p class="hint">One book, or several at once for a whole series.</p>
     <details>
@@ -49,6 +49,14 @@
       <p class="hint">By file name, cover and copyright first. A .cbz or .zip with a folder per chapter
       gets one chapter per folder (or the chapters its ComicInfo.xml marks). EPUBs use their spine
       order and table of contents. PDFs use document order, rasterized at 2×.</p>
+    </details>
+    <details>
+      <summary>Manga already read with Mokuro</summary>
+      <p class="hint">A <a href="https://github.com/kha-white/mokuro" target="_blank" rel="noopener">Mokuro</a>
+      volume already has its text, so no Gemini key is needed and step 4 disappears. Zip the
+      <code>.mokuro</code> file together with its image folder (<code>vol1.mokuro</code> and
+      <code>vol1/</code>) and choose the zip, or choose the <code>.mokuro</code> file and all its
+      page images at once. Pages are read in the order the <code>.mokuro</code> file lists them.</p>
     </details>
   </div>
 

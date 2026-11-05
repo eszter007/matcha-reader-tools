@@ -17,7 +17,7 @@ const META_FORMAT_VERSION = 1;
  * convert_manga.py:PANEL_CROP_SUBDIR. The device still reads the older flat layout. */
 const PANEL_CROP_SUBDIR = "panels";
 
-const MANGA_IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp"]);
+const MANGA_IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".avif", ".bmp"]);
 
 const mangaEncoder = new TextEncoder();
 
@@ -1510,6 +1510,93 @@ function parseTocText(text) {
   return { entries, warnings };
 }
 
+/* ── Mokuro input ────────────────────────────────────────────────────────────
+ * Mokuro (https://github.com/kha-white/mokuro) writes <volume>.mokuro beside the <volume>/ folder
+ * of page images. Pages are listed in reading order, each with its text blocks in the source
+ * image's pixels: a block box, a vertical flag, and one quad and one string per printed line.
+ * Matches convert_manga.py's load_mokuro / mokuro_text_blocks / assign_blocks_to_panels. */
+
+function parseMokuroVolume(jsonText, fileName) {
+  const data = JSON.parse(jsonText);
+  const pages = Array.isArray(data.pages) ? data.pages : [];
+  if (!pages.length) throw new Error(`${fileName} lists no pages`);
+  const stem = baseName(fileName).replace(/\.mokuro$/i, "");
+  return {
+    title: String(data.title || ""),
+    volume: String(data.volume || stem),
+    // The image folder is named after the .mokuro file.
+    folder: stem,
+    pages: pages.map((p) => ({
+      imgPath: String(p.img_path || ""),
+      width: Number(p.img_width) || 0,
+      height: Number(p.img_height) || 0,
+      blocks: Array.isArray(p.blocks) ? p.blocks : [],
+    })).filter((p) => p.imgPath),
+  };
+}
+
+/* Series name, title ("series volume") and volume number; Mokuro only reads Japanese. */
+function mokuroMeta(volume) {
+  const series = volume.title;
+  const title = series ? `${series} ${volume.volume}`.trim() : volume.volume;
+  const m = /\d+(?:\.\d+)?/.exec(volume.volume);
+  return { title, author: "", language: "ja", series, seriesIndex: m && series ? parseFloat(m[0]) : null };
+}
+
+/* Mokuro blocks as text blocks in output page space. toPage(x, y) maps a source-image point to
+ * the written page. A block keeps its line boxes only when every line has a quad and some text. */
+function mokuroTextBlocks(blocks, toPage) {
+  const out = [];
+  for (const block of blocks) {
+    const texts = (Array.isArray(block.lines) ? block.lines : []).map((t) => String(t).replace(/\n/g, "").trim());
+    if (!texts.some(Boolean)) continue;
+    const box = block.box;
+    if (!Array.isArray(box) || box.length !== 4) continue;
+    const [x1, y1] = toPage(box[0], box[1]);
+    const [x2, y2] = toPage(box[2], box[3]);
+    let lines = [];
+    const quads = Array.isArray(block.lines_coords) ? block.lines_coords : [];
+    if (quads.length === texts.length && texts.every(Boolean)) {
+      for (const quad of quads) {
+        const xs = quad.map((pt) => pt[0]), ys = quad.map((pt) => pt[1]);
+        const [lx1, ly1] = toPage(Math.min(...xs), Math.min(...ys));
+        const [lx2, ly2] = toPage(Math.max(...xs), Math.max(...ys));
+        if (lx2 <= lx1 || ly2 <= ly1) { lines = []; break; }
+        lines.push([lx1, ly1, lx2, ly2]);
+      }
+    }
+    const text = lines.length ? texts.join("\n") : texts.join("");
+    out.push({ box: [x1, y1, x2, y2], text, lines: lines.slice(0, 255), vertical: !!block.vertical });
+  }
+  return out;
+}
+
+/* Each block goes to the panel holding its centre, else the one it overlaps most, else the
+ * nearest. Blocks keep their Mokuro order within a panel. */
+function assignBlocksToPanels(blocks, panels) {
+  const owned = panels.map(() => []);
+  if (!panels.length) return owned;
+  const overlap = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) *
+    Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+  for (const b of blocks) {
+    const [bx1, by1, bx2, by2] = b.box;
+    const cx = (bx1 + bx2) / 2, cy = (by1 + by2) / 2;
+    let best = panels.findIndex(([x1, y1, x2, y2]) => x1 <= cx && cx < x2 && y1 <= cy && cy < y2);
+    if (best < 0) {
+      const overlaps = panels.map((p) => overlap(b.box, p));
+      const most = Math.max(...overlaps);
+      if (most > 0) {
+        best = overlaps.indexOf(most);
+      } else {
+        const dist = (p) => ((p[0] + p[2]) / 2 - cx) ** 2 + ((p[1] + p[3]) / 2 - cy) ** 2;
+        best = panels.reduce((bi, p, i) => (dist(p) < dist(panels[bi]) ? i : bi), 0);
+      }
+    }
+    owned[best].push(b);
+  }
+  return owned;
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     MANGA_FORMAT_VERSION, isImageName, baseName, mangaFileExt,
@@ -1530,5 +1617,6 @@ if (typeof module !== "undefined") {
     epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo, comicInfoBookmarks, chaptersFromFolders,
     xmlUnescape,
     epubTocFromNav, epubTocFromNcx, epubNavHref, epubNcxHref, parseTocText,
+    parseMokuroVolume, mokuroMeta, mokuroTextBlocks, assignBlocksToPanels,
   };
 }

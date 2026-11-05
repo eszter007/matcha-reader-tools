@@ -1332,6 +1332,49 @@ function testXtc() {
   }
 }
 
+function testMangaMokuro() {
+  console.log("\n== manga Mokuro input ==");
+  // A real block from Mokuro's own test volume (vol1.mokuro, page 001a.jpg, 827x1170).
+  const block = {
+    box: [688, 26, 718, 161], vertical: true, font_size: 24,
+    lines_coords: [[[688.0, 26.0], [712.0, 26.0], [715.0, 161.0], [691.0, 161.0]]],
+    lines: ["すごいのハッ"],
+  };
+  const id = (x, y) => [Math.trunc(x), Math.trunc(y)];
+  const [b] = manga.mokuroTextBlocks([block], id);
+  check("mokuro block keeps its text", b.text === "すごいのハッ");
+  check("mokuro block box", JSON.stringify(b.box) === "[688,26,718,161]");
+  check("mokuro line box is the quad's bounds", JSON.stringify(b.lines) === "[[688,26,715,161]]");
+  check("mokuro vertical flag", b.vertical === true);
+  const [half] = manga.mokuroTextBlocks([block], (x, y) => [Math.trunc(x / 2), Math.trunc(y / 2)]);
+  check("mokuro boxes follow the page resize", JSON.stringify(half.box) === "[344,13,359,80]" &&
+    JSON.stringify(half.lines) === "[[344,13,357,80]]");
+  const two = { ...block, lines: ["あの", "田舎とかに"],
+    lines_coords: [[[700, 10], [720, 10], [720, 60], [700, 60]], [[670, 10], [690, 10], [690, 120], [670, 120]]] };
+  const [joined] = manga.mokuroTextBlocks([two], id);
+  check("mokuro lines join in order", joined.text === "あの\n田舎とかに" && joined.lines.length === 2);
+  const [bare] = manga.mokuroTextBlocks([{ ...two, lines_coords: [] }], id);
+  check("mokuro block without quads keeps its text, no lines", bare.text === "あの田舎とかに" && bare.lines.length === 0);
+  check("empty mokuro block is dropped", manga.mokuroTextBlocks([{ ...block, lines: ["  "] }], id).length === 0);
+
+  const panels = [[0, 0, 500, 400], [0, 400, 500, 800]];
+  const top = { box: [100, 100, 120, 200] }, bottom = { box: [100, 450, 120, 600] }, gutter = { box: [100, 390, 120, 405] };
+  const owned = manga.assignBlocksToPanels([top, bottom, gutter], panels);
+  check("blocks go to the panel holding their centre", owned[0].length === 2 && owned[0][1] === gutter && owned[1][0] === bottom);
+  const stray = { box: [380, 380, 390, 390] };
+  const far = manga.assignBlocksToPanels([stray], [[0, 0, 100, 100], [400, 400, 500, 500]]);
+  check("a block outside every panel goes to the nearest", far[0].length === 0 && far[1][0] === stray);
+
+  const vol = manga.parseMokuroVolume(JSON.stringify({
+    title: "うちの猫", volume: "vol2", pages: [{ img_path: "001.webp", img_width: 800, img_height: 1200, blocks: [block] }, { img_width: 1 }],
+  }), "Series/vol2.mokuro");
+  check("mokuro volume: image folder named after the file", vol.folder === "vol2");
+  check("mokuro volume: pages without an image are dropped", vol.pages.length === 1 && vol.pages[0].imgPath === "001.webp");
+  const meta = manga.mokuroMeta(vol);
+  check("mokuro meta", meta.title === "うちの猫 vol2" && meta.series === "うちの猫" && meta.seriesIndex === 2 && meta.language === "ja");
+  check("webp and avif count as page images", manga.isImageName("a.webp") && manga.isImageName("a.AVIF"));
+}
+
 (async () => {
   testManga();
   testMangaBookType();
@@ -1360,6 +1403,7 @@ function testXtc() {
   await testPinyinRuby();
   await testRubyAi();
   await testZipRoundTrip();
+  testMangaMokuro();
   if (failures) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);
