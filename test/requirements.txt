@@ -36,3 +36,8 @@ fonttools>=4.50
 #   macOS          brew install lzo
 readmdict>=0.1
 python-lzo>=1.14
+
+# anki/test*.apkg and ref_anki/ -- the Anki deck converter (anki.html).
+# Without these: the Anki cases in the node suite skip.
+anki>=25.9
+lxml>=5.0
