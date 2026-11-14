@@ -2,9 +2,9 @@
  * dict-zh.js (Chinese formats and word lists) and mdx.js (MDict). */
 "use strict";
 
-/* Where the device reads each language's converted files. Japanese keeps the original /dict
- * folder, which the firmware still accepts beside /dictionaries/jp. */
-const DICT_FOLDERS = { ja: "dict", zh: "dictionaries/zh", yue: "dictionaries/yue" };
+/* Where the device reads each language's converted files. Japanese .title files are only read
+ * from /dictionaries/jp, not the legacy /dict. */
+const DICT_FOLDERS = { ja: "dictionaries/jp", zh: "dictionaries/zh", yue: "dictionaries/yue" };
 
 /* The ready-made Chinese and Cantonese editions, from sources served with the page in data/. The
  * Chinese two are the firmware release workflow's packs, all but the MoE dictionary. */
@@ -300,7 +300,8 @@ async function runDictConversion() {
     }
     if (!records.length) throw new Error("No entries converted.");
 
-    let title = "";
+    // Japanese: the Yomitan index.json title; empty (the device shows JMdict) for other inputs.
+    let title = chinese ? "" : joinDictTitles(titles);
     if (chinese) {
       if (nameRecords.length) {
         ({ records, names: nameRecords } = keepNamesTogether(records, nameRecords, zhOpts.bilingualHeadwords));

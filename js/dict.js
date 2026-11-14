@@ -287,7 +287,9 @@ function formatDefinitionYomitan(headword, reading, definitions) {
       else if (isPlainObject(defn)) text = flattenStructuredContent(defn);
       else if (Array.isArray(defn)) text = flattenListDefn(defn);
       else text = String(defn);
-      text = text.trim();
+      // The device reads a line holding 【】 as the reading and drops it, which in monolingual
+      // dictionaries (あい【愛】…) deletes the definition. Only the reading line above keeps them.
+      text = text.trim().replace(/【/g, "〖").replace(/】/g, "〗");
       if (text) nonEmpty.push(text);
     }
     const deduped = [];

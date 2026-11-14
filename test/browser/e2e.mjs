@@ -130,7 +130,7 @@ async function testDictMdx(page, base) {
   unzipTo(zipFile, dest);
   for (const ext of ["idx", "dat", "spx"]) {
     const ref = path.join(FIXTURES, "ref_dict_mdx", `vocab.${ext}`);
-    const got = path.join(dest, "dict", `vocab.${ext}`);
+    const got = path.join(dest, "dictionaries", "jp", `vocab.${ext}`);
     check(`vocab.${ext} matches Python reference`, fs.existsSync(got) && filesEqual(ref, got));
   }
 
@@ -145,7 +145,7 @@ async function testDictMdx(page, base) {
   unzipTo(zipFile2, dest2);
   for (const ext of ["idx", "dat", "spx"]) {
     const ref = path.join(FIXTURES, "ref_dict_mdx", `vocab.${ext}`);
-    const got = path.join(dest2, "dict", `vocab.${ext}`);
+    const got = path.join(dest2, "dictionaries", "jp", `vocab.${ext}`);
     check(`encrypted .mdx with passcode: vocab.${ext} matches`, fs.existsSync(got) && filesEqual(ref, got));
   }
 }
@@ -648,7 +648,7 @@ async function testDict(page, base) {
   unzipTo(zipFile, dest);
   for (const ext of ["idx", "dat", "spx"]) {
     const ref = path.join(FIXTURES, "ref_dict_yomitan", `vocab.${ext}`);
-    const got = path.join(dest, "dict", `vocab.${ext}`);
+    const got = path.join(dest, "dictionaries", "jp", `vocab.${ext}`);
     check(`vocab.${ext} matches Python reference`, fs.existsSync(got) && filesEqual(ref, got));
   }
 }
