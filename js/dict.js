@@ -224,6 +224,11 @@ function flattenStructuredContent(content) {
     const text = flattenStructuredContent(inner);
 
     if (tag === "br") return "\n";
+    // Monolingual dictionaries (大辞林) label parts with data.name: 見出部 repeats the headword and
+    // reading the panel already shows, and each named block (sense, example, note) is a line.
+    const dn = typeof data.name === "string" ? data.name : "";
+    if (dn === "見出部") return "";
+    if (dn && tag === "div") return text + "\n";
     if (tag === "rt") return "";
     if (tag === "ruby") return text;
 
