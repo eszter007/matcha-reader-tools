@@ -224,11 +224,19 @@ function flattenStructuredContent(content) {
     const text = flattenStructuredContent(inner);
 
     if (tag === "br") return "\n";
-    // Monolingual dictionaries (大辞林) label parts with data.name: 見出部 repeats the headword and
-    // reading the panel already shows, and each named block (sense, example, note) is a line.
+    // Monolingual dictionaries (大辞林) label parts with data.name. Map them to the layout the
+    // device formats: "• " gloss lines, "[pos]" tag lines, and plain lines for examples. 見出部 and
+    // 語義Gnum repeat what the panel already shows; ━ stands for the headword and draws badly.
     const dn = typeof data.name === "string" ? data.name : "";
-    if (dn === "見出部") return "";
-    if (dn && tag === "div") return text + "\n";
+    if (dn === "見出部" || dn === "語義Gnum") return "";
+    if (dn === "品詞G") return "\n[" + text.replace(/[（）()]/g, "").trim() + "]\n";
+    if (dn === "語釈") return "\n• " + text + "\n";
+    if (dn === "見出相当部") return text.replace(/━/g, "〜");
+    if (dn && tag === "div") {
+      // A short label line (㋐) joins the gloss after it: "• ㋐ すっかり。".
+      const body = text.replace(/\n+/g, "\n").replace(/^\n|\n$/g, "").replace(/^([^\n•[]{1,3})\n• /, "• $1 ");
+      return "\n" + body + "\n";
+    }
     if (tag === "rt") return "";
     if (tag === "ruby") return text;
 
