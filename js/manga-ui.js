@@ -1770,8 +1770,14 @@ const PANEL_CHECK_THUMB_W = 150;
 const PE_HANDLE_PX = 14;      // corner grab size, in screen pixels
 const PE_MIN_SIDE = 16;       // smallest panel kept, in page pixels
 
-const panelCheck = { files: null, opts: null, pages: [], editIndex: -1 };
+// release: frees the page source (an open PDF); the editor re-reads pages until then.
+const panelCheck = { files: null, opts: null, pages: [], editIndex: -1, release: null };
 let panelCheckRunning = false;
+
+function releasePanelCheckSource() {
+  if (panelCheck.release) panelCheck.release();
+  panelCheck.release = null;
+}
 
 /* The page settings the conversion would use, or null (with a message) when one is missing. */
 async function panelCheckSettings() {
@@ -1914,7 +1920,9 @@ async function runPanelCheck() {
     const opts = await panelCheckSettings();
     if (!opts) return;
     if (panelCheck.files !== files) panelEdits.clear();
+    releasePanelCheckSource();
     const collected = await collectPagesFromInput(files);
+    panelCheck.release = collected.cleanup || null;
     let pages = collected.pages;
     const maxPages = parseInt($("manga-max-pages").value, 10);
     if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
@@ -1936,7 +1944,6 @@ async function runPanelCheck() {
     setProgress(pages.length, pages.length, "Panel check done");
     btn.textContent = "Check again";
     announce($("panel-check-summary").textContent);
-    if (collected.cleanup) collected.cleanup();
   } catch (e) {
     logLine("Panel check failed: " + e.message, "error");
     console.error(e);
@@ -1956,8 +1963,15 @@ const pe = { page: null, boxes: [], sel: -1, drag: null, scale: 1, manual: false
 async function openPanelEditor(i) {
   const p = panelCheck.pages[i];
   if (!p) return;
+  let prep;
+  try {
+    prep = await preparePage(panelCheck.source[i], { ...panelCheck.opts, detect: false });
+  } catch (e) {
+    logLine(`Could not open page ${i + 1}: ${e.message}`, "error");
+    console.error(e);
+    return;
+  }
   panelCheck.editIndex = i;
-  const prep = await preparePage(panelCheck.source[i], { ...panelCheck.opts, detect: false });
   prep.bitmap.close && prep.bitmap.close();
   pe.page = prep.canvas;
   pe.boxes = panelCheckBoxes(p).map((b) => b.slice());
@@ -2388,6 +2402,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
         : bookCount > 1 ? `${bookCount} books selected, converted one after another` : `${files.length} files selected`;
       showFileNameMeta();
       panelEdits.clear();
+      releasePanelCheckSource();
       panelCheck.pages = [];
       $("panel-check").hidden = true;
       clearValidationWarnings();
