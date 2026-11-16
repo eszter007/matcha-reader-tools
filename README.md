@@ -1,5 +1,7 @@
 # 🍵 Matcha Reader Tools
 
+> **Fork attribution:** Modified from [Matcha Reader Tools by Eszter Schuffert](https://github.com/eszter007/matcha-reader-tools), © 2026, licensed under the original [MIT License](LICENSE). This fork adds automatic manga and 4-koma border trimming, zero default panel crop padding, correct EPUB export after trimming, and device-sized EPUB viewports. All credit for the original project belongs to Eszter Schuffert.
+
 Browser-based converters for the [Matcha Reader](https://github.com/eszter007/matcha-reader)
 e-reader firmware, a CrossPoint Reader fork with Japanese and Chinese learning features. Everything runs
 client-side: **no installs, no uploads**. Files never leave your device, except panel images sent
