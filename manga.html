@@ -64,80 +64,27 @@
 
   <div class="card">
     <h3>2. Format and device</h3>
-    <div id="manga-format">
-    <div class="subhead" id="fmt-matcha-title">For Matcha Reader</div>
-    <div class="checks stacked" role="group" aria-labelledby="fmt-matcha-title">
-      <label><input type="checkbox" class="fmt" value="matchafile"> <span class="opt"><code>.matcha</code> file <span class="badge">recommended</span></span>
-        <span class="hint">Panel-by-panel reading with offline dictionary lookup and translations. One file,
-        so it copies fast. Needs firmware 2.0.0-rc-4 or later.</span></label>
-      <label><input type="checkbox" class="fmt" value="matcha"> <span class="opt">Folder (legacy)</span>
-        <span class="hint">The same book as a folder, for firmware older than 2.0.0-rc-4.</span></label>
+    <p class="field-label">Export format</p>
+    <p><strong>EPUB</strong> <span class="hint">— fixed-layout, for BOOX Picco</span></p>
+    <!-- Keep the format control in the DOM for the existing conversion pipeline. -->
+    <div id="manga-format" hidden>
+      <input type="checkbox" class="fmt" value="epub" checked>
     </div>
-    <div class="subhead" id="fmt-other-title">For other readers</div>
-    <div class="checks stacked" role="group" aria-labelledby="fmt-other-title">
-      <label><input type="checkbox" class="fmt" value="epub"> <span class="opt">EPUB</span>
-        <span class="hint">Fixed-layout <code>.epub</code>. Reads panel by panel on any e-reader,
-        without dictionary, translations or panel zoom.</span></label>
-      <label><input type="checkbox" class="fmt" value="pdf"> <span class="opt">PDF</span>
-        <span class="hint">Same pages and panels as the EPUB, one per PDF page, for any PDF
-        viewer.</span></label>
-      <label><input type="checkbox" class="fmt" value="xtc"> <span class="opt">XTC</span>
-        <span class="hint">Xteink's own format for the stock firmware, black-and-white. Pages are
-        pre-rendered, so pick a target resolution below.</span></label>
-      <label><input type="checkbox" class="fmt" value="xtch"> <span class="opt">XTCH</span>
-        <span class="hint">Same, in 4-level grayscale. Twice the size.</span></label>
-    </div>
-    </div>
-    <div id="manga-xtc-split-row">
-      <label for="manga-xtc-split">Split XTC/XTCH into parts</label>
-      <select id="manga-xtc-split" aria-describedby="manga-xtc-split-hint">
-        <option value="0">No, one file</option>
-        <option value="100">About 100 pages each</option>
-        <option value="150">About 150 pages each</option>
-        <option value="200">About 200 pages each</option>
-        <option value="300">About 300 pages each</option>
-        <option value="500">About 500 pages each</option>
-      </select>
-      <p class="hint" id="manga-xtc-split-hint">For readers that run out of memory on a big file. Parts
-      start at a chapter where one is close.</p>
-    </div>
-    <div class="field-gap"></div>
-    <p class="field-label" id="screen-title">Device <span class="hint">(sets the page size)</span></p>
-    <div class="choice-grid screen-grid" role="radiogroup" aria-labelledby="screen-title" aria-describedby="manga-res-hint">
-      <label class="choice"><input type="radio" name="screen" value="480x800"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="13.2" y="14.0" width="33.6" height="56" rx="5"/><rect class="screen" x="17.2" y="18.0" width="25.6" height="44" rx="1.5"/></svg><span class="choice-title">Xteink X4, X4C, X4 Pro</span> <span class="choice-sub">Also Sticky, Papermono, BOOX Picco, Metalio E-Ink 4 · 480 × 800</span></label>
-      <label class="choice"><input type="radio" name="screen" value="528x792"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="11.3" y="14.0" width="37.3" height="56" rx="5"/><rect class="screen" x="15.3" y="18.0" width="29.3" height="44" rx="1.5"/></svg><span class="choice-title">Xteink X3</span> <span class="choice-sub">528 × 792</span></label>
-      <label class="choice"><input type="radio" name="screen" value="552x768"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="9.9" y="14.0" width="40.2" height="56" rx="5"/><rect class="screen" x="13.9" y="18.0" width="32.2" height="44" rx="1.5"/></svg><span class="choice-title">EEGO Reader A4</span> <span class="choice-sub">552 × 768</span></label>
-      <label class="choice"><input type="radio" name="screen" value="684x1216"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page" x="14.2" y="14.0" width="31.5" height="56" rx="5"/><rect class="screen" x="18.2" y="18.0" width="23.5" height="44" rx="1.5"/></svg><span class="choice-title">Metalio E-Ink 4 Plus</span> <span class="choice-sub">684 × 1216</span></label>
-      <label class="choice"><input type="radio" name="screen" value="other"><svg class="choice-art" viewBox="0 0 60 84" aria-hidden="true"><rect class="page dashed" x="13.2" y="14.0" width="33.6" height="56" rx="5"/></svg><span class="choice-title">Other</span> <span class="choice-sub">Full size or your own</span></label>
-    </div>
-    <div id="screen-other" hidden>
-      <div class="pills" role="radiogroup" aria-label="Other size" data-for="manga-res"><label class="pill"><input type="radio" name="screen-other" value="custom"><span>Enter a size</span></label><label class="pill"><input type="radio" name="screen-other" value="full"><span>Keep full size</span></label></div>
-    </div>
-    <!-- The page's state for the screen size: the cards above set it. -->
+    <!-- This is the only available preset on this fork; other formats and devices are hidden. -->
+    <p class="field-label">Device</p>
+    <p><strong>BOOX Picco</strong> <span class="hint">— 480 × 800 pixels</span></p>
     <select id="manga-res" hidden aria-hidden="true" tabindex="-1">
-      <option value="">Please select</option>
-      <option value="x4">Xteink X4 / X4C</option>
-      <option value="x4pro">Xteink X4 Pro</option>
-      <option value="sticky">Sticky</option>
-      <option value="papermono">Papermono</option>
-      <option value="picco">BOOX Picco</option>
-      <option value="metalio">Metalio E-Ink 4</option>
-      <option value="x3">Xteink X3</option>
-      <option value="eego">EEGO Reader A4</option>
-      <option value="metalio4plus">Metalio E-Ink 4 Plus</option>
-      <option value="full">Full resolution</option>
-      <option value="custom">Custom</option>
+      <option value="picco" selected>BOOX Picco</option>
     </select>
-    <div class="res-custom" id="manga-res-custom" hidden>
-      <label for="manga-res-w">Width (px)
-        <input type="number" id="manga-res-w" min="1" max="4096" step="1" placeholder="480"></label>
-      <label for="manga-res-h">Height (px)
-        <input type="number" id="manga-res-h" min="1" max="4096" step="1" placeholder="800"></label>
+    <div id="screen-other" hidden></div>
+    <div id="manga-xtc-split-row" hidden>
+      <select id="manga-xtc-split"><option value="0">No split</option></select>
     </div>
-    <p class="hint res-hint" id="manga-res-hint">
-      Downscales to the device screen. Smaller download, faster page turns, no visible quality
-      loss. Never upscales.</p>
-
+    <div class="res-custom" id="manga-res-custom" hidden>
+      <input type="number" id="manga-res-w" min="1" max="4096">
+      <input type="number" id="manga-res-h" min="1" max="4096">
+    </div>
+    <p class="hint res-hint" id="manga-res-hint">Images are sized for BOOX Picco while preserving their proportions.</p>
   </div>
 
   <div class="card">
