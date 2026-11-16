@@ -687,7 +687,7 @@ async function rasterizeEpubImage(im, deviceTarget) {
   if (!Array.isArray(deviceTarget)) return im;
   const [targetW, targetH] = deviceTarget;
   if (!Number.isInteger(targetW) || !Number.isInteger(targetH) || targetW <= 0 || targetH <= 0) return im;
-  const bmp = await createImageBitmap(new Blob([im.bytes], { type: im.mime }));
+  const bmp = await decodeImage(im.bytes, im.mime === "image/png" ? ".png" : ".jpg");
   try {
     const out = makeCanvas(targetW, targetH);
     const ctx = smoothScaling(out.getContext("2d"));
