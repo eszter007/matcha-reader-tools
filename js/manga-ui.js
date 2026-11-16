@@ -682,7 +682,7 @@ async function selectionIsMokuro(files) {
  * [{bytes, mime, w, h}]}] in reading order; the pure XML lives in manga-epub.js.
  * tocEntries ([[pageIndex, title]]) is carried into the EPUB's table of
  * contents, each chapter resolved to that page's first spine page. */
-async function buildMangaEpub({ title, author, epubPages, tocEntries }) {
+async function buildMangaEpub({ title, author, epubPages, tocEntries, deviceTarget }) {
   const spine = [];
   const pageFirstHref = new Map();  // pageIdx → xhtmlHref of that page's first image
   for (const pg of epubPages) {
@@ -708,7 +708,7 @@ async function buildMangaEpub({ title, author, epubPages, tocEntries }) {
   if (!chapters.length && spine.length) chapters = [{ href: spine[0].xhtmlHref, title: title || "Start" }];
 
   const identifier = epubIdentifier(title, author, spine.length);
-  const files = buildEpubTextFiles({ identifier, title, author, language: "ja", spine, chapters });
+  const files = buildEpubTextFiles({ identifier, title, author, language: "ja", spine, chapters, viewport: deviceTarget });
 
   const zw = new ZipWriter();
   const enc = new TextEncoder();
@@ -1207,7 +1207,7 @@ async function runMangaConversion() {
   const columnMajor = bookType === BOOK_YONKOMA || bookType === BOOK_YONKOMA_LTR;
   // Western print comics are scans with a paper border; trimming it is always wanted, so
   // it rides on the book type rather than being one more checkbox to find.
-  const trimMargins = bookType === BOOK_WESTERN;
+  const trimMargins = [BOOK_MANGA, BOOK_YONKOMA, BOOK_YONKOMA_LTR, BOOK_WESTERN].includes(bookType);
 
   const apiKey = $("manga-key").value.trim();
   const model = $("manga-model").value.trim() || GEMINI_DEFAULT_MODEL;
@@ -1238,7 +1238,7 @@ async function runMangaConversion() {
   }
 
   const panelMargin = parseInt($("manga-margin").value, 10);
-  const margin = Number.isInteger(panelMargin) ? panelMargin : 10;
+  const margin = Number.isInteger(panelMargin) ? Math.max(0, Math.min(100, panelMargin)) : 0;
   const maxPagesRaw = parseInt($("manga-max-pages").value, 10);
 
   mangaState.running = true;
@@ -1449,8 +1449,8 @@ async function runMangaConversion() {
         // in both formats -- including keeping the page wherever its panels miss content.
         if (epub && keepPageImage) {
           let pageBytes, pageMime;
-          if (!wasResized && !tuned && (ext === ".jpg" || ext === ".jpeg")) { pageBytes = srcBytes; pageMime = "image/jpeg"; }
-          else if (!wasResized && !tuned && ext === ".png") { pageBytes = srcBytes; pageMime = "image/png"; }
+          if (!wasResized && !wasTrimmed && !tuned && (ext === ".jpg" || ext === ".jpeg")) { pageBytes = srcBytes; pageMime = "image/jpeg"; }
+          else if (!wasResized && !wasTrimmed && !tuned && ext === ".png") { pageBytes = srcBytes; pageMime = "image/png"; }
           else if (ext === ".png") { pageBytes = await canvasToPngBytes(canvas); pageMime = "image/png"; }
           else { pageBytes = await canvasToJpegBytes(canvas, 0.92); pageMime = "image/jpeg"; }
           epubImages.push({ bytes: pageBytes, mime: pageMime, w: imgW, h: imgH });
@@ -1644,7 +1644,7 @@ async function runMangaConversion() {
       const extras = [];
       if (formats.has("epub") && epubPages.length) {
         setProgress(pagesDone, pages.length, "Building EPUB…");
-        const epubBytes = await buildMangaEpub({ title: metaTitle, author: metaAuthor, epubPages, tocEntries });
+        const epubBytes = await buildMangaEpub({ title: metaTitle, author: metaAuthor, epubPages, tocEntries, deviceTarget });
         extras.push({ name: `${folder}.epub`, bytes: epubBytes, type: "application/epub+zip" });
         logLine(`Built ${folder}.epub (${epubPages.reduce((n, p) => n + p.images.length, 0)} images).`);
       }
@@ -1793,7 +1793,8 @@ async function panelCheckSettings() {
     try { yolo = await loadYoloDetector(); } catch (e) { logLine(`AI panel detector unavailable (${e.message}); using the grid heuristic.`, "warn"); }
   }
   return {
-    trimMargins: bookType === BOOK_WESTERN, deviceTarget, cleanup,
+    trimMargins: [BOOK_MANGA, BOOK_YONKOMA, BOOK_YONKOMA_LTR, BOOK_WESTERN].includes(bookType), deviceTarget, cleanup,
+    margin: Math.max(0, Math.min(100, parseInt($("manga-margin").value, 10) || 0)),
     cleanupOn: cleanup.levels || cleanup.contrast !== "off" || cleanup.sharpen,
     isWebtoon: false, yolo, rtl: bookType === BOOK_MANGA || bookType === BOOK_YONKOMA,
     columnMajor: bookType === BOOK_YONKOMA || bookType === BOOK_YONKOMA_LTR,
@@ -1803,10 +1804,10 @@ async function panelCheckSettings() {
 /* Why a page is worth a look, or "" when detection looks fine. */
 // Sound effects and gutter text often sit outside the panels; only a larger miss is worth a look.
 const PANEL_CHECK_MIN_COVERAGE = 0.9;
-function panelCheckReason(boxes, rgba, w, h) {
+function panelCheckReason(boxes, rgba, w, h, margin = 0) {
   if (!boxes.length) return "No panels found";
   if (boxes.length > 9) return `${boxes.length} panels, more than usual`;
-  const margined = boxes.map(([x1, y1, x2, y2]) => [Math.max(0, x1 - 10), Math.max(0, y1 - 10), Math.min(w, x2 + 10), Math.min(h, y2 + 10)]);
+  const margined = boxes.map(([x1, y1, x2, y2]) => [Math.max(0, x1 - margin), Math.max(0, y1 - margin), Math.min(w, x2 + margin), Math.min(h, y2 + margin)]);
   const coverage = panelInkCoverage(grayFromRGBA(rgba, w, h), w, h, margined);
   return coverage < PANEL_CHECK_MIN_COVERAGE ? `${Math.round((1 - coverage) * 100)}% of the art is outside the panels` : "";
 }
@@ -1934,7 +1935,7 @@ async function runPanelCheck() {
       prep.bitmap.close && prep.bitmap.close();
       panelCheck.pages.push({
         name: pages[i].name, w: prep.imgW, h: prep.imgH, boxes: prep.boxes,
-        reason: panelCheckReason(prep.boxes, prep.rgba, prep.imgW, prep.imgH),
+        reason: panelCheckReason(prep.boxes, prep.rgba, prep.imgW, prep.imgH, opts.margin),
         thumb: "",
       });
       const p = panelCheck.pages[i];
