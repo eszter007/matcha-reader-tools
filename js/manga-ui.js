@@ -677,28 +677,66 @@ async function selectionIsMokuro(files) {
   return true;
 }
 
-/* Assemble the collected page/panel images into a fixed-layout EPUB 3 (a zip
- * with the mandatory STORE-first mimetype). epubPages is [{pageIdx, images:
- * [{bytes, mime, w, h}]}] in reading order; the pure XML lives in manga-epub.js.
- * tocEntries ([[pageIndex, title]]) is carried into the EPUB's table of
- * contents, each chapter resolved to that page's first spine page. */
+/* Package each full page AND panel as a real screen-sized JPEG. Fixed-layout EPUB
+ * readers sometimes ignore CSS background/object-fit, leaving dark strips at
+ * the bottom or sides of individual images. Baking the white matte into every
+ * 480x800 pixel image prevents this for both portrait and landscape source art.
+ * No artwork is cropped. A portrait image close to the screen ratio can stretch
+ * slightly to avoid an unnecessary band; other aspect ratios are contained. */
+async function rasterizeEpubImage(im, deviceTarget) {
+  if (!Array.isArray(deviceTarget)) return im;
+  const [targetW, targetH] = deviceTarget;
+  if (!Number.isInteger(targetW) || !Number.isInteger(targetH) || targetW <= 0 || targetH <= 0) return im;
+  const bmp = await createImageBitmap(new Blob([im.bytes], { type: im.mime }));
+  try {
+    const out = makeCanvas(targetW, targetH);
+    const ctx = smoothScaling(out.getContext("2d"));
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, targetW, targetH);
+    const ratio = (bmp.width / bmp.height) / (targetW / targetH);
+    const nearPortrait = bmp.height > bmp.width && ratio >= 0.82 && ratio <= 1.18;
+    if (nearPortrait) {
+      // Example: a 480x720 portrait scan expands to 480x800 instead of
+      // introducing a black/white 40px strip at each end.
+      ctx.drawImage(bmp, 0, 0, targetW, targetH);
+    } else {
+      // Preserve art and dialogue on very narrow portrait or wide landscape
+      // panels; white margins are part of the JPEG, not CSS letterboxing.
+      const scale = Math.min(targetW / bmp.width, targetH / bmp.height);
+      const drawW = Math.max(1, Math.round(bmp.width * scale));
+      const drawH = Math.max(1, Math.round(bmp.height * scale));
+      ctx.drawImage(bmp, Math.floor((targetW - drawW) / 2),
+        Math.floor((targetH - drawH) / 2), drawW, drawH);
+    }
+    return {
+      ...im, bytes: await canvasToJpegBytes(out, 0.95),
+      mime: "image/jpeg", w: targetW, h: targetH,
+    };
+  } finally {
+    bmp.close && bmp.close();
+  }
+}
+
+/* Assemble images into a fixed-layout EPUB 3 (ZIP with STORE-first mimetype).
+ * epubPages follows the original reading order. The pure XML is in manga-epub.js. */
 async function buildMangaEpub({ title, author, epubPages, tocEntries, deviceTarget }) {
   const spine = [];
-  const pageFirstHref = new Map();  // pageIdx → xhtmlHref of that page's first image
+  const pageFirstHref = new Map();  // pageIdx → first XHTML of that original page
   for (const pg of epubPages) {
-    pg.images.forEach((im, ii) => {
+    for (const [ii, im] of pg.images.entries()) {
+      const fitted = await rasterizeEpubImage(im, deviceTarget);
       const base = `p${String(pg.pageIdx).padStart(4, "0")}_${ii}`;
       const xhtmlHref = `text/${base}.xhtml`;
       if (ii === 0) pageFirstHref.set(pg.pageIdx, xhtmlHref);
       spine.push({
         xhtmlId: `x_${base}`, xhtmlHref,
-        imgId: `img_${base}`, imgHref: `images/${base}.${epubImageExt(im.mime)}`,
-        mime: im.mime, w: im.w, h: im.h,
+        imgId: `img_${base}`, imgHref: `images/${base}.${epubImageExt(fitted.mime)}`,
+        mime: fitted.mime, w: fitted.w, h: fitted.h,
         isFullPage: !!im.isFullPage,
         isCover: spine.length === 0,
-        bytes: im.bytes,
+        bytes: fitted.bytes,
       });
-    });
+    }
   }
 
   let chapters = tocEntries
