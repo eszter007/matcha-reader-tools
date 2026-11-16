@@ -313,7 +313,7 @@
       <label for="manga-model">Gemini model</label>
       <input type="text" id="manga-model" value="gemini-3.8-flash">
       <label for="manga-margin">Panel crop margin (px)</label>
-      <input type="number" id="manga-margin" value="10" min="0" max="100">
+      <input type="number" id="manga-margin" value="0" min="0" max="100">
       <label for="manga-max-pages">Only convert first N pages <span class="hint">(for testing)</span></label>
       <input type="number" id="manga-max-pages" placeholder="all pages" min="1">
     </details>
@@ -454,6 +454,7 @@
 </dialog>
 
 <footer>
+  <p class="legal">Modified fork of <a href="https://github.com/eszter007/matcha-reader-tools">Matcha Reader Tools</a> by Eszter Schuffert (© 2026), distributed under the original <a href="LICENSE">MIT License</a>. This fork improves manga border trimming and EPUB margins.</p>
   Output matches <code>tools/manga_convert/convert_manga.py</code> from the
   <a href="https://github.com/eszter007/matcha-reader">matcha-reader</a> firmware —
   including its YOLO panel detector (in-browser via ONNX Runtime) and PDF input
