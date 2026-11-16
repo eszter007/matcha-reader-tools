@@ -694,6 +694,7 @@ async function buildMangaEpub({ title, author, epubPages, tocEntries, deviceTarg
         xhtmlId: `x_${base}`, xhtmlHref,
         imgId: `img_${base}`, imgHref: `images/${base}.${epubImageExt(im.mime)}`,
         mime: im.mime, w: im.w, h: im.h,
+        isFullPage: !!im.isFullPage,
         isCover: spine.length === 0,
         bytes: im.bytes,
       });
@@ -1453,7 +1454,7 @@ async function runMangaConversion() {
           else if (!wasResized && !wasTrimmed && !tuned && ext === ".png") { pageBytes = srcBytes; pageMime = "image/png"; }
           else if (ext === ".png") { pageBytes = await canvasToPngBytes(canvas); pageMime = "image/png"; }
           else { pageBytes = await canvasToJpegBytes(canvas, 0.92); pageMime = "image/jpeg"; }
-          epubImages.push({ bytes: pageBytes, mime: pageMime, w: imgW, h: imgH });
+          epubImages.push({ bytes: pageBytes, mime: pageMime, w: imgW, h: imgH, isFullPage: true });
         }
         if (anyXtc) xtcPageMap.set(pageIdx, wantXtc ? xtcPages.length : xtchPages.length);
         if (anyXtc && keepPageImage) {
@@ -2315,8 +2316,8 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-panels-only").checked = loadSetting("manga-panels-only", "0") === "1";
   $("manga-rotate-panels").checked = loadSetting("manga-rotate-panels", "1") === "1";
   {
-    const saved = new Set(loadSetting("manga-format", "").split(",").filter(Boolean));
-    for (const cb of formatBoxes()) cb.checked = saved.has(cb.value);
+    // This Picco-specific fork exports EPUB only, regardless of previous preferences.
+    for (const cb of formatBoxes()) cb.checked = cb.value === "epub";
     for (const cb of formatBoxes()) {
       cb.addEventListener("change", applyFormatVisibility);
       cb.addEventListener("change", clearValidationWarnings);
@@ -2382,7 +2383,8 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-no-ocr").checked = loadSetting("manga-no-ocr", "1") === "1";
   applyBookTypeUi();
   applyOcrUi();
-  $("manga-res").value = validResChoice(loadSetting("manga-res", ""));
+  // Lock this fork to the BOOX Picco preset, even when another device was saved.
+  $("manga-res").value = "picco";
   $("manga-res-w").value = loadSetting("manga-res-w", "");
   $("manga-res-h").value = loadSetting("manga-res-h", "");
   applyResChoiceUi();
