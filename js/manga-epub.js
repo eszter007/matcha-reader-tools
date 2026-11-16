@@ -40,15 +40,16 @@ function epubContainerXml() {
 }
 
 function epubStyleCss() {
-  // Preserve aspect ratio without cropping artwork. Panels retain black matte,
-  // but full manga pages use white paper behind letterboxing (e.g. 480x720
-  // images on a 480x800 Picco screen no longer produce a black 40px band).
-  return `@page { margin: 0; }
-html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
-body { background: #000; }
+  // Use white paper for every EPUB image, including panels. Portrait artwork that
+  // is already near the screen ratio fills the entire screen (a modest stretch).
+  // Unusually narrow/tall panels and landscape artwork retain their proportions,
+  // with white rather than black letterboxing; no artwork gets clipped.
+  return `@page { margin: 0; padding: 0; }
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+body, .page, .page img { background: #fff; }
 .page { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; text-align: center; }
 .page img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.page.full-page, .page.full-page img { background: #fff; }
+.page.fill-portrait img { object-fit: fill; }
 `;
 }
 
@@ -59,6 +60,12 @@ function epubPageXhtml({ title, imgHref, w, h, language, viewport, isFullPage = 
   // Use the target screen as the fixed-layout viewport, but keep the image aspect ratio.
   const pageW = Array.isArray(viewport) && viewport[0] > 0 ? viewport[0] : w;
   const pageH = Array.isArray(viewport) && viewport[1] > 0 ? viewport[1] : h;
+  // Only stretch a portrait image when its aspect ratio is within 18% of
+  // the selected screen ratio. This fills a 480x800 Picco display for common
+  // 480x720 scans without distortion from crop/cover or white padding.
+  // Very narrow/tall manga panels retain their natural proportions instead.
+  const ratio = (w > 0 && h > 0) ? (w / h) / (pageW / pageH) : 0;
+  const fillPortrait = h > w && ratio >= 0.82 && ratio <= 1.18;
   return `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="${xmlEscape(language)}" xml:lang="${xmlEscape(language)}">
@@ -69,7 +76,7 @@ function epubPageXhtml({ title, imgHref, w, h, language, viewport, isFullPage = 
   <link rel="stylesheet" type="text/css" href="../style.css"/>
 </head>
 <body>
-  <section class="page${isFullPage ? " full-page" : ""}"><img src="../${xmlEscape(imgHref)}" alt="" width="${w}" height="${h}"/></section>
+  <section class="page${isFullPage ? " full-page" : ""}${fillPortrait ? " fill-portrait" : ""}"><img src="../${xmlEscape(imgHref)}" alt="" width="${fillPortrait ? pageW : w}" height="${fillPortrait ? pageH : h}"/></section>
 </body>
 </html>
 `;
