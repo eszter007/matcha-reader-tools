@@ -40,21 +40,22 @@ function epubContainerXml() {
 }
 
 function epubStyleCss() {
-  // Fill the fixed-layout viewport; black matte behind any letterboxing.
-  // object-fit:contain keeps the aspect ratio even on readers that don't size
-  // the viewport to the image exactly (or fall back to a reflowable render).
+  // Preserve aspect ratio without cropping artwork. Panels retain black matte,
+  // but full manga pages use white paper behind letterboxing (e.g. 480x720
+  // images on a 480x800 Picco screen no longer produce a black 40px band).
   return `@page { margin: 0; }
 html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
 body { background: #000; }
 .page { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; text-align: center; }
 .page img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.page.full-page, .page.full-page img { background: #fff; }
 `;
 }
 
 /* One fixed-layout page: a single image sized to the page viewport. imgHref is
  * relative to OEBPS/ (e.g. "images/p0000_0.jpg"); the page lives in OEBPS/text/
  * so it references the image one directory up. */
-function epubPageXhtml({ title, imgHref, w, h, language, viewport }) {
+function epubPageXhtml({ title, imgHref, w, h, language, viewport, isFullPage = false }) {
   // Use the target screen as the fixed-layout viewport, but keep the image aspect ratio.
   const pageW = Array.isArray(viewport) && viewport[0] > 0 ? viewport[0] : w;
   const pageH = Array.isArray(viewport) && viewport[1] > 0 ? viewport[1] : h;
@@ -68,7 +69,7 @@ function epubPageXhtml({ title, imgHref, w, h, language, viewport }) {
   <link rel="stylesheet" type="text/css" href="../style.css"/>
 </head>
 <body>
-  <section class="page"><img src="../${xmlEscape(imgHref)}" alt="" width="${w}" height="${h}"/></section>
+  <section class="page${isFullPage ? " full-page" : ""}"><img src="../${xmlEscape(imgHref)}" alt="" width="${w}" height="${h}"/></section>
 </body>
 </html>
 `;
@@ -177,7 +178,7 @@ function buildEpubTextFiles({ identifier, title, author, language, spine, chapte
   files.push({ path: "OEBPS/nav.xhtml", text: epubNavXhtml({ title, language, chapters }) });
   files.push({ path: "OEBPS/toc.ncx", text: epubTocNcx({ identifier, title, chapters }) });
   for (const s of spine) {
-    files.push({ path: "OEBPS/" + s.xhtmlHref, text: epubPageXhtml({ title, imgHref: s.imgHref, w: s.w, h: s.h, language, viewport }) });
+    files.push({ path: "OEBPS/" + s.xhtmlHref, text: epubPageXhtml({ title, imgHref: s.imgHref, w: s.w, h: s.h, language, viewport, isFullPage: s.isFullPage }) });
   }
   return files;
 }
