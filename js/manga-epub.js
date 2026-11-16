@@ -44,9 +44,9 @@ function epubStyleCss() {
   // object-fit:contain keeps the aspect ratio even on readers that don't size
   // the viewport to the image exactly (or fall back to a reflowable render).
   return `@page { margin: 0; }
-html, body { margin: 0; padding: 0; height: 100%; }
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
 body { background: #000; }
-.page { margin: 0; padding: 0; text-align: center; }
+.page { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; text-align: center; }
 .page img { display: block; width: 100%; height: 100%; object-fit: contain; }
 `;
 }
@@ -54,14 +54,17 @@ body { background: #000; }
 /* One fixed-layout page: a single image sized to the page viewport. imgHref is
  * relative to OEBPS/ (e.g. "images/p0000_0.jpg"); the page lives in OEBPS/text/
  * so it references the image one directory up. */
-function epubPageXhtml({ title, imgHref, w, h, language }) {
+function epubPageXhtml({ title, imgHref, w, h, language, viewport }) {
+  // Use the target screen as the fixed-layout viewport, but keep the image aspect ratio.
+  const pageW = Array.isArray(viewport) && viewport[0] > 0 ? viewport[0] : w;
+  const pageH = Array.isArray(viewport) && viewport[1] > 0 ? viewport[1] : h;
   return `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="${xmlEscape(language)}" xml:lang="${xmlEscape(language)}">
 <head>
   <meta charset="utf-8"/>
   <title>${xmlEscape(title)}</title>
-  <meta name="viewport" content="width=${w}, height=${h}"/>
+  <meta name="viewport" content="width=${pageW}, height=${pageH}"/>
   <link rel="stylesheet" type="text/css" href="../style.css"/>
 </head>
 <body>
@@ -162,7 +165,7 @@ ${points}
  *
  * spine: ordered [{xhtmlId, xhtmlHref, imgId, imgHref, mime, w, h, isCover}].
  * chapters: [{href, title}] where href is a spine item's xhtmlHref. */
-function buildEpubTextFiles({ identifier, title, author, language, spine, chapters }) {
+function buildEpubTextFiles({ identifier, title, author, language, spine, chapters, viewport }) {
   language = language || "ja";
   const cover = spine.find((s) => s.isCover);
   const coverImgId = cover ? cover.imgId : null;
@@ -174,7 +177,7 @@ function buildEpubTextFiles({ identifier, title, author, language, spine, chapte
   files.push({ path: "OEBPS/nav.xhtml", text: epubNavXhtml({ title, language, chapters }) });
   files.push({ path: "OEBPS/toc.ncx", text: epubTocNcx({ identifier, title, chapters }) });
   for (const s of spine) {
-    files.push({ path: "OEBPS/" + s.xhtmlHref, text: epubPageXhtml({ title, imgHref: s.imgHref, w: s.w, h: s.h, language }) });
+    files.push({ path: "OEBPS/" + s.xhtmlHref, text: epubPageXhtml({ title, imgHref: s.imgHref, w: s.w, h: s.h, language, viewport }) });
   }
   return files;
 }
