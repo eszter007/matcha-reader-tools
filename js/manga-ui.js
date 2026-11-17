@@ -2374,7 +2374,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     const limit = $("manga-stretch-limit").value;
     $("manga-stretch-limit").disabled = !enabled;
     $("manga-stretch-hint").textContent = enabled
-      ? `Portrait pages and panels whose aspect ratio differs by at most ${limit}% from 480:800 will fill the screen (slight distortion). Other images keep their proportions on white. Landscape images are never stretched.`
+      ? `Portrait pages and panels whose aspect ratio differs by at most ${limit}% from 480:800 will fill the screen (slight distortion). Other images keep their proportions on white. Landscape images left horizontal are not stretched; panels rotated upright can qualify.`
       : "Stretching is OFF: every page and panel keeps its aspect ratio. Any unused space is white.";
   };
   $("manga-stretch").addEventListener("change", () => {
