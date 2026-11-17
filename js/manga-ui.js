@@ -696,11 +696,10 @@ async function rasterizeEpubImage(im, deviceTarget, stretchOptions = { enabled: 
     ctx.fillRect(0, 0, targetW, targetH);
     // Threshold is the percentage difference between the image's aspect
     // ratio (width/height) and the Picco screen's aspect ratio (480/800).
-    // The old stretch behavior applies only to portrait pages and panels.
-    const aspectDifference = Math.abs((bmp.width / bmp.height) /
-      (targetW / targetH) - 1) * 100;
-    const stretch = stretchOptions.enabled && bmp.height > bmp.width &&
-      aspectDifference <= stretchOptions.limit;
+    // Check both landscape and portrait images against the matching screen orientation.
+    const targetAspect = bmp.width > bmp.height ? targetH / targetW : targetW / targetH;
+    const aspectDifference = Math.abs((bmp.width / bmp.height) / targetAspect - 1) * 100;
+    const stretch = stretchOptions.enabled && aspectDifference <= stretchOptions.limit;
     if (stretch) {
       ctx.drawImage(bmp, 0, 0, targetW, targetH);
     } else {
@@ -2374,7 +2373,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     const limit = $("manga-stretch-limit").value;
     $("manga-stretch-limit").disabled = !enabled;
     $("manga-stretch-hint").textContent = enabled
-      ? `Portrait pages and panels whose aspect ratio differs by at most ${limit}% from 480:800 will fill the screen (slight distortion). Other images keep their proportions on white. Landscape images left horizontal are not stretched; panels rotated upright can qualify.`
+      ? `Portrait and landscape pages and panels within ${limit}% of the corresponding screen ratio (480:800 portrait, 800:480 landscape) are stretched into the 480 × 800 output. Landscape images may be strongly distorted. Other images retain their aspect ratio with white margins.`
       : "Stretching is OFF: every page and panel keeps its aspect ratio. Any unused space is white.";
   };
   $("manga-stretch").addEventListener("change", () => {
