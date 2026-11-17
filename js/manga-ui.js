@@ -681,8 +681,8 @@ async function selectionIsMokuro(files) {
  * readers sometimes ignore CSS background/object-fit, leaving dark strips at
  * the bottom or sides of individual images. Baking the white matte into every
  * 480x800 pixel image prevents this for both portrait and landscape source art.
- * No artwork is cropped. A portrait image close to the screen ratio can stretch
- * slightly to avoid an unnecessary band; other aspect ratios are contained. */
+ * No artwork is cropped or stretched; all images preserve their aspect ratio.
+ * Any leftover viewport space is filled white. */
 async function rasterizeEpubImage(im, deviceTarget) {
   if (!Array.isArray(deviceTarget)) return im;
   const [targetW, targetH] = deviceTarget;
@@ -693,21 +693,13 @@ async function rasterizeEpubImage(im, deviceTarget) {
     const ctx = smoothScaling(out.getContext("2d"));
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, targetW, targetH);
-    const ratio = (bmp.width / bmp.height) / (targetW / targetH);
-    const nearPortrait = bmp.height > bmp.width && ratio >= 0.82 && ratio <= 1.18;
-    if (nearPortrait) {
-      // Example: a 480x720 portrait scan expands to 480x800 instead of
-      // introducing a black/white 40px strip at each end.
-      ctx.drawImage(bmp, 0, 0, targetW, targetH);
-    } else {
-      // Preserve art and dialogue on very narrow portrait or wide landscape
-      // panels; white margins are part of the JPEG, not CSS letterboxing.
-      const scale = Math.min(targetW / bmp.width, targetH / bmp.height);
-      const drawW = Math.max(1, Math.round(bmp.width * scale));
-      const drawH = Math.max(1, Math.round(bmp.height * scale));
-      ctx.drawImage(bmp, Math.floor((targetW - drawW) / 2),
-        Math.floor((targetH - drawH) / 2), drawW, drawH);
-    }
+    // Fit every page and panel uniformly; never change its aspect ratio.
+    // Center it on a pure-white 480x800 frame instead of cropping/stretching.
+    const scale = Math.min(targetW / bmp.width, targetH / bmp.height);
+    const drawW = Math.max(1, Math.round(bmp.width * scale));
+    const drawH = Math.max(1, Math.round(bmp.height * scale));
+    ctx.drawImage(bmp, Math.floor((targetW - drawW) / 2),
+      Math.floor((targetH - drawH) / 2), drawW, drawH);
     return {
       ...im, bytes: await canvasToJpegBytes(out, 0.95),
       mime: "image/jpeg", w: targetW, h: targetH,
