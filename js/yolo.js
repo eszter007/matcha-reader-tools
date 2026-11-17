@@ -11,6 +11,11 @@
  */
 "use strict";
 
+// manga-core.js's functions: globals on the page (loaded first), a module in Node. Only its
+// functions are reached this way -- a top-level const is not a property of globalThis.
+const mangaCore = typeof module !== "undefined" && typeof require === "function"
+  ? require("./manga-core.js") : globalThis;
+
 const YOLO_INPUT_SIZE = 640;
 const YOLO_STRIDE = 32;            // ultralytics LetterBox(auto=True) pads to this multiple
 const YOLO_CONF_THRESHOLD = 0.4;   // convert_manga.py:_detect_panels_yolo(conf=0.4)
@@ -196,7 +201,7 @@ function isSliverPanel(box, pageW, pageH) {
  * the page so it behaves the same on a 290px thumbnail and a 2000px scan.
  * Port of convert_manga.py:text_pad_px. */
 function yoloTextPadPx(pageW, pageH) {
-  return Math.max(TEXT_PAD_MIN, Math.round(Math.min(pageW, pageH) * TEXT_PAD_FRAC_OF_PAGE));
+  return Math.max(TEXT_PAD_MIN, mangaCore.pyRound(Math.min(pageW, pageH) * TEXT_PAD_FRAC_OF_PAGE));
 }
 
 /* Grow each panel box to cover the speech bubbles and caption boxes that belong
@@ -292,27 +297,16 @@ function yoloPanelCoverFrac(boxes, w, h) {
   return area / Math.max(1, w * h);
 }
 
-/* Full pipeline for one page: letterbox → inference → decode → sliver filter
- * → dedupe → sub-panel recovery, falling back to one full-page box when nothing
- * is detected — mirrors convert_manga.py:_detect_panels_yolo. Returns
- * {frames, texts}: the frames as drawn (what reading order must be derived
- * from) and the text boxes yoloExpandPanelsOverText() then grows the CROP
- * rectangles over. `session` is an ONNX Runtime InferenceSession for the panel
- * model; `ortApi` is the onnxruntime module (for its Tensor constructor). */
-async function detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, size) {
-  const lb = yoloLetterbox(rgba, w, h, size);
-  const inputName = session.inputNames[0];
-  const feeds = {};
-  // The model is exported with dynamic height/width so the rectangular
-  // letterbox above can be fed as-is, exactly as ultralytics does.
-  feeds[inputName] = new ortApi.Tensor("float32", lb.data, [1, 3, lb.netH, lb.netW]);
-  const results = await session.run(feeds);
-  const output = results[session.outputNames[0]];
-  const rows = output.dims[output.dims.length - 2];
-
-  const decoded = yoloDecodeOutput(output.data, rows, lb, w, h, YOLO_WEAK_CONF);
+/* One detection pass's results, from the decoded [box, confidence, class] triples: sliver
+ * filter -> dedupe -> sub-panel recovery, falling back to one full-page box when nothing confident
+ * was found. Returns {frames, texts, cover, weak}: the frames as drawn (what reading order must be
+ * derived from), the text boxes yoloExpandPanelsOverText() later grows the crops over, the page
+ * coverage of the confident boxes, and the sub-threshold panel proposals with their confidence
+ * (for fillUncoveredArt). Port of convert_manga.py:_detect_panels_yolo_at after model.predict(). */
+function yoloPassFromDecoded(decoded, w, h, conf) {
   const strong = [];
   const candidates = [];
+  const weak = [];
   const texts = [];
   for (const [box, score, cls] of decoded) {
     if (cls === YOLO_TEXT_CLASS) {
@@ -323,29 +317,201 @@ async function detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, size) {
     if (isSliverPanel(box, w, h)) continue;
     candidates.push(box);
     if (score >= conf) strong.push([box, score]);
+    else weak.push([box, score]);
   }
 
   const boxes = yoloDedupeBoxes(strong);
   // Measured on the CONFIDENT boxes, not on the full-page fallback frame below: that frame
   // covers the page by construction and would mask a failed pass.
   const cover = yoloPanelCoverFrac(boxes, w, h);
-  if (!boxes.length) return { frames: [[0, 0, w, h]], texts, cover };
-  return { frames: yoloSplitFramesOverSubpanels(boxes, candidates), texts, cover };
+  if (!boxes.length) return { frames: [[0, 0, w, h]], texts, cover, weak };
+  return { frames: yoloSplitFramesOverSubpanels(boxes, candidates), texts, cover, weak };
 }
 
-/* One page through the model, retrying at a larger input when the first pass barely covers
- * it and keeping whichever pass saw more. The model's panel head is scale-sensitive: a small,
- * sparsely inked page (a hand-drawn 4-koma, say) letterboxed into the default 640 can come
- * back as a single box covering a tenth of the page, while the same page at 1600 is fully
- * panelled. Pages the model already reads well never reach the retry, and a genuine full-page
- * splash keeps its single box: one panel covering the page is high coverage, not low.
- * Port of convert_manga.py:_detect_panels_yolo. */
-async function detectPanelsYolo(session, ortApi, rgba, w, h, conf) {
+/* One pass of the model at one input size: letterbox -> inference -> decode -> yoloPassFromDecoded.
+ * `session` is an ONNX Runtime InferenceSession for the panel model; `ortApi` is the onnxruntime
+ * module (for its Tensor constructor). */
+async function detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, size) {
+  const lb = yoloLetterbox(rgba, w, h, size);
+  const inputName = session.inputNames[0];
+  const feeds = {};
+  // The model is exported with dynamic height/width so the rectangular
+  // letterbox above can be fed as-is, exactly as ultralytics does.
+  feeds[inputName] = new ortApi.Tensor("float32", lb.data, [1, 3, lb.netH, lb.netW]);
+  const results = await session.run(feeds);
+  const output = results[session.outputNames[0]];
+  const rows = output.dims[output.dims.length - 2];
+  return yoloPassFromDecoded(yoloDecodeOutput(output.data, rows, lb, w, h, YOLO_WEAK_CONF), w, h, conf);
+}
+
+/* Art the confident panels leave uncovered is recovered as extra panels: the model misses whole
+ * panels on some pages -- a splash under a chapter title, a large panel beside a column of small
+ * ones -- while still proposing them below the confidence bar. A gap is only worth filling when it
+ * holds GAP_MIN_INK_FRAC of the page in inked cells; a new panel may overlap the kept ones by at
+ * most GAP_MAX_OVERLAP_FRAC of its own area and be at most GAP_MAX_ASPECT elongated. A cluster of
+ * uncovered ink no proposal covers becomes a panel of its own only if its bounding box is
+ * GAP_MIN_REGION_FRAC of the page and GAP_MIN_REGION_DENSITY inked. convert_manga.py:GAP_*. */
+const GAP_MIN_INK_FRAC = 0.04;
+const GAP_MAX_OVERLAP_FRAC = 0.25;
+const GAP_MAX_ASPECT = 4.0;
+const GAP_MIN_REGION_FRAC = 0.06;
+const GAP_MIN_REGION_DENSITY = 0.35;
+
+/* Add panels over inked areas that no frame covers. First choice is a weak proposal from the model
+ * itself: the strongest one that adds enough uncovered ink while barely overlapping the frames
+ * already kept. What no proposal accounts for is clustered on the ink grid, and a large, dense
+ * cluster becomes a panel on its own. `candidates` are [box, confidence] pairs; gray is the page
+ * the frames were found on. Port of convert_manga.py:fill_uncovered_art. */
+function fillUncoveredArt(frames, candidates, gray, w, h) {
+  const { grid, rows, cols, cell } = mangaCore.inkGrid(gray, w, h);
+  const pad = yoloTextPadPx(w, h);
+  const covered = new Uint8Array(rows * cols);
+
+  // Grid cell range [c1, c2) x [r1, r2) a pixel box touches (convert_manga.py:_cells_in).
+  const cellsIn = (box) => [Math.max(0, Math.floor(box[0] / cell)), Math.max(0, Math.floor(box[1] / cell)),
+    Math.min(cols, Math.ceil(box[2] / cell)), Math.min(rows, Math.ceil(box[3] / cell))];
+  const cover = (box) => {
+    const [c1, r1, c2, r2] = cellsIn([box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad]);
+    for (let r = r1; r < r2; r++) for (let c = c1; c < c2; c++) covered[r * cols + c] = 1;
+  };
+  const newInk = (box) => {
+    const [c1, r1, c2, r2] = cellsIn(box);
+    let n = 0;
+    for (let r = r1; r < r2; r++) for (let c = c1; c < c2; c++) if (grid[r * cols + c] && !covered[r * cols + c]) n++;
+    return n;
+  };
+  const unfit = (box, kept) => {
+    const bw = Math.max(1, box[2] - box[0]), bh = Math.max(1, box[3] - box[1]);
+    if (Math.max(bw / bh, bh / bw) > GAP_MAX_ASPECT) return true;  // a strip of art bleeding past a frame's edge
+    let overlap = 0;
+    for (const k of kept) overlap += yoloOverlapArea(box, k);
+    return overlap > GAP_MAX_OVERLAP_FRAC * yoloBoxArea(box);
+  };
+
+  for (const f of frames) cover(f);
+  const minInk = GAP_MIN_INK_FRAC * rows * cols;
+  const out = frames.map((f) => f.slice());
+  const byConfidence = candidates.slice().sort((a, b) => b[1] - a[1]);
+  for (const [box] of byConfidence) {
+    if (newInk(box) >= minInk && !unfit(box, out)) {
+      out.push(box.slice());
+      cover(box);
+    }
+  }
+
+  const seen = new Uint8Array(rows * cols);
+  for (let r0 = 0; r0 < rows; r0++) {
+    for (let c0 = 0; c0 < cols; c0++) {
+      const i0 = r0 * cols + c0;
+      if (seen[i0] || covered[i0] || !grid[i0]) continue;
+      const stack = [i0];
+      seen[i0] = 1;
+      let count = 0, minR = r0, maxR = r0, minC = c0, maxC = c0;
+      while (stack.length) {
+        const i = stack.pop();
+        const r = Math.floor(i / cols), c = i % cols;
+        count++;
+        if (r < minR) minR = r;
+        if (r > maxR) maxR = r;
+        if (c < minC) minC = c;
+        if (c > maxC) maxC = c;
+        for (const [nr, nc] of [[r + 1, c], [r - 1, c], [r, c + 1], [r, c - 1]]) {
+          if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+          const j = nr * cols + nc;
+          if (!seen[j] && grid[j] && !covered[j]) {
+            seen[j] = 1;
+            stack.push(j);
+          }
+        }
+      }
+      if (count < minInk) continue;
+      const box = [minC * cell, minR * cell, Math.min(w, (maxC + 1) * cell), Math.min(h, (maxR + 1) * cell)];
+      const boxCells = (maxR - minR + 1) * (maxC - minC + 1);
+      if (boxCells < GAP_MIN_REGION_FRAC * rows * cols || count < GAP_MIN_REGION_DENSITY * boxCells || unfit(box, out)) continue;
+      out.push(box);
+      cover(box);
+    }
+  }
+  return out;
+}
+
+/* A panel holding no detected text and next to no ink is page furniture the model boxed: the
+ * margin around a page number, the tail of a bubble crossing the page edge, a blank gap. Real art
+ * is far darker, and a text-only panel (a narration box, a lone bubble) keeps its text box. Thin
+ * strips along the top or bottom edge -- the footer and page-number band -- go at a higher ink
+ * level, since a bubble edge or a stray line puts some ink there. convert_manga.py:BLANK_PANEL_*,
+ * EDGE_STRIP_*. */
+const BLANK_PANEL_MAX_INK = 0.035;
+const EDGE_STRIP_MAX_INK = 0.08;
+const EDGE_STRIP_MAX_HEIGHT_FRAC = 0.1;
+const EDGE_STRIP_MARGIN_FRAC = 0.02;
+
+/* Remove panels that show nothing: no text inside and almost no ink. A page whose every panel is
+ * blank keeps its frames, so a page always has at least one. Port of
+ * convert_manga.py:drop_blank_panels. */
+function dropBlankPanels(frames, texts, gray, w, h) {
+  const blank = (box) => {
+    if (mangaCore.isFullPagePanel(box, w, h)) return false;
+    if (texts.some((t) => yoloOverlapArea(t, box) >= 0.5 * Math.max(1, yoloBoxArea(t)))) return false;
+    const ink = mangaCore.inkFrac(gray, w, h, box);
+    if (ink < BLANK_PANEL_MAX_INK) return true;
+    const margin = h * EDGE_STRIP_MARGIN_FRAC;
+    const atEdge = box[1] <= margin || box[3] >= h - margin;
+    return atEdge && box[3] - box[1] < EDGE_STRIP_MAX_HEIGHT_FRAC * h && ink < EDGE_STRIP_MAX_INK;
+  };
+  const kept = frames.filter((f) => !blank(f));
+  return { frames: kept.length ? kept : frames, texts };
+}
+
+/* One page through the model. A pass that leaves most of the page uncovered is retried at a
+ * larger input; the retry wins only if it sees the page well, since a retry that also fails tends
+ * to see it in scattered fragments. The model's panel head is scale-sensitive: a small, sparsely
+ * inked page (a hand-drawn 4-koma, say) letterboxed into the default 640 can come back as a single
+ * box covering a tenth of the page, while the same page at 1600 is fully panelled. Art still left
+ * outside every frame is then recovered by fillUncoveredArt().
+ *
+ * runPass(size) returns one pass (yoloPassFromDecoded's shape); gray is the w x h page the model
+ * looked at. Returns {frames, texts}. Port of convert_manga.py:_detect_panels_yolo. */
+async function detectPanelsYoloWith(runPass, gray, w, h) {
+  let pass = await runPass(YOLO_INPUT_SIZE);
+  if (pass.cover < YOLO_RETRY_COVER_FRAC) {
+    const retry = await runPass(YOLO_RETRY_INPUT_SIZE);
+    if (retry.cover >= YOLO_RETRY_COVER_FRAC) pass = retry;
+  }
+  // Nothing confident: the page-sized fallback frame already covers it all.
+  if (pass.cover === 0) return { frames: pass.frames, texts: pass.texts };
+  const pageGray = typeof gray === "function" ? gray() : gray;
+  return { frames: fillUncoveredArt(pass.frames, pass.weak, pageGray, w, h), texts: pass.texts };
+}
+
+/* detectPanelsYoloWith() on the model itself. rgba is the full-resolution page; gray, its
+ * luminance, is computed from it when not passed. */
+async function detectPanelsYolo(session, ortApi, rgba, w, h, conf, gray) {
   conf = conf === undefined ? YOLO_CONF_THRESHOLD : conf;
-  const first = await detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, YOLO_INPUT_SIZE);
-  if (first.cover >= YOLO_RETRY_COVER_FRAC) return first;
-  const retry = await detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, YOLO_RETRY_INPUT_SIZE);
-  return retry.cover > first.cover ? retry : first;
+  return detectPanelsYoloWith((size) => detectPanelsYoloAtSize(session, ortApi, rgba, w, h, conf, size),
+    gray || (() => mangaCore.grayFromRGBA(rgba, w, h)), w, h);
+}
+
+/* Panels for one page: the model's frames when it ran, cleaned of blank ones and mapped onto the
+ * stored page, else the gutter grid. A page the model sees as one page-sized frame (a prose page,
+ * most often) gets the grid too, kept only when it yields a few panel-sized, inked cells.
+ *
+ * detected: detectPanelsYolo()'s result on the full-resolution page, or null when the model is not
+ * in use. full: {gray, w, h} of that page (null without the model); page: {gray, w, h} of the page
+ * as stored, which the grid runs on and every returned box is in. Port of
+ * convert_manga.py:detect_panels. */
+function detectPanels(detected, full, page) {
+  if (!detected) return { frames: mangaCore.detectPanelsGrid(page.gray, page.w, page.h), texts: [] };
+  let { frames, texts } = dropBlankPanels(detected.frames, detected.texts, full.gray, full.w, full.h);
+  if (full.w !== page.w || full.h !== page.h) {
+    frames = mangaCore.scalePanelBoxes(frames, [full.w, full.h], [page.w, page.h]);
+    texts = mangaCore.scalePanelBoxes(texts, [full.w, full.h], [page.w, page.h]);
+  }
+  if (frames.length === 1 && mangaCore.isFullPagePanel(frames[0], page.w, page.h)) {
+    const grid = mangaCore.detectPanelsGrid(page.gray, page.w, page.h);
+    if (mangaCore.gridFallbackAccepts(grid, page.gray, page.w, page.h)) return { frames: grid, texts: [] };
+  }
+  return { frames, texts };
 }
 
 if (typeof module !== "undefined") {
@@ -358,6 +524,9 @@ if (typeof module !== "undefined") {
     yoloPanelCoverFrac,
     yoloLetterbox, yoloDecodeOutput, yoloDedupeBoxes, isSliverPanel,
     yoloBoxArea, yoloOverlapArea, yoloTextPadPx, yoloExpandPanelsOverText,
-    yoloSplitFramesOverSubpanels, detectPanelsYolo,
+    yoloSplitFramesOverSubpanels, yoloPassFromDecoded, detectPanelsYoloAtSize, detectPanelsYoloWith,
+    detectPanelsYolo, detectPanels, fillUncoveredArt, dropBlankPanels,
+    GAP_MIN_INK_FRAC, GAP_MAX_OVERLAP_FRAC, GAP_MAX_ASPECT, GAP_MIN_REGION_FRAC, GAP_MIN_REGION_DENSITY,
+    BLANK_PANEL_MAX_INK, EDGE_STRIP_MAX_INK, EDGE_STRIP_MAX_HEIGHT_FRAC, EDGE_STRIP_MARGIN_FRAC,
   };
 }

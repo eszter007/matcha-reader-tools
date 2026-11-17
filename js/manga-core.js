@@ -286,79 +286,270 @@ function mergeSmallGaps(splits, minSize) {
   return merged;
 }
 
-/* Detect panel rectangles by finding solid white gutter bands.
- * gray: Uint8Array of w*h luminance values. Returns [[x1,y1,x2,y2], ...]. */
+/* Python's round(): halves go to the even neighbour (2.5 -> 2), where Math.round goes up. */
+function pyRound(x) {
+  const r = Math.round(x);
+  return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+}
+
+/* Detect panel rectangles by recursively cutting the page along its gutters.
+ *
+ * Each region is cut along the widest gutter that spans it from edge to edge, light (paper) or
+ * dark (a black page), and each half is cut again on its own. A tall panel beside two stacked
+ * ones is found that way: the vertical gutter isolates it before the stacked pair is split. Art
+ * that crosses a gutter, insets and borderless pages have no clean full-span gutter and stay one
+ * region. gray: Uint8Array of w*h luminance values. Returns [[x1,y1,x2,y2], ...].
+ * Port of convert_manga.py:_detect_panels_grid. */
 function detectPanelsGrid(gray, w, h) {
-  const threshold = 215;
-  const purity = 0.95;
-  const minGutter = Math.max(6, Math.trunc(h * 0.013));
-  const minBandH = Math.max(Math.trunc(h * 0.05), 60);
-  const minBandW = Math.max(Math.trunc(w * 0.06), 60);
+  const LIGHT = 215, DARK = 40, PURITY = 0.97;
+  const minGutter = Math.max(6, Math.trunc(Math.min(w, h) * 0.013));
+  const minPanelW = Math.max(40, Math.trunc(w * 0.06));
+  const minPanelH = Math.max(40, Math.trunc(h * 0.05));
 
-  function isWhiteRow(y) {
-    let white = 0;
+  // Every other pixel along the line, as the Python tool samples it.
+  function isGutterCol(x, y1, y2) {
+    let lights = 0, darks = 0, n = 0;
+    for (let y = y1; y < y2; y += 2) {
+      const v = gray[y * w + x];
+      if (v > LIGHT) lights++;
+      else if (v < DARK) darks++;
+      n++;
+    }
+    return n > 0 && Math.max(lights, darks) / n >= PURITY;
+  }
+  function isGutterRow(y, x1, x2) {
+    let lights = 0, darks = 0, n = 0;
     const row = y * w;
-    for (let x = 0; x < w; x += 2) {
-      if (gray[row + x] > threshold) white++;
+    for (let x = x1; x < x2; x += 2) {
+      const v = gray[row + x];
+      if (v > LIGHT) lights++;
+      else if (v < DARK) darks++;
+      n++;
     }
-    return white > Math.floor(w / 2) * purity;
+    return n > 0 && Math.max(lights, darks) / n >= PURITY;
   }
 
-  let hSplits = [0];
-  let inGutter = false;
-  let gutterStart = 0;
+  // A run reaching the region's edge is margin, not a gutter.
+  function interiorGutters(start, end, isGutter) {
+    const gutters = [];
+    let run = null;
+    for (let pos = start; pos < end; pos++) {
+      if (isGutter(pos)) {
+        if (run === null) run = pos;
+      } else if (run !== null) {
+        if (pos - run >= minGutter && run > start) gutters.push([run, pos]);
+        run = null;
+      }
+    }
+    return gutters;
+  }
+
+  function widest(gutters) {
+    let best = null;
+    for (const g of gutters) if (!best || g[1] - g[0] > best[1] - best[0]) best = g;
+    return best;
+  }
+
+  function splitRegion(box, depth) {
+    const [x1, y1, x2, y2] = box;
+    if (depth >= 12 || x2 - x1 < minPanelW * 2 || y2 - y1 < minPanelH * 2) return [box];
+    const widestV = widest(interiorGutters(x1, x2, (x) => isGutterCol(x, y1, y2)));
+    const widestH = widest(interiorGutters(y1, y2, (y) => isGutterRow(y, x1, x2)));
+    const widthV = widestV ? widestV[1] - widestV[0] : 0;
+    const widthH = widestH ? widestH[1] - widestH[0] : 0;
+    if (widthV === 0 && widthH === 0) return [box];
+    let children;
+    if (widthV >= widthH) {
+      const cut = Math.floor((widestV[0] + widestV[1]) / 2);
+      children = [[x1, y1, cut, y2], [cut, y1, x2, y2]];
+    } else {
+      const cut = Math.floor((widestH[0] + widestH[1]) / 2);
+      children = [[x1, y1, x2, cut], [x1, cut, x2, y2]];
+    }
+    const result = [];
+    for (const child of children) {
+      if (child[2] - child[0] >= minPanelW && child[3] - child[1] >= minPanelH) {
+        result.push(...splitRegion(child, depth + 1));
+      }
+    }
+    return result.length ? result : [box];
+  }
+
+  return splitRegion([0, 0, w, h], 0);
+}
+
+/* Map boxes from one image size to another: detection runs on the full-resolution page, pages
+ * are stored smaller. Port of convert_manga.py:scale_panel_boxes. */
+function scalePanelBoxes(boxes, sourceSize, targetSize) {
+  const [sw, sh] = sourceSize, [tw, th] = targetSize;
+  const kx = tw / sw, ky = th / sh;
+  return boxes.map(([x1, y1, x2, y2]) => {
+    const nx1 = Math.min(tw - 1, Math.max(0, pyRound(x1 * kx)));
+    const ny1 = Math.min(th - 1, Math.max(0, pyRound(y1 * ky)));
+    return [nx1, ny1, Math.min(tw, Math.max(nx1 + 1, pyRound(x2 * kx))), Math.min(th, Math.max(ny1 + 1, pyRound(y2 * ky)))];
+  });
+}
+
+/* ── Ink measurements (convert_manga.py: INK_LEVEL and its users) ── */
+
+/* A pixel darker than this is ink. */
+const INK_LEVEL = 200;
+
+/* Pillow's Image.resize(size, Image.BOX) for one 8-bit channel, to the bit: the same filter
+ * windows, the same 22-bit fixed-point weights, and a rounded 8-bit image between the horizontal
+ * and the vertical pass. The ink grid below is thresholded on these values, so an approximation
+ * would move cells across the threshold. Port of Pillow's Resample.c (precompute_coeffs,
+ * normalize_coeffs_8bpc, ImagingResample{Horizontal,Vertical}_8bpc). */
+function pilBoxCoeffs(inSize, outSize) {
+  const PRECISION = 1 << 22;
+  const scale = inSize / outSize;
+  const filterscale = scale < 1 ? 1 : scale;
+  const support = 0.5 * filterscale;
+  const ksize = Math.ceil(support) * 2 + 1;
+  const bounds = new Int32Array(outSize * 2);
+  const kk = new Int32Array(outSize * ksize);
+  const weights = new Float64Array(ksize);
+  const ss = 1 / filterscale;
+  for (let xx = 0; xx < outSize; xx++) {
+    const center = (xx + 0.5) * scale;
+    let xmin = Math.trunc(center - support + 0.5);
+    if (xmin < 0) xmin = 0;
+    let xmax = Math.trunc(center + support + 0.5);
+    if (xmax > inSize) xmax = inSize;
+    xmax -= xmin;
+    let ww = 0;
+    for (let x = 0; x < xmax; x++) {
+      const t = (x + xmin - center + 0.5) * ss;
+      const wt = t > -0.5 && t <= 0.5 ? 1 : 0;
+      weights[x] = wt;
+      ww += wt;
+    }
+    for (let x = 0; x < xmax; x++) {
+      const k = ww !== 0 ? weights[x] / ww : weights[x];
+      kk[xx * ksize + x] = k < 0 ? Math.trunc(-0.5 + k * PRECISION) : Math.trunc(0.5 + k * PRECISION);
+    }
+    bounds[xx * 2] = xmin;
+    bounds[xx * 2 + 1] = xmax;
+  }
+  return { ksize, bounds, kk };
+}
+
+function pilClip8(ss) {
+  if (ss >= (1 << 22) * 256) return 255;
+  if (ss <= 0) return 0;
+  return ss >> 22;
+}
+
+function pilResizeHorizontal(src, w, h, outW) {
+  const { ksize, bounds, kk } = pilBoxCoeffs(w, outW);
+  const out = new Uint8Array(outW * h);
   for (let y = 0; y < h; y++) {
-    const whiteRow = isWhiteRow(y);
-    if (whiteRow && !inGutter) {
-      inGutter = true;
-      gutterStart = y;
-    } else if (!whiteRow && inGutter) {
-      if (y - gutterStart >= minGutter) {
-        hSplits.push(Math.floor((gutterStart + y) / 2));
-      }
-      inGutter = false;
+    const row = y * w;
+    for (let xx = 0; xx < outW; xx++) {
+      const xmin = bounds[xx * 2], xmax = bounds[xx * 2 + 1], k = xx * ksize;
+      let ss = 1 << 21;
+      for (let x = 0; x < xmax; x++) ss += src[row + xmin + x] * kk[k + x];
+      out[y * outW + xx] = pilClip8(ss);
     }
   }
-  hSplits.push(h);
-  hSplits = mergeSmallGaps(hSplits, minBandH);
+  return out;
+}
 
-  const panels = [];
-  for (let bandIdx = 0; bandIdx < hSplits.length - 1; bandIdx++) {
-    const y1 = hSplits[bandIdx], y2 = hSplits[bandIdx + 1];
-
-    function isWhiteCol(x) {
-      let white = 0;
-      for (let y = y1; y < y2; y += 2) {
-        if (gray[y * w + x] > threshold) white++;
-      }
-      return white > Math.floor((y2 - y1) / 2) * purity;
-    }
-
-    let vSplits = [0];
-    inGutter = false;
-    gutterStart = 0;
+function pilResizeVertical(src, w, h, outH) {
+  const { ksize, bounds, kk } = pilBoxCoeffs(h, outH);
+  const out = new Uint8Array(w * outH);
+  for (let yy = 0; yy < outH; yy++) {
+    const ymin = bounds[yy * 2], ymax = bounds[yy * 2 + 1], k = yy * ksize;
     for (let x = 0; x < w; x++) {
-      const whiteCol = isWhiteCol(x);
-      if (whiteCol && !inGutter) {
-        inGutter = true;
-        gutterStart = x;
-      } else if (!whiteCol && inGutter) {
-        if (x - gutterStart >= minGutter) {
-          vSplits.push(Math.floor((gutterStart + x) / 2));
-        }
-        inGutter = false;
-      }
-    }
-    vSplits.push(w);
-    vSplits = mergeSmallGaps(vSplits, minBandW);
-
-    for (let colIdx = 0; colIdx < vSplits.length - 1; colIdx++) {
-      panels.push([vSplits[colIdx], y1, vSplits[colIdx + 1], y2]);
+      let ss = 1 << 21;
+      for (let y = 0; y < ymax; y++) ss += src[(ymin + y) * w + x] * kk[k + y];
+      out[yy * w + x] = pilClip8(ss);
     }
   }
+  return out;
+}
 
-  if (panels.length === 0) panels.push([0, 0, w, h]);
-  return panels;
+/* The pass order is Pillow's too (ImagingResampleInner): vertical first only when the height
+ * shrinks by more than twice what the width does. Pillow before 13.0 always went horizontal first
+ * and rounds some cells differently, so the references must come from Pillow 13.0 or later. */
+function pilResizeBox(src, w, h, outW, outH) {
+  if (outW === w && outH === h) return src.slice();
+  const horizontalFirst = !((h - outH) > (w - outW) * 2);
+  if (horizontalFirst) {
+    const mid = outW !== w ? pilResizeHorizontal(src, w, h, outW) : src;
+    return outH !== h ? pilResizeVertical(mid, outW, h, outH) : mid;
+  }
+  const mid = outH !== h ? pilResizeVertical(src, w, h, outH) : src;
+  return outW !== w ? pilResizeHorizontal(mid, w, outH, outW) : mid;
+}
+
+/* Art the confident panels leave uncovered is recovered as extra panels (fillUncoveredArt in
+ * yolo.js). Ink is measured on a coarse grid of cells about GAP_CELL_FRAC of the page's short
+ * side; a cell counts as ink when GAP_CELL_INK_FRAC of its pixels is darker than INK_LEVEL.
+ * convert_manga.py:GAP_*. */
+const GAP_CELL_FRAC = 0.016;
+const GAP_CELL_INK_FRAC = 0.04;
+
+/* Coarse ink map of the page: {grid (rows*cols, 1 = ink), rows, cols, cell (px)}.
+ * Port of convert_manga.py:_ink_grid. */
+function inkGrid(gray, w, h) {
+  const cell = Math.max(4, pyRound(Math.min(w, h) * GAP_CELL_FRAC));
+  const cols = Math.max(1, Math.floor(w / cell)), rows = Math.max(1, Math.floor(h / cell));
+  // Fraction of dark pixels per cell: threshold first, then box-average down to the grid.
+  const dark = new Uint8Array(w * h);
+  for (let i = 0; i < dark.length; i++) dark[i] = gray[i] < INK_LEVEL ? 255 : 0;
+  const small = pilResizeBox(dark, w, h, cols, rows);
+  const level = 255 * GAP_CELL_INK_FRAC;
+  const grid = new Uint8Array(rows * cols);
+  for (let i = 0; i < grid.length; i++) grid[i] = small[i] >= level ? 1 : 0;
+  return { grid, rows, cols, cell };
+}
+
+/* Number of ink pixels in a box, and its area. Outside the page counts as ink: Pillow pads a crop
+ * that leaves the image with black. */
+function inkCount(gray, w, h, box) {
+  const [x1, y1, x2, y2] = box;
+  const area = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const cx1 = Math.max(0, x1), cy1 = Math.max(0, y1), cx2 = Math.min(w, x2), cy2 = Math.min(h, y2);
+  let inside = 0, ink = 0;
+  for (let y = cy1; y < cy2; y++) {
+    const row = y * w;
+    for (let x = cx1; x < cx2; x++) {
+      inside++;
+      if (gray[row + x] < INK_LEVEL) ink++;
+    }
+  }
+  return { ink: ink + (area - inside), area };
+}
+
+/* Fraction of a box that is ink. Port of convert_manga.py:_ink_frac. */
+function inkFrac(gray, w, h, box) {
+  const { ink, area } = inkCount(gray, w, h, box);
+  return ink / Math.max(1, area);
+}
+
+/* The grid replaces a page-sized frame only when it finds a few real cells. A title line, a
+ * credits list or a page of sketches cuts into dozens of strips, each a pointless zoom step, and a
+ * nearly blank page (a disclaimer, a colophon) into empty cells. Every cell must cover this
+ * fraction of the page, span this fraction of its width and height, and hold this much ink.
+ * convert_manga.py:GRID_FALLBACK_*. */
+const GRID_FALLBACK_MAX_CELLS = 8;
+const GRID_FALLBACK_MIN_CELL_FRAC = 0.06;
+const GRID_FALLBACK_MIN_SIDE_FRAC = 0.12;
+const GRID_FALLBACK_MIN_INK_FRAC = 0.03;
+
+/* Port of convert_manga.py:_grid_cell_is_panel. */
+function gridCellIsPanel(gray, w, h, cell) {
+  const cw = cell[2] - cell[0], ch = cell[3] - cell[1];
+  if (cw * ch < GRID_FALLBACK_MIN_CELL_FRAC * w * h ||
+      cw < GRID_FALLBACK_MIN_SIDE_FRAC * w || ch < GRID_FALLBACK_MIN_SIDE_FRAC * h) return false;
+  return inkCount(gray, w, h, cell).ink >= GRID_FALLBACK_MIN_INK_FRAC * cw * ch;
+}
+
+/* Whether the grid's cells may replace a page-sized frame: a few of them, each a real panel. */
+function gridFallbackAccepts(cells, gray, w, h) {
+  return cells.length > 1 && cells.length <= GRID_FALLBACK_MAX_CELLS &&
+    cells.every((c) => gridCellIsPanel(gray, w, h, c));
 }
 
 /* True when the panel covers almost the entire page in both dimensions. */
@@ -404,7 +595,7 @@ function fitToDeviceSize(w, h, target) {
   return { w: nw, h: nh, resized: true };
 }
 
-/* ── Reading-order sort (topological "reads-before" graph) ────── */
+/* ── Reading order: gutter cuts, with a "reads-before" graph as the fallback ── */
 
 function yOverlapFrac(a, b) {
   const overlap = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
@@ -418,21 +609,167 @@ function xOverlapFrac(a, b) {
   return Math.max(0, overlap) / Math.max(1, minW);
 }
 
-/* Sort panels into reading order. rtl = true is manga order (right-to-left within a
- * tier); rtl = false is western comics and strips, which read left-to-right. The
- * direction only affects within-tier ordering: tiers themselves always run
- * top-to-bottom, in both conventions.
+function unionBox(a, b) {
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+}
+
+/* A 4-koma strip is a column of equally sized panels with the same left and right edges. Edges
+ * count as "the same" within YONKOMA_EDGE_TOL_FRAC of the page width. A column is a strip with
+ * YONKOMA_MIN_STRIP_PANELS panels or more, and at least YONKOMA_MIN_STRIPS strips side by side are
+ * needed before the page is read column by column. No strip is wider than
+ * YONKOMA_MAX_STRIP_WIDTH_FRAC of the page, and its panels' heights differ by at most
+ * YONKOMA_MAX_HEIGHT_RATIO. convert_manga.py:YONKOMA_*. */
+const YONKOMA_EDGE_TOL_FRAC = 0.04;
+const YONKOMA_MIN_STRIP_PANELS = 3;
+const YONKOMA_MIN_STRIPS = 2;
+const YONKOMA_MAX_STRIP_WIDTH_FRAC = 0.55;
+const YONKOMA_MAX_HEIGHT_RATIO = 1.6;
+
+/* The panels in 4-koma reading order if the page is laid out as side-by-side strips, else null.
  *
- * columnMajor = true is yonkoma (4-koma): the same rule with the axes swapped. A tier
- * becomes a COLUMN -- panels whose horizontal extents overlap -- read top to bottom,
- * and the columns run right to left, or left to right when rtl is false. A strip page
- * is read down one column and then down the next, never across, which is what the
- * row-major rule would do. A column whose panels differ in height (a title page's
- * full-height illustration beside four short ones) falls out of the same overlap test
- * that makes the row-major case robust.
+ * Strip collections are often bound into an ordinary volume as extras, so the layout is
+ * recognized per page rather than set for the whole book. A page qualifies when at least two
+ * columns are strips -- three or more stacked panels of similar height sharing their left and
+ * right edges -- and nothing else on the page lines up into a column of its own. A single panel
+ * down the side (a strip page's title panel) is allowed alongside them.
  *
- * Port of sort_panels_reading_order(). */
+ * A strip panel the detector cut in two (a sound effect or a figure breaking its art) lies within
+ * a strip's edges without matching them; it is merged back into the strip panel it overlaps, or
+ * with the other fragments of the same row. The strips are then read top to bottom, right to left
+ * (left to right when rtl is false). Returns new boxes. Port of
+ * convert_manga.py:yonkoma_reading_order. */
+function yonkomaReadingOrder(panels, pageW, rtl = true) {
+  if (panels.length < YONKOMA_MIN_STRIPS * YONKOMA_MIN_STRIP_PANELS) return null;
+  const tol = pageW * YONKOMA_EDGE_TOL_FRAC;
+  const columns = [];
+  for (const p of panels) {
+    const col = columns.find((c) => Math.abs(p[0] - c[0][0]) <= tol && Math.abs(p[2] - c[0][2]) <= tol);
+    if (col) col.push(p.slice());
+    else columns.push([p.slice()]);
+  }
+
+  const strips = [];
+  const rest = [];
+  for (const col of columns) {
+    if (col.length < YONKOMA_MIN_STRIP_PANELS) {
+      rest.push(...col);
+      continue;
+    }
+    const width = Math.max(...col.map((p) => p[2])) - Math.min(...col.map((p) => p[0]));
+    const heights = col.map((p) => p[3] - p[1]);
+    const ordered = col.slice().sort((a, b) => a[1] - b[1]);
+    let overlapping = false;
+    for (let i = 0; i + 1 < ordered.length; i++) {
+      if (yOverlapFrac(ordered[i], ordered[i + 1]) > 0.3) overlapping = true;
+    }
+    if (width > pageW * YONKOMA_MAX_STRIP_WIDTH_FRAC ||
+        Math.max(...heights) > YONKOMA_MAX_HEIGHT_RATIO * Math.max(1, Math.min(...heights)) ||
+        overlapping) return null;
+    strips.push(ordered);
+  }
+  if (strips.length < YONKOMA_MIN_STRIPS) return null;
+
+  const spans = strips.map((s) => [Math.min(...s.map((p) => p[0])), Math.max(...s.map((p) => p[2]))]);
+  for (let i = 0; i < spans.length; i++) {  // strips never share horizontal space
+    for (let j = i + 1; j < spans.length; j++) {
+      const a = spans[i], b = spans[j];
+      if (Math.min(a[1], b[1]) - Math.max(a[0], b[0]) > tol) return null;
+    }
+  }
+
+  const lone = [];
+  for (const p of rest) {
+    const home = spans.findIndex(([x1, x2]) => p[0] >= x1 - tol && p[2] <= x2 + tol);
+    if (home < 0) {
+      // Straddles a strip: not a strip page.
+      if (spans.some(([x1, x2]) => Math.min(p[2], x2) - Math.max(p[0], x1) > tol)) return null;
+      lone.push(p);
+      continue;
+    }
+    const strip = strips[home];
+    let owner = strip[0];
+    for (const s of strip) if (yOverlapFrac(s, p) > yOverlapFrac(owner, p)) owner = s;
+    if (yOverlapFrac(owner, p) > 0.5) {
+      const u = unionBox(owner, p);
+      for (let k = 0; k < 4; k++) owner[k] = u[k];
+    } else {
+      strip.push(p);
+      strip.sort((a, b) => a[1] - b[1]);
+    }
+  }
+  for (const s of strips) {  // fragments of a row with no full panel: merge them with each other
+    let i = 0;
+    while (i < s.length - 1) {
+      if (yOverlapFrac(s[i], s[i + 1]) > 0.5) s[i] = unionBox(s[i], s.splice(i + 1, 1)[0]);
+      else i++;
+    }
+  }
+  for (let i = 0; i < lone.length; i++) {  // two loose panels lined up: an ordinary page after all
+    for (let j = i + 1; j < lone.length; j++) if (xOverlapFrac(lone[i], lone[j]) > 0.3) return null;
+  }
+
+  const units = strips.concat(lone.map((p) => [p]));
+  const centre = (u) => (u[0][0] + u[0][2]) / 2;
+  units.sort((a, b) => (rtl ? centre(b) - centre(a) : centre(a) - centre(b)));
+  return units.flat();
+}
+
+/* Panels may overlap across a gutter and still be cut apart there: a slanted border pushes a
+ * detected box past the gutter. The overlap allowed is GUTTER_CUT_TOL_FRAC of the group's extent,
+ * or GUTTER_CUT_PANEL_FRAC of the smaller of the two panels meeting at the gutter, whichever is
+ * larger. convert_manga.py:GUTTER_CUT_*. */
+const GUTTER_CUT_TOL_FRAC = 0.03;
+const GUTTER_CUT_PANEL_FRAC = 0.25;
+
+/* Split panels at every gutter running the full extent of the group along `axis` (0 = vertical
+ * gutters, splitting columns; 1 = horizontal gutters, splitting rows). Groups come back in
+ * increasing coordinate order; a single group means no such gutter.
+ * Port of convert_manga.py:_gutter_groups. */
+function gutterGroups(panels, axis) {
+  const lo = axis, hi = axis + 2;
+  const ordered = panels.slice().sort((a, b) => a[lo] - b[lo] || a[hi] - b[hi]);
+  const extent = Math.max(...panels.map((p) => p[hi])) - Math.min(...panels.map((p) => p[lo]));
+  const tol = extent * GUTTER_CUT_TOL_FRAC;
+  const groups = [[ordered[0]]];
+  let reacher = ordered[0];  // the panel reaching furthest so far
+  for (const p of ordered.slice(1)) {
+    const smaller = Math.min(p[hi] - p[lo], reacher[hi] - reacher[lo]);
+    if (p[lo] >= reacher[hi] - Math.max(tol, smaller * GUTTER_CUT_PANEL_FRAC)) groups.push([p]);
+    else groups[groups.length - 1].push(p);
+    if (p[hi] > reacher[hi]) reacher = p;
+  }
+  return groups;
+}
+
+/* Sort panels into reading order by cutting the page along its gutters. A gutter running the
+ * whole width splits the page into rows, read top to bottom; a gutter running the whole height of
+ * a row splits it into columns, read right to left (left to right when rtl is false); each piece
+ * is cut again the same way. That handles layouts no comparison of two panels alone can order: a
+ * tall panel between two stacked columns reads after the right column and before the left one.
+ *
+ * columnMajor = true is yonkoma (4-koma) order: columns first, each read top to bottom.
+ *
+ * A group with no full-length gutter -- slanted borders, overlapping boxes -- falls back to the
+ * pairwise reads-before graph in sortPanelsGraph(). Port of
+ * convert_manga.py:sort_panels_reading_order. */
 function sortPanelsReadingOrder(panels, rtl = true, columnMajor = false) {
+  if (panels.length <= 1) return panels.slice();
+  for (const axis of columnMajor ? [0, 1] : [1, 0]) {
+    const groups = gutterGroups(panels, axis);
+    if (groups.length > 1) {
+      if (axis === 0 && rtl) groups.reverse();
+      return groups.flatMap((g) => sortPanelsReadingOrder(g, rtl, columnMajor));
+    }
+  }
+  return sortPanelsGraph(panels, rtl, columnMajor);
+}
+
+/* Reading order from a "reads-before" graph and a topological sort. For every pair of panels:
+ * if their vertical extents overlap substantially they are in the same tier and read
+ * horizontally; if not, whichever is higher reads first. columnMajor swaps the axes (a tier is a
+ * column). Same-rank ties are broken top to bottom, then along the reading direction; a cycle in
+ * the pairwise rules reads the rest by position. Port of convert_manga.py:_sort_panels_graph. */
+function sortPanelsGraph(panels, rtl = true, columnMajor = false) {
   const n = panels.length;
   if (n <= 1) return panels;
 
@@ -469,15 +806,16 @@ function sortPanelsReadingOrder(panels, rtl = true, columnMajor = false) {
     if (columnMajor) return [rtl ? -cx : cx, cy];
     return [cy, rtl ? -cx : cx];
   }
+  const byTie = (a, b) => {
+    const ka = tieKey(a), kb = tieKey(b);
+    return ka[0] - kb[0] || ka[1] - kb[1];
+  };
 
   let available = [];
   for (let i = 0; i < n; i++) if (inDegree[i] === 0) available.push(i);
   const result = [];
   while (available.length) {
-    available.sort((a, b) => {
-      const ka = tieKey(a), kb = tieKey(b);
-      return ka[0] - kb[0] || ka[1] - kb[1];
-    });
+    available.sort(byTie);
     const node = available.shift();
     result.push(node);
     for (const j of edges[node]) {
@@ -486,8 +824,37 @@ function sortPanelsReadingOrder(panels, rtl = true, columnMajor = false) {
     }
   }
 
-  if (result.length !== n) return panels; // cyclic constraints: keep original
+  if (result.length !== n) {
+    const done = new Set(result);
+    const rest = [];
+    for (let i = 0; i < n; i++) if (!done.has(i)) rest.push(i);
+    result.push(...rest.sort(byTie));
+  }
   return result.map((i) => panels[i]);
+}
+
+/* The order a page's frames are read in: as 4-koma strips when the page is laid out that way and
+ * detection is on, otherwise by gutter cuts. The two steps of convert_manga.py's main loop. */
+function orderPanels(frames, pageW, rtl, columnMajor, yonkomaDetect = true) {
+  const strips = yonkomaDetect ? yonkomaReadingOrder(frames, pageW, rtl) : null;
+  return strips || sortPanelsReadingOrder(frames, rtl, columnMajor);
+}
+
+/* ── Two-page spreads (convert_manga.py:split_spread_image) ──── */
+
+/* The crop rects of a landscape page's two halves, in reading order (the right half first when
+ * rtl), or null for a portrait page, which stays whole. */
+function spreadHalves(w, h, rtl = true) {
+  if (w <= h) return null;
+  const mid = Math.floor(w / 2);
+  const left = [0, 0, mid, h], right = [mid, 0, w, h];
+  return rtl ? [right, left] : [left, right];
+}
+
+/* Chapter entries moved onto the split pages: firstOutput[i] is the first output page of source
+ * page i. Entries past the end are dropped. As convert_manga.py's main() remaps its TOC. */
+function remapTocAfterSplit(entries, firstOutput) {
+  return entries.filter(([i]) => i >= 0 && i < firstOutput.length).map(([i, title]) => [firstOutput[i], title]);
 }
 
 /* ── Language-aware OCR prompt ────────────────────────────────── */
@@ -1601,12 +1968,18 @@ if (typeof module !== "undefined") {
   module.exports = {
     MANGA_FORMAT_VERSION, isImageName, baseName, mangaFileExt,
     naturalSortKey, compareNaturalKeys, naturalSortPaths,
-    grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage,
+    grayFromRGBA, mergeSmallGaps, detectPanelsGrid, isFullPagePanel, panelInkCoverage, pyRound,
+    scalePanelBoxes, INK_LEVEL, pilResizeBox, GAP_CELL_FRAC, GAP_CELL_INK_FRAC, inkGrid, inkCount, inkFrac,
+    GRID_FALLBACK_MAX_CELLS, GRID_FALLBACK_MIN_CELL_FRAC, GRID_FALLBACK_MIN_SIDE_FRAC, GRID_FALLBACK_MIN_INK_FRAC,
+    gridCellIsPanel, gridFallbackAccepts,
     floydSteinbergMono, floydSteinbergLevels, ditherMono, ditherLevels, DITHER_STYLES, validDitherStyle, stretchPaperAndInk, unsharpMask, encodeBmp1bit, encodeMonoBmpFromRGBA,
     DITHER_GAMMAS, validDitherGamma, applyGrayGamma, metaFromFileName, partStarts,
     CONTRAST_GAMMAS, toneCurve, applyToneCurve, sharpenRGBA,
     MANGA_DEVICE_TARGETS, fitToDeviceSize,
-    yOverlapFrac, xOverlapFrac, sortPanelsReadingOrder,
+    yOverlapFrac, xOverlapFrac, unionBox, sortPanelsReadingOrder, sortPanelsGraph, gutterGroups,
+    GUTTER_CUT_TOL_FRAC, GUTTER_CUT_PANEL_FRAC, yonkomaReadingOrder, orderPanels,
+    YONKOMA_EDGE_TOL_FRAC, YONKOMA_MIN_STRIP_PANELS, YONKOMA_MIN_STRIPS, YONKOMA_MAX_STRIP_WIDTH_FRAC,
+    YONKOMA_MAX_HEIGHT_RATIO, spreadHalves, remapTocAfterSplit,
     OCR_LANGUAGE_NAMES, ocrLanguageName, buildPanelOcrPrompt,
     trimMarginsBox,
     WEBTOON_BLANK_LEVEL, WEBTOON_MIN_GUTTER, WEBTOON_MIN_PAGE_FRAC,
