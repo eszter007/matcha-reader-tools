@@ -681,9 +681,10 @@ async function selectionIsMokuro(files) {
  * readers sometimes ignore CSS background/object-fit, leaving dark strips at
  * the bottom or sides of individual images. Baking the white matte into every
  * 480x800 pixel image prevents this for both portrait and landscape source art.
- * No artwork is cropped or stretched; all images preserve their aspect ratio.
- * Any leftover viewport space is filled white. */
-async function rasterizeEpubImage(im, deviceTarget) {
+ * Stretching is optional for portrait artwork close to the target aspect ratio;
+ * the threshold defaults to the original 18%. All other artwork is contained
+ * without cropping, with a white backdrop for unused screen space. */
+async function rasterizeEpubImage(im, deviceTarget, stretchOptions = { enabled: true, limit: 18 }) {
   if (!Array.isArray(deviceTarget)) return im;
   const [targetW, targetH] = deviceTarget;
   if (!Number.isInteger(targetW) || !Number.isInteger(targetH) || targetW <= 0 || targetH <= 0) return im;
@@ -693,13 +694,23 @@ async function rasterizeEpubImage(im, deviceTarget) {
     const ctx = smoothScaling(out.getContext("2d"));
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, targetW, targetH);
-    // Fit every page and panel uniformly; never change its aspect ratio.
-    // Center it on a pure-white 480x800 frame instead of cropping/stretching.
-    const scale = Math.min(targetW / bmp.width, targetH / bmp.height);
-    const drawW = Math.max(1, Math.round(bmp.width * scale));
-    const drawH = Math.max(1, Math.round(bmp.height * scale));
-    ctx.drawImage(bmp, Math.floor((targetW - drawW) / 2),
-      Math.floor((targetH - drawH) / 2), drawW, drawH);
+    // Threshold is the percentage difference between the image's aspect
+    // ratio (width/height) and the Picco screen's aspect ratio (480/800).
+    // The old stretch behavior applies only to portrait pages and panels.
+    const aspectDifference = Math.abs((bmp.width / bmp.height) /
+      (targetW / targetH) - 1) * 100;
+    const stretch = stretchOptions.enabled && bmp.height > bmp.width &&
+      aspectDifference <= stretchOptions.limit;
+    if (stretch) {
+      ctx.drawImage(bmp, 0, 0, targetW, targetH);
+    } else {
+      // No stretching or cropping: centered, uniformly scaled, white gaps.
+      const scale = Math.min(targetW / bmp.width, targetH / bmp.height);
+      const drawW = Math.max(1, Math.round(bmp.width * scale));
+      const drawH = Math.max(1, Math.round(bmp.height * scale));
+      ctx.drawImage(bmp, Math.floor((targetW - drawW) / 2),
+        Math.floor((targetH - drawH) / 2), drawW, drawH);
+    }
     return {
       ...im, bytes: await canvasToJpegBytes(out, 0.95),
       mime: "image/jpeg", w: targetW, h: targetH,
@@ -711,12 +722,12 @@ async function rasterizeEpubImage(im, deviceTarget) {
 
 /* Assemble images into a fixed-layout EPUB 3 (ZIP with STORE-first mimetype).
  * epubPages follows the original reading order. The pure XML is in manga-epub.js. */
-async function buildMangaEpub({ title, author, epubPages, tocEntries, deviceTarget }) {
+async function buildMangaEpub({ title, author, epubPages, tocEntries, deviceTarget, stretchOptions }) {
   const spine = [];
   const pageFirstHref = new Map();  // pageIdx → first XHTML of that original page
   for (const pg of epubPages) {
     for (const [ii, im] of pg.images.entries()) {
-      const fitted = await rasterizeEpubImage(im, deviceTarget);
+      const fitted = await rasterizeEpubImage(im, deviceTarget, stretchOptions);
       const base = `p${String(pg.pageIdx).padStart(4, "0")}_${ii}`;
       const xhtmlHref = `text/${base}.xhtml`;
       if (ii === 0) pageFirstHref.set(pg.pageIdx, xhtmlHref);
@@ -1173,6 +1184,11 @@ async function runMangaConversion() {
   // is baked in at conversion time; the device folder's crops keep their own shape and the
   // firmware rotates them when it zooms one to the screen.
   const rotatePanels = $("manga-rotate-panels").checked;
+  const selectedStretchLimit = parseInt($("manga-stretch-limit").value, 10);
+  const stretchOptions = {
+    enabled: $("manga-stretch").checked,
+    limit: [5, 10, 18, 25, 35, 50].includes(selectedStretchLimit) ? selectedStretchLimit : 18,
+  };
   // How much of a page's ink must sit inside its panels before the full page may be dropped.
   // Not 100%: a stray speck in the gutter or a page number outside every panel is not content
   // worth keeping a whole page image for.
@@ -1252,6 +1268,8 @@ async function runMangaConversion() {
   saveSetting("manga-mono", mono ? "1" : "0");
   saveSetting("manga-panels-only", panelsOnly ? "1" : "0");
   saveSetting("manga-rotate-panels", rotatePanels ? "1" : "0");
+  saveSetting("manga-stretch", stretchOptions.enabled ? "1" : "0");
+  saveSetting("manga-stretch-limit", String(stretchOptions.limit));
   saveSetting("manga-format", [...formats].join(","));
   saveSetting("manga-booktype", bookType);
   saveSetting("manga-dither", $("manga-dither").value);
@@ -1675,7 +1693,7 @@ async function runMangaConversion() {
       const extras = [];
       if (formats.has("epub") && epubPages.length) {
         setProgress(pagesDone, pages.length, "Building EPUB…");
-        const epubBytes = await buildMangaEpub({ title: metaTitle, author: metaAuthor, epubPages, tocEntries, deviceTarget });
+        const epubBytes = await buildMangaEpub({ title: metaTitle, author: metaAuthor, epubPages, tocEntries, deviceTarget, stretchOptions });
         extras.push({ name: `${folder}.epub`, bytes: epubBytes, type: "application/epub+zip" });
         logLine(`Built ${folder}.epub (${epubPages.reduce((n, p) => n + p.images.length, 0)} images).`);
       }
@@ -2345,6 +2363,29 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-mono").checked = loadSetting("manga-mono", "0") === "1";
   $("manga-panels-only").checked = loadSetting("manga-panels-only", "0") === "1";
   $("manga-rotate-panels").checked = loadSetting("manga-rotate-panels", "1") === "1";
+  // First visit: replicate the original portrait stretch behavior (18%).
+  // Later visits: respect the user's last chosen threshold and on/off setting.
+  $("manga-stretch").checked = loadSetting("manga-stretch", "1") === "1";
+  const savedStretchLimit = loadSetting("manga-stretch-limit", "18");
+  $("manga-stretch-limit").value = ["5", "10", "18", "25", "35", "50"].includes(savedStretchLimit)
+    ? savedStretchLimit : "18";
+  const syncStretchUi = () => {
+    const enabled = $("manga-stretch").checked;
+    const limit = $("manga-stretch-limit").value;
+    $("manga-stretch-limit").disabled = !enabled;
+    $("manga-stretch-hint").textContent = enabled
+      ? `Portrait pages and panels whose aspect ratio differs by at most ${limit}% from 480:800 will fill the screen (slight distortion). Other images keep their proportions on white. Landscape images are never stretched.`
+      : "Stretching is OFF: every page and panel keeps its aspect ratio. Any unused space is white.";
+  };
+  $("manga-stretch").addEventListener("change", () => {
+    saveSetting("manga-stretch", $("manga-stretch").checked ? "1" : "0");
+    syncStretchUi();
+  });
+  $("manga-stretch-limit").addEventListener("change", () => {
+    saveSetting("manga-stretch-limit", $("manga-stretch-limit").value);
+    syncStretchUi();
+  });
+  syncStretchUi();
   {
     // This Picco-specific fork exports EPUB only, regardless of previous preferences.
     for (const cb of formatBoxes()) cb.checked = cb.value === "epub";
