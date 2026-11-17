@@ -88,9 +88,9 @@
     <div class="field-gap"></div>
     <p class="field-label" id="manga-stretch-title">Image stretching</p>
     <label><input type="checkbox" id="manga-stretch" checked>
-      <strong>Stretch portrait and landscape pages and panels</strong></label>
+      <strong>Stretch portrait pages and upright panels</strong></label>
     <div id="manga-stretch-controls">
-      <label for="manga-stretch-limit">Maximum aspect-ratio difference (relative to the matching screen orientation)</label>
+      <label for="manga-stretch-limit">Maximum aspect-ratio difference from 480 × 800</label>
       <select id="manga-stretch-limit" aria-describedby="manga-stretch-hint">
         <option value="5">5%</option>
         <option value="10">10%</option>
@@ -100,7 +100,7 @@
         <option value="50">50%</option>
       </select>
     </div>
-    <p class="hint" id="manga-stretch-hint" aria-live="polite">Portrait and landscape images within 18% of the matching screen ratio (480:800 or 800:480) are stretched to 480 × 800. Stretching landscape images can cause substantial distortion. Others retain their proportions with white space.</p>
+    <p class="hint" id="manga-stretch-hint" aria-live="polite">Wide panels are rotated upright when enabled below. Portrait pages and panels within 18% of 480:800 may stretch to fill the screen. Images left horizontal keep their proportions and white margins.</p>
   </div>
 
   <div class="card">
@@ -156,8 +156,8 @@
         <label id="manga-yolo-row"><input type="checkbox" id="manga-yolo" checked> <span class="opt">AI panel detection</span>
           <span class="hint">Finds panels without white borders too. Runs in the browser; pages are
           never uploaded. Downloads once (~21&nbsp;MB).</span></label>
-        <label id="manga-rotate-row"><input type="checkbox" id="manga-rotate-panels" checked> <span class="opt">Turn wide panels sideways</span>
-          <span class="hint">A wide panel is rotated so it fills the tall screen; turn the device to read it. For EPUB, PDF and XTC/XTCH. Matcha Reader files do this on the device.</span></label>
+        <label id="manga-rotate-row"><input type="checkbox" id="manga-rotate-panels" checked> <span class="opt">Rotate wide panels upright (recommended)</span>
+          <span class="hint">Rotates landscape panels 90° before fitting them to the Picco screen. Rotated panels may use the stretch threshold above. Landscape full pages remain horizontal and never stretch.</span></label>
       </div>
       </div>
 
@@ -433,6 +433,6 @@
 <script src="js/manga-epub.js?v=picco-20261117-no-stretch"></script>
 <script src="js/manga-pdf.js"></script>
 <script src="js/yolo.js"></script>
-<script src="js/manga-ui.js?v=picco-20261117-landscape-stretch"></script>
+<script src="js/manga-ui.js?v=picco-20261117-rotate-wide-v1"></script>
 </body>
 </html>
