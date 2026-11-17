@@ -26,9 +26,12 @@ Red boxes are the panels found; numbers are their reading order. Pick the **book
 <details>
 <summary><b>Manga</b> — right to left, then down the page</summary>
 
-A full-width panel separates the rows around it, and a tall panel beside two stacked shorter ones
-resolves correctly. The order comes from a topological sort, not from clustering panels by their
-vertical centre.
+The page is cut along its gutters: a gutter running the whole width splits it into rows, a gutter
+running the whole height of a row splits that row into columns, and each piece is cut again. So a
+full-width panel separates the rows around it, a tall panel beside two stacked shorter ones
+resolves correctly, and a tall panel between two columns reads after the right one and before the
+left. Where no clean gutter exists (slanted borders, overlapping boxes) the order falls back to a
+pairwise rule and a topological sort.
 
 <img src="docs/images/panels-manga.jpg" width="360" alt="A manga page with eight numbered panels, walked right to left">
 </details>
@@ -37,7 +40,10 @@ vertical centre.
 <summary><b>4-koma</b> — each column top to bottom, then the next column</summary>
 
 A 4-koma page is two strips side by side, not rows across the page, so it reads down one column
-and then down the next; the row-major order would interleave the two gags. It is the same rule
+and then down the next; the row-major order would interleave the two gags. Such pages are spotted on
+their own in any book (two or more strips of three or more equal panels sharing their edges), so
+the 4-koma extras bound into an ordinary volume come out right without this book type, and a strip
+panel the detector cut in two is merged back. Pick the book type for a whole book of strips. It is the same rule
 with the axes swapped, so a title page whose left half is one full-height illustration beside a
 strip of four still works — the illustration is a column of its own and reads last.
 
@@ -114,7 +120,9 @@ changed, and 21 MB for the model alone. Bump their paths if one is replaced.
 | **Device** (screen size cards) | `--device NAME` (or `--x4` / `--x3`) | Downscales before detection. 480×800 for the X4/X4C, X4 Pro, Sticky, Papermono, BOOX Picco and Metalio E-Ink 4; 528×792 for the X3; 552×768 for the EEGO Reader A4; 684×1216 for the Metalio E-Ink 4 Plus; or a custom 1–4096 px size (browser only). Never upscales. Full resolution warns: the Xteink firmware struggles with it. |
 | **Translate into** | *(browser only)* | Language the translations come back in. The desktop tool always uses English. |
 | **Language** (step 5) | `--language` | Splits reading stats by language, and tells OCR what to expect. `jp`→`ja`, `cn`→`zh`, `kr`→`ko`; `zh-Hant` kept intact. |
-| **AI panel detection** | — | YOLO26 in-browser. Untick for the white-gutter heuristic, which is also the automatic fallback. Disabled for webtoons, whose panels come from gutters. |
+| **Split two-page spreads** | `--split-spreads` | Cuts each landscape page into its two pages, right-hand page first for manga. Chapters move with their pages. Disabled for webtoons and Mokuro volumes. |
+| **AI panel detection** | — | YOLO26 in-browser, on the page at full resolution. Art no confident panel covers is added from the model's weaker guesses or the page's ink; blank boxes (a page number's margin, an empty gap) are dropped. Untick for the gutter heuristic, which is also the automatic fallback: it cuts the page along its white or black gutters, one region at a time. Disabled for webtoons, whose panels come from gutters. |
+| **Spot 4-koma pages** | `--no-yonkoma-detect` to turn off | Reads a page of side-by-side strips one strip at a time. On by default. |
 | **Turn wide panels sideways** | — | EPUB, PDF and XTC/XTCH only: those bake in orientation. The Matcha format rotates on the device instead. |
 | **Black-and-white pages** | `--mono` | Dithered black-and-white pages. One fast refresh on the device. Best for line art. |
 | **Brightness** | *(browser only)* | Gamma applied before dithering, for scans that come out darker than the original. Affects black-and-white pages and XTC/XTCH only. |

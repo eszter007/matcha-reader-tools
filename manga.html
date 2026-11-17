@@ -187,12 +187,24 @@
 
     <details id="manga-detect-advanced">
       <summary>Advanced</summary>
+      <div class="adv-group" role="group" aria-labelledby="adv-pages-title">
+      <div class="subhead" id="adv-pages-title">Pages</div>
+      <div class="checks stacked">
+        <label id="manga-split-row"><input type="checkbox" id="manga-split-spreads"> <span class="opt">Split two-page spreads</span>
+          <span class="hint">Cuts each landscape page — a scanned two-page spread — into its two pages,
+          in reading order. Chapters move with their pages.</span></label>
+      </div>
+      </div>
+
       <div class="adv-group" role="group" aria-labelledby="adv-detect-title">
       <div class="subhead" id="adv-detect-title">Panel detection</div>
       <div class="checks stacked">
         <label id="manga-yolo-row"><input type="checkbox" id="manga-yolo" checked> <span class="opt">AI panel detection</span>
           <span class="hint">Finds panels without white borders too. Runs in the browser; pages are
           never uploaded. Downloads once (~21&nbsp;MB).</span></label>
+        <label id="manga-yonkoma-detect-row"><input type="checkbox" id="manga-yonkoma-detect" checked> <span class="opt">Spot 4-koma pages</span>
+          <span class="hint">A page laid out as side-by-side strips is read one strip at a time, top
+          to bottom, even inside an ordinary manga. Untick it if a normal page comes out in the wrong order.</span></label>
         <label id="manga-rotate-row"><input type="checkbox" id="manga-rotate-panels" checked> <span class="opt">Turn wide panels sideways</span>
           <span class="hint">A wide panel is rotated so it fills the tall screen; turn the device to read it. For EPUB, PDF and XTC/XTCH. Matcha Reader files do this on the device.</span></label>
       </div>

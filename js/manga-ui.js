@@ -248,6 +248,45 @@ async function assembleWebtoonPages(pages, target, onProgress) {
   return { pages: out, stripHeight: rows.length, pageH, cuts: cuts.length - 2, snapped };
 }
 
+/* ── Two-page spreads ─────────────────────────────────────────── */
+
+/* One half of a page, as PNG bytes: the crop on white, as convert_manga.py composites a page
+ * (normalize_for_output) before cutting it. */
+async function spreadHalfPng(page, [x1, y1, x2, y2]) {
+  const bitmap = await decodeImage(await page.read(), mangaFileExt(page.name));
+  const canvas = makeCanvas(x2 - x1, y2 - y1);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, x2 - x1, y2 - y1);
+  ctx.drawImage(bitmap, x1, y1, x2 - x1, y2 - y1, 0, 0, x2 - x1, y2 - y1);
+  bitmap.close && bitmap.close();
+  return canvasToPngBytes(canvas);
+}
+
+/* Cut every landscape page (a scanned two-page spread) into its two halves, in reading order.
+ * Halves are cut when read, so a book is never held in memory twice. Returns {pages, firstOutput}:
+ * firstOutput[i] is the index of source page i's first output page, for moving chapters along.
+ * Port of convert_manga.py:split_spread_pages, which names the halves the same way. */
+async function splitSpreadPages(pages, rtl, onProgress) {
+  const out = [], firstOutput = [];
+  for (let i = 0; i < pages.length; i++) {
+    if (onProgress) onProgress(i, pages.length);
+    firstOutput.push(out.length);
+    const page = pages[i];
+    const bitmap = await decodeImage(await page.read(), mangaFileExt(page.name));
+    const halves = spreadHalves(bitmap.width, bitmap.height, rtl);
+    bitmap.close && bitmap.close();
+    if (!halves) {
+      out.push(page);
+      continue;
+    }
+    halves.forEach((rect, part) => out.push({
+      name: `page_${String(i).padStart(6, "0")}_${part}.png`,
+      read: () => spreadHalfPng(page, rect),
+    }));
+  }
+  return { pages: out, firstOutput };
+}
+
 /* ── Page collection ──────────────────────────────────────────── */
 
 /* files: FileList/array from the picker. Returns
@@ -596,14 +635,15 @@ const BOOK_TYPE_HINTS = {
   [BOOK_WEBTOON]: "One long vertical strip. Its tiles are reassembled and re-cut at the artwork's " +
       "gutters, so no page starts or ends mid-panel. Panels are the blocks between gutters.",
   [BOOK_YONKOMA]: "Each column is read top to bottom, then the column to its left — a 4-koma page " +
-      "is two strips side by side, not rows across the page.",
+      "is two strips side by side, not rows across the page. For a book of strips: 4-koma pages " +
+      "inside an ordinary manga are found without this.",
   [BOOK_YONKOMA_LTR]: "The same, for a strip page that reads the other way: each column top to " +
       "bottom, then the column to its right.",
 };
 
 const YOLO_HINT = "Finds panels more reliably, even ones without a white border. Runs in the " +
   "browser; pages are never uploaded. A one-time 21 MB download. Untick for a faster, simpler " +
-  "search that looks for white space between panels.";
+  "search that looks for white or black space between panels.";
 const YOLO_HINT_WEBTOON = "Not used for webtoons. Their panels are cut where the strip has white " +
   "space, and the AI only finds panels on a normal page.";
 
@@ -644,6 +684,35 @@ function applyBookTypeUi() {
     const yoloHint = yoloRow.querySelector(".hint");
     if (yoloHint) yoloHint.textContent = off ? YOLO_HINT_WEBTOON : YOLO_HINT;
   }
+  applyPageOptionsUi();
+}
+
+const SPLIT_HINT = "Cuts each landscape page — a scanned two-page spread — into its two pages, " +
+  "in reading order. Chapters move with their pages.";
+const SPLIT_HINT_WEBTOON = "Not used for webtoons. Their pages are re-cut from the strip.";
+const SPLIT_HINT_MOKURO = "Not for Mokuro volumes. Their text belongs to each page as it was scanned.";
+const YONKOMA_DETECT_HINT = "A page laid out as side-by-side strips is read one strip at a time, top " +
+  "to bottom, even inside an ordinary manga. Untick it if a normal page comes out in the wrong order.";
+const YONKOMA_DETECT_HINT_WEBTOON = "Not used for webtoons. Their panels are read top to bottom.";
+
+/* Options that do nothing for the chosen book are disabled, with the reason in their hint, like
+ * the AI detector for webtoons. Spreads stay whole for a webtoon (its pages are re-cut) and for
+ * Mokuro (its text is tied to each scanned page) -- convert_manga.py refuses --split-spreads with
+ * either. */
+function applyPageOptionsUi() {
+  const webtoon = validBookType($("manga-booktype").value) === BOOK_WEBTOON;
+  const setRow = (rowId, boxId, off, hint) => {
+    const row = $(rowId);
+    if (!row) return;
+    row.classList.toggle("disabled", off);
+    $(boxId).disabled = off;
+    const h = row.querySelector(".hint");
+    if (h) h.textContent = hint;
+  };
+  setRow("manga-split-row", "manga-split-spreads", webtoon || mangaState.mokuroInput,
+    webtoon ? SPLIT_HINT_WEBTOON : mangaState.mokuroInput ? SPLIT_HINT_MOKURO : SPLIT_HINT);
+  setRow("manga-yonkoma-detect-row", "manga-yonkoma-detect", webtoon,
+    webtoon ? YONKOMA_DETECT_HINT_WEBTOON : YONKOMA_DETECT_HINT);
 }
 
 /* The key field and the language pickers are only meaningful when Gemini will be called,
@@ -802,6 +871,7 @@ function applyFormatVisibility() {
   const nothingPicked = f.size === 0;
   const matcha = nothingPicked || f.has("matcha") || f.has("matchafile");
   const show = (id, on) => { const el = document.getElementById(id); if (el) el.hidden = !on; };
+  applyPageOptionsUi();
   // A Mokuro volume already has its text, so the Gemini card has nothing to do.
   show("card-ocr", matcha && !mangaState.mokuroInput);
   show("notice-ocr", matcha && !mangaState.mokuroInput);
@@ -855,6 +925,16 @@ function clearValidationWarnings() {
  * they were drawn in. Cleared when another file is chosen. */
 const panelEdits = new Map();
 
+/* The decoded page at full resolution on white -- transparent sources composite onto white, the
+ * device's alpha handling and convert_manga.py:normalize_for_output's. */
+function fullResolutionCanvas(bitmap, w, h) {
+  const canvas = makeCanvas(w, h);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(bitmap, 0, 0);
+  return canvas;
+}
+
 /* Boxes drawn on a w x h page, mapped onto a page of tw x th (the same page at another size). */
 function scaleBoxes(boxes, w, h, tw, th) {
   if (w === tw && h === th) return boxes.map((b) => b.slice());
@@ -864,9 +944,10 @@ function scaleBoxes(boxes, w, h, tw, th) {
 
 /* Read, trim, downscale, clean up and detect one page -- shared by the conversion and the panel
  * check, so both see the same page and the same panels. `o` holds the conversion settings:
- * {trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor}, and
- * detect: false for the page image alone. Panel boxes
- * are in the downscaled page's space (imgW x imgH). The caller closes `bitmap`. */
+ * {trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor, yonkomaDetect},
+ * and detect: false for the page image alone. Panel boxes are in the downscaled page's space
+ * (imgW x imgH). `sourceCanvas` is the full-resolution page on white when the AI detector needed
+ * it, else null. The caller closes `bitmap`. */
 async function preparePage(page, o) {
   const srcBytes = await page.read();
   let ext = mangaFileExt(page.name);
@@ -911,7 +992,7 @@ async function preparePage(page, o) {
   const imgW = fit.w, imgH = fit.h;
   const wasResized = fit.resized;
 
-  // Detection + page canvas (downscaled). White-fill only when actually
+  // Page canvas (downscaled), which the gutter grid also runs on. White-fill only when actually
   // resizing, so panels.idx and the default (Original) output are unchanged.
   const canvas = makeCanvas(imgW, imgH);
   const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
@@ -938,6 +1019,7 @@ async function preparePage(page, o) {
   }
 
   let boxes = null;
+  let sourceCanvas = null;
   if (o.detect === false) {
     // The panel editor only needs the page image.
   } else if (o.isWebtoon) {
@@ -946,31 +1028,34 @@ async function preparePage(page, o) {
     // a single column can only move boxes away from what the cut established.
     boxes = detectWebtoonPanels(grayFromRGBA(rgba, imgW, imgH), imgW, imgH);
   } else {
-    let textBoxes = [];
+    // The model looks at the full-resolution page, before it is reduced to the screen, so thin
+    // gutters are not lost; its boxes come back in the stored page's pixels. The gutter grid runs
+    // on the stored page. As convert_manga.py:detect_panels(source_img, img).
+    const stored = { gray: grayFromRGBA(rgba, imgW, imgH), w: imgW, h: imgH };
+    let detected = null, full = null;
     if (o.yolo) {
       try {
-        const detected = await detectPanelsYolo(o.yolo.session, o.yolo.ort, rgba, imgW, imgH);
-        boxes = detected.frames;
-        textBoxes = detected.texts;
+        sourceCanvas = fullResolutionCanvas(bitmap, origW, origH);
+        const fullRgba = sourceCanvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, origW, origH).data;
+        full = { gray: grayFromRGBA(fullRgba, origW, origH), w: origW, h: origH };
+        detected = await detectPanelsYolo(o.yolo.session, o.yolo.ort, fullRgba, origW, origH, undefined, full.gray);
       } catch (e) {
+        detected = null;
         logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
       }
     }
-    if (!boxes) {
-      // The grid heuristic has no text detection, so nothing grows over bubbles here.
-      const gray = grayFromRGBA(rgba, imgW, imgH);
-      boxes = detectPanelsGrid(gray, imgW, imgH);
-    }
-    if (!boxes.length) boxes = [[0, 0, imgW, imgH]];
+    // The grid heuristic has no text detection, so nothing grows over bubbles there.
+    const found = detectPanels(detected, full, stored);
+    let frames = found.frames.length ? found.frames : [[0, 0, imgW, imgH]];
     // Mokuro's blocks mark the bubbles too, so panel crops grow over them.
-    if (pageText) textBoxes = textBoxes.concat(pageText.map((b) => b.box));
-    // Order on the frames as drawn -- growing a box moves its centre, which
-    // sortPanelsReadingOrder() tiers and orders on -- then grow the crops over the
-    // bubbles. yoloExpandPanelsOverText() is index-preserving, so the order survives.
-    boxes = sortPanelsReadingOrder(boxes, o.rtl, o.columnMajor);
-    boxes = yoloExpandPanelsOverText(boxes, textBoxes, imgW, imgH);
+    const textBoxes = pageText ? found.texts.concat(pageText.map((b) => b.box)) : found.texts;
+    // Order on the frames as drawn -- growing a box moves its centre, which the ordering works
+    // on -- then grow the crops over the bubbles. yoloExpandPanelsOverText() is index-preserving,
+    // so the order survives.
+    frames = orderPanels(frames, imgW, o.rtl, o.columnMajor, o.yonkomaDetect !== false);
+    boxes = yoloExpandPanelsOverText(frames, textBoxes, imgW, imgH);
   }
-  return { srcBytes, ext, bitmap, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba, boxes, pageText };
+  return { srcBytes, ext, bitmap, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba, boxes, pageText, sourceCanvas };
 }
 
 /* ── Image clean-up ───────────────────────────────────────────────── */
@@ -1208,6 +1293,10 @@ async function runMangaConversion() {
   // Western print comics are scans with a paper border; trimming it is always wanted, so
   // it rides on the book type rather than being one more checkbox to find.
   const trimMargins = bookType === BOOK_WESTERN;
+  // Disabled for webtoons and Mokuro volumes (see applyPageOptionsUi), whose pages must stay as
+  // they are; a disabled box does nothing however it was left.
+  const splitSpreads = $("manga-split-spreads").checked && !$("manga-split-spreads").disabled;
+  const yonkomaDetect = $("manga-yonkoma-detect").checked;
 
   const apiKey = $("manga-key").value.trim();
   const model = $("manga-model").value.trim() || GEMINI_DEFAULT_MODEL;
@@ -1221,6 +1310,8 @@ async function runMangaConversion() {
   saveSetting("manga-mono", mono ? "1" : "0");
   saveSetting("manga-panels-only", panelsOnly ? "1" : "0");
   saveSetting("manga-rotate-panels", rotatePanels ? "1" : "0");
+  saveSetting("manga-split-spreads", $("manga-split-spreads").checked ? "1" : "0");
+  saveSetting("manga-yonkoma-detect", yonkomaDetect ? "1" : "0");
   saveSetting("manga-format", [...formats].join(","));
   saveSetting("manga-booktype", bookType);
   saveSetting("manga-dither", $("manga-dither").value);
@@ -1277,6 +1368,18 @@ async function runMangaConversion() {
       // Resolve TOC before any max-pages truncation (indices stay correct).
       let tocEntries = collected.tocEntries;
       if (tocEntries.length) logLine(`Found ${tocEntries.length} chapter(s) from the ${collected.tocSource}`);
+      if (splitSpreads) {
+        if (collected.mokuro) {
+          throw new Error("Splitting spreads changes the pages, which would separate Mokuro's text from its page. " +
+            "Untick \"Split two-page spreads\".");
+        }
+        const sourceCount = pages.length;
+        const split = await splitSpreadPages(pages, rtl,
+          (done, total) => setProgress(done, total, "Looking for two-page spreads…"));
+        pages = split.pages;
+        tocEntries = remapTocAfterSplit(tocEntries, split.firstOutput);
+        logLine(`Split landscape spreads: ${sourceCount} source pages became ${pages.length} pages`);
+      }
       const tocText = bookField("manga-toc");
       if (tocText.trim()) {
         const parsed = parseTocText(tocText);
@@ -1331,7 +1434,7 @@ async function runMangaConversion() {
           logLine(`Could not load the AI panel detector (${e.message}); using the grid heuristic.`, "warn");
         }
       }
-      const pageOpts = { trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor };
+      const pageOpts = { trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor, yonkomaDetect };
 
       // What the user typed wins, then the book's own metadata, then a guess from the file name.
       const fileMeta = fileNameMeta(files);
@@ -1474,16 +1577,11 @@ async function runMangaConversion() {
         // the screen, so cropping it from the already-downscaled page magnifies a
         // fraction of an already-reduced image (softness and dither dots and all);
         // cropping at full res and fitting each panel afterwards gives it the whole
-        // pixel budget. Allocate this second full-res canvas only when the page
-        // actually has a panel to crop — covers / full-page spreads skip it.
-        // Transparent sources composite onto white (the device's alpha handling).
-        let sourceCanvas = null;
-        if (boxes.some(needsCrop)) {
-          sourceCanvas = makeCanvas(origW, origH);
-          const sctx = sourceCanvas.getContext("2d");
-          sctx.fillStyle = "#ffffff"; sctx.fillRect(0, 0, origW, origH);
-          sctx.drawImage(bitmap, 0, 0);
-        }
+        // pixel budget. The AI detector already drew this page for the model to look at;
+        // otherwise it is allocated only when the page actually has a panel to crop —
+        // covers / full-page spreads skip it.
+        let sourceCanvas = prep.sourceCanvas;
+        if (!sourceCanvas && boxes.some(needsCrop)) sourceCanvas = fullResolutionCanvas(bitmap, origW, origH);
         // bitmap stays open through the crop loop: a full-page panel has no sourceCanvas, and its
         // OCR crop is drawn from the decoded page directly (closed after the loop).
 
@@ -1797,6 +1895,8 @@ async function panelCheckSettings() {
     cleanupOn: cleanup.levels || cleanup.contrast !== "off" || cleanup.sharpen,
     isWebtoon: false, yolo, rtl: bookType === BOOK_MANGA || bookType === BOOK_YONKOMA,
     columnMajor: bookType === BOOK_YONKOMA || bookType === BOOK_YONKOMA_LTR,
+    yonkomaDetect: $("manga-yonkoma-detect").checked,
+    splitSpreads: $("manga-split-spreads").checked && !$("manga-split-spreads").disabled,
   };
 }
 
@@ -1924,6 +2024,8 @@ async function runPanelCheck() {
     const collected = await collectPagesFromInput(files);
     panelCheck.release = collected.cleanup || null;
     let pages = collected.pages;
+    // The same pages the conversion will see, so a fix lands on the page it was made on.
+    if (opts.splitSpreads && !collected.mokuro) pages = (await splitSpreadPages(pages, opts.rtl)).pages;
     const maxPages = parseInt($("manga-max-pages").value, 10);
     if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
     Object.assign(panelCheck, { files, opts, source: pages, pages: [] });
@@ -2045,12 +2147,19 @@ function peAnnounce(text) {
   setTimeout(() => { s.textContent = text; }, 50);
 }
 
+/* Reading order for panels changed by hand: the conversion's own order, except that 4-koma strip
+ * panels are never merged here -- a box the user drew stays as drawn. */
+function editedPanelOrder(boxes, pageW, o) {
+  const strips = o.yonkomaDetect !== false ? yonkomaReadingOrder(boxes, pageW, o.rtl) : null;
+  return strips && strips.length === boxes.length ? strips : sortPanelsReadingOrder(boxes, o.rtl, o.columnMajor);
+}
+
 /* Save the editor's boxes for this page, in reading order, keeping the selection. */
 function commitPanelEdits() {
   const p = panelCheck.pages[panelCheck.editIndex];
   const selected = pe.boxes[pe.sel];
   pe.boxes = pe.boxes.map(normBox);
-  if (!pe.manual) pe.boxes = sortPanelsReadingOrder(pe.boxes, panelCheck.opts.rtl, panelCheck.opts.columnMajor);
+  if (!pe.manual) pe.boxes = editedPanelOrder(pe.boxes, pe.page.width, panelCheck.opts);
   pe.sel = selected ? pe.boxes.findIndex((b) => b.join() === normBox(selected).join()) : -1;
   panelEdits.set(p.name, { w: pe.page.width, h: pe.page.height, boxes: pe.boxes.map((b) => b.slice()), manual: pe.manual });
   p.thumb = panelCheckThumb(pe.page, pe.boxes);
@@ -2313,6 +2422,8 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-mono").checked = loadSetting("manga-mono", "0") === "1";
   $("manga-panels-only").checked = loadSetting("manga-panels-only", "0") === "1";
   $("manga-rotate-panels").checked = loadSetting("manga-rotate-panels", "1") === "1";
+  $("manga-split-spreads").checked = loadSetting("manga-split-spreads", "0") === "1";
+  $("manga-yonkoma-detect").checked = loadSetting("manga-yonkoma-detect", "1") === "1";
   {
     const saved = new Set(loadSetting("manga-format", "").split(",").filter(Boolean));
     for (const cb of formatBoxes()) cb.checked = saved.has(cb.value);
