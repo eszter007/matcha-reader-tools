@@ -9,8 +9,9 @@
 #
 # Versions are floors, not pins -- these are the ones this was last verified against.
 
-# Required: the synthetic pages, and every CBZ/EPUB/PDF fixture built from them.
-Pillow>=10.0
+# Required: the synthetic pages, and every CBZ/EPUB/PDF fixture built from them. 13.0 for its
+# resize pass order, which convert_manga.py's ink grid depends on (see test/README.md).
+Pillow>=13.0
 
 # ref_yolo/boxes.json -- the AI panel-detection reference.
 # Without these: "manga.html end-to-end (CBZ, no OCR, AI panel detection)" skips,

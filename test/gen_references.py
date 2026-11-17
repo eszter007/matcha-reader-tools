@@ -68,10 +68,12 @@ def make_manga_pages():
     noise_rect(d, 40, 640, 380, 1160)   # bottom-left
     img.save(os.path.join(out, "page02.png"))
 
-    # Page 3: borderless full-page art (single panel fallback).
+    # Page 3: borderless full-page art (single panel fallback). Dense enough that no row or column
+    # is 97% paper: sparser dots read as gutters to the recursive grid, and then whether a line
+    # just clears the bar depends on how the PDF fixture's JPEG is decoded and scaled.
     img = Image.new("RGB", (800, 1200), "white")
     d = ImageDraw.Draw(img)
-    for _ in range(6000):
+    for _ in range(80000):
         px = rng.randint(0, 799)
         py = rng.randint(0, 1199)
         d.point((px, py), fill=rng.randint(0, 200))
@@ -196,12 +198,9 @@ def make_manga_foldered_cbz():
     print(f"manga foldered cbz: {path}")
 
 
-def make_manga_epub():
-    """Synthetic fixed-layout EPUB: XHTML spine wrappers around the pages,
-    dc: metadata, and an EPUB3 nav TOC. Exercises spine-order extraction,
-    metadata auto-detection, and toc.idx generation."""
-    path = os.path.join(FIXTURES, "manga.epub")
-    pages_dir = os.path.join(FIXTURES, "manga_pages")
+def write_pages_epub(path, pages_dir, title, author, uid, toc):
+    """Fixed-layout EPUB of the PNG pages in pages_dir: XHTML spine wrappers around the pages,
+    dc: metadata, and an EPUB3 nav TOC of (page index, title, href fragment)."""
     page_files = sorted(n for n in os.listdir(pages_dir) if n.endswith(".png"))
 
     manifest_items = ['<item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>']
@@ -214,21 +213,20 @@ def make_manga_epub():
     opf = f'''<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="uid">test-epub</dc:identifier>
-    <dc:title>Epub Test Manga</dc:title>
-    <dc:creator>Epub Author</dc:creator>
+    <dc:identifier id="uid">{uid}</dc:identifier>
+    <dc:title>{title}</dc:title>
+    <dc:creator>{author}</dc:creator>
     <dc:language>ja</dc:language>
   </metadata>
   <manifest>{"".join(manifest_items)}</manifest>
   <spine>{"".join(spine_items)}</spine>
 </package>'''
 
+    links = "\n".join(f'<li><a href="text/pg{i}.xhtml{frag}">{t}</a></li>' for i, t, frag in toc)
     nav = f'''<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
 <nav epub:type="toc"><ol>
-<li><a href="text/pg0.xhtml">Cover</a></li>
-<li><a href="text/pg1.xhtml">Chapter 1</a></li>
-<li><a href="text/pg2.xhtml#top">Chapter 2</a></li>
+{links}
 </ol></nav>
 </body></html>'''
 
@@ -246,6 +244,14 @@ def make_manga_epub():
                        f'<html xmlns="http://www.w3.org/1999/xhtml"><body>'
                        f'<img src="../images/{name}"/></body></html>')
             z.write(os.path.join(pages_dir, name), f"OEBPS/images/{name}")
+
+
+def make_manga_epub():
+    """Synthetic fixed-layout EPUB of the synthetic pages. Exercises spine-order extraction,
+    metadata auto-detection, and toc.idx generation."""
+    path = os.path.join(FIXTURES, "manga.epub")
+    write_pages_epub(path, os.path.join(FIXTURES, "manga_pages"), "Epub Test Manga", "Epub Author", "test-epub",
+                     [(0, "Cover", ""), (1, "Chapter 1", ""), (2, "Chapter 2", "#top")])
     print(f"manga epub: {path}")
 
 
@@ -264,19 +270,17 @@ def run_manga_epub_reference():
 def run_yolo_reference():
     """Reference panel boxes for the AI (YOLO) detection path.
 
-    Mirrors js/yolo.js preprocessing/decoding numerically (bilinear letterbox,
-    float32 tensor) against the same ONNX model the site ships
-    (models/manga_panel_detector_yolo26n.onnx), then reuses the firmware tool's
-    own is_sliver_panel / _dedupe_boxes / split_frames_over_subpanels /
-    sort_panels_reading_order / expand_panels_over_text so post-processing
-    semantics can't drift from convert_manga.py.
+    The firmware tool's own detect_panels() runs with the model swapped for the ONNX export the
+    site ships (models/manga_panel_detector_yolo26n.onnx), fed the way js/yolo.js feeds it
+    (bilinear letterbox, float32 tensor), so the retry, the gap filling, the blank-panel drop, the
+    grid fallback, the 4-koma order and the bubble-aware crops are all convert_manga.py's.
 
-    Decoding runs at PANEL_WEAK_CONF, not the panel bar: sub-threshold panel
-    boxes are kept as corroboration for splitting a merged frame, and the text
-    class drives the bubble-aware crop expansion. Both mirror js/yolo.js.
+    Decoding runs at PANEL_WEAK_CONF, as ultralytics is asked to: sub-threshold panel boxes are
+    kept as corroboration and as gap fillers, and the text class drives the crop expansion.
 
-    Inference backends differ in float rounding, so the JS comparison is
-    tolerance-based (±2 px), unlike the byte-exact grid references.
+    Inference backends differ in float rounding, so the JS comparison is tolerance-based
+    (±2 px), unlike the byte-exact grid references. yolo_post/ compares the post-processing
+    exactly, on fixed detections.
     """
     try:
         import numpy as np
@@ -291,14 +295,13 @@ def run_yolo_reference():
     model_path = os.path.join(os.path.dirname(__file__), "..", "models",
                               "manga_panel_detector_yolo26n.onnx")
     sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
-    size, stride, conf_thresh = 640, 32, 0.4
-    weak_conf = convert_manga.PANEL_WEAK_CONF
+    stride = 32
 
-    def letterbox(rgb):
-        # ultralytics LetterBox(new_shape=640, auto=True, stride=32): the long side
-        # is scaled to 640 and the short side padded only to the next multiple of
-        # 32, NOT out to a square. js/yolo.js:yoloLetterbox does the same, and the
-        # model is exported with dynamic height/width so both can feed it.
+    def letterbox(rgb, size):
+        # ultralytics LetterBox(new_shape=size, auto=True, stride=32): the long side is scaled to
+        # `size` and the short side padded only to the next multiple of 32, NOT out to a square.
+        # js/yolo.js:yoloLetterbox does the same, and the model is exported with dynamic
+        # height/width so both can feed it.
         h, w = rgb.shape[:2]
         scale = min(size / w, size / h)
         nw, nh = round(w * scale), round(h * scale)
@@ -321,50 +324,349 @@ def run_yolo_reference():
         out[:, pady:pady + nh, padx:padx + nw] = (resized / 255).transpose(2, 0, 1).astype(np.float32)
         return out[None], scale, padx, pady
 
-    pages_dir = os.path.join(FIXTURES, "manga_pages")
+    class OnnxModel:
+        """model.predict() as convert_manga.py calls it, answered by the ONNX model."""
+
+        def predict(self, img, conf, iou, imgsz, verbose):
+            inp, scale, padx, pady = letterbox(np.asarray(img.convert("RGB")), imgsz)
+            rows = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0]
+            boxes = []
+            for x1, y1, x2, y2, score, cls in rows:
+                if score < conf:
+                    continue
+                # Clipped to the page in page pixels, as ultralytics returns them; int() later
+                # truncates, as yoloDecodeOutput does.
+                xyxy = [min(max((float(v) - pad) / scale, 0), lim)
+                        for v, pad, lim in ((x1, padx, img.width), (y1, pady, img.height),
+                                            (x2, padx, img.width), (y2, pady, img.height))]
+                boxes.append(_FakeBox(xyxy, float(score), round(float(cls))))
+            return [_FakeResult(boxes)]
+
+    convert_manga._YOLO_MODEL = OnnxModel()
     out_dir = os.path.join(FIXTURES, "ref_yolo")
     os.makedirs(out_dir, exist_ok=True)
-    result = {}
-    for name in sorted(os.listdir(pages_dir)):
-        if not name.endswith(".png"):
+    for pages, ref_name in (("manga_pages", "boxes.json"), ("manga_layouts", "layouts.json")):
+        pages_dir = os.path.join(FIXTURES, pages)
+        if not os.path.isdir(pages_dir):
             continue
-        img = Image.open(os.path.join(pages_dir, name)).convert("RGB")
-        inp, scale, padx, pady = letterbox(np.asarray(img))
-        rows = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0]
-        boxes_with_conf = []
-        candidates = []
-        texts = []
-        for x1, y1, x2, y2, conf, cls in rows:
-            if conf < weak_conf:
+        result = {}
+        for name in sorted(os.listdir(pages_dir)):
+            if not name.endswith(".png"):
                 continue
-            box = [int(max(0, min((x1 - padx) / scale, img.width))),
-                   int(max(0, min((y1 - pady) / scale, img.height))),
-                   int(max(0, min((x2 - padx) / scale, img.width))),
-                   int(max(0, min((y2 - pady) / scale, img.height)))]
-            cls = round(float(cls))
-            if cls == 1:
-                if conf >= conf_thresh:
-                    texts.append(box)
-                continue
-            if cls != 0:
-                continue
-            if convert_manga.is_sliver_panel(box, img.width, img.height):
-                continue
-            candidates.append(box)
-            if conf >= conf_thresh:
-                boxes_with_conf.append((box, float(conf)))
-        boxes = convert_manga._dedupe_boxes(boxes_with_conf)
-        if not boxes:
-            boxes = [[0, 0, img.width, img.height]]
+            img = Image.open(os.path.join(pages_dir, name)).convert("RGB")
+            frames, texts = convert_manga.detect_panels(img, img)
+            if not frames:
+                frames = [[0, 0, img.width, img.height]]
+            order = None
+            if hasattr(convert_manga, "yonkoma_reading_order"):
+                order = convert_manga.yonkoma_reading_order(frames, img.width)
+            if order is None:
+                order = convert_manga.sort_panels_reading_order(frames)
+            result[name] = convert_manga.expand_panels_over_text(order, texts, img.width, img.height)
+        with open(os.path.join(out_dir, ref_name), "w") as f:
+            json.dump(result, f, indent=1)
+        print(f"yolo reference: {os.path.join(out_dir, ref_name)}")
+        for name, boxes in result.items():
+            print(f"  {name}: {boxes}")
+    convert_manga._YOLO_MODEL = None
+
+
+def dump_page_arrays(img, out_dir, stem, dims):
+    """.gray (PIL convert("L"), what the detectors read) and .rgba (what a canvas gives the page)
+    dumps of one page, plus its size in dims."""
+    with open(os.path.join(out_dir, stem + ".gray"), "wb") as f:
+        f.write(img.convert("L").tobytes())
+    with open(os.path.join(out_dir, stem + ".rgba"), "wb") as f:
+        f.write(img.convert("RGBA").tobytes())
+    dims[stem + ".png"] = list(img.size)
+
+
+def make_manga_layouts():
+    """Pages for the panel layouts the gutter cuts and the 4-koma detection are about, as an EPUB
+    with a table of contents so a split spread's chapter shift is compared too:
+
+      lay01  a 4-koma page: two strips of four, rows lined up across the page
+      lay02  black gutters: a black page, a wide panel over two
+      lay03  a tall panel between two columns of two, under a full-width strip
+      lay04  a two-page spread (landscape): two panels on the left page, four on the right
+      lay05  an ordinary page after the spread, so the chapter after it moves
+    """
+    out = os.path.join(FIXTURES, "manga_layouts")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out)
+    rng = random.Random(7)
+
+    def panel(draw, box, fill=(150, 150, 150)):
+        x1, y1, x2, y2 = box
+        draw.rectangle([x1, y1, x2 - 1, y2 - 1], fill=fill, outline=0, width=3)
+        for _ in range(300):
+            draw.point((rng.randint(x1 + 4, x2 - 5), rng.randint(y1 + 4, y2 - 5)), fill=rng.randint(60, 180))
+
+    pages = {}
+    img = Image.new("RGB", (800, 1200), "white")
+    d = ImageDraw.Draw(img)
+    for x1 in (60, 420):
+        for i in range(4):
+            panel(d, (x1, 60 + 275 * i, x1 + 320, 60 + 275 * i + 245))
+    pages["lay01"] = img
+
+    img = Image.new("RGB", (800, 1200), "black")
+    d = ImageDraw.Draw(img)
+    for box in [(40, 40, 760, 560), (40, 620, 380, 1160), (420, 620, 760, 1160)]:
+        panel(d, box, fill=(170, 170, 170))
+    pages["lay02"] = img
+
+    img = Image.new("RGB", (800, 1200), "white")
+    d = ImageDraw.Draw(img)
+    for box in [(30, 30, 770, 400), (540, 430, 770, 800), (540, 830, 770, 1170), (300, 430, 510, 1170),
+                (30, 430, 270, 800), (30, 830, 270, 1170)]:
+        panel(d, box)
+    pages["lay03"] = img
+
+    img = Image.new("RGB", (1600, 1200), "white")
+    d = ImageDraw.Draw(img)
+    for box in [(40, 40, 760, 560), (40, 620, 760, 1160),
+                (840, 40, 1180, 560), (1220, 40, 1560, 560), (840, 620, 1180, 1160), (1220, 620, 1560, 1160)]:
+        panel(d, box)
+    pages["lay04"] = img
+
+    img = Image.new("RGB", (800, 1200), "white")
+    d = ImageDraw.Draw(img)
+    for box in [(40, 40, 760, 580), (40, 620, 760, 1160)]:
+        panel(d, box)
+    pages["lay05"] = img
+
+    dims = {}
+    for stem, page in pages.items():
+        page.save(os.path.join(out, stem + ".png"))
+        dump_page_arrays(page, out, stem, dims)
+    with open(os.path.join(out, "dims.json"), "w") as f:
+        json.dump(dims, f)
+    path = os.path.join(FIXTURES, "manga_layouts.epub")
+    write_pages_epub(path, out, "Layout Test", "Layout Author", "test-layouts",
+                     [(0, "Strips", ""), (3, "Spread", ""), (4, "After", "")])
+    print(f"manga layouts: {path}")
+
+
+# convert_manga.py runs over manga_layouts.epub: (reference folder, extra flags). The browser
+# suite converts the same EPUB with the matching settings.
+LAYOUT_REFERENCES = [
+    ("ref_layouts", []),
+    ("ref_layouts_noyonkoma", ["--no-yonkoma-detect"]),
+    ("ref_layouts_split", ["--split-spreads"]),
+    ("ref_layouts_split_ltr", ["--split-spreads", "--ltr", "--trim-margins"]),
+]
+
+
+def run_manga_layout_references():
+    script = os.path.join(FIRMWARE, "tools", "manga_convert", "convert_manga.py")
+    with open(script, encoding="utf-8") as f:
+        if '"--split-spreads"' not in f.read():
+            print("manga layout references: SKIPPED (convert_manga.py has no --split-spreads; "
+                  "point MATCHA_READER at a newer checkout)")
+            return
+    for name, flags in LAYOUT_REFERENCES:
+        out = os.path.join(FIXTURES, name)
+        shutil.rmtree(out, ignore_errors=True)
+        subprocess.run([sys.executable, script,
+                        "--input", os.path.join(FIXTURES, "manga_layouts.epub"),
+                        "--output-dir", out,
+                        "--no-ocr", *legacy_flag(script), *flags],
+                       check=True, env=grid_only_env())
+        print(f"manga layout reference: {out}")
+
+
+class _FakeBox:
+    """One detection as ultralytics hands it to convert_manga.py: .cls, .conf, .xyxy[0]."""
+
+    def __init__(self, xyxy, conf, cls):
+        import numpy as np
+        self.xyxy = np.array([xyxy], dtype=np.float64)
+        self.conf = conf
+        self.cls = cls
+
+
+class _FakeResult:
+    def __init__(self, boxes):
+        self.boxes = boxes
+
+
+class FixedDetectionsModel:
+    """Stands in for the YOLO model with fixed detections per input size: {imgsz: [[x1, y1, x2,
+    y2, conf, cls], ...]} in page pixels. Lets convert_manga.py's own post-processing run on
+    known boxes, so the JS port can be compared with it byte for byte."""
+
+    def __init__(self, by_size):
+        self.by_size = by_size
+
+    def predict(self, img, conf, iou, imgsz, verbose):
+        rows = self.by_size.get(imgsz, [])
+        return [_FakeResult([_FakeBox(r[:4], r[4], r[5]) for r in rows if r[4] >= conf])]
+
+
+def _art_page(size, boxes, mode="RGB", paper="white"):
+    img = Image.new(mode, size, paper)
+    d = ImageDraw.Draw(img)
+    for b in boxes:
+        d.rectangle([b[0], b[1], b[2] - 1, b[3] - 1], fill="black")
+    return img
+
+
+def _text_page(size):
+    """A prose page: lines of small dark marks, which no gutter grid should cut into panels."""
+    img = Image.new("RGB", size, "white")
+    d = ImageDraw.Draw(img)
+    rng = random.Random(3)
+    for y in range(80, size[1] - 80, 36):
+        x = 60
+        while x < size[0] - 80:
+            w = rng.randint(8, 40)
+            d.rectangle([x, y, x + w, y + 14], fill=40)
+            x += w + rng.randint(6, 14)
+    return img
+
+
+def run_pil_box_reference():
+    """Pillow's Image.resize(..., Image.BOX) on random 8-bit images (pil_box/), which
+    convert_manga.py's ink grid is built on. js/manga-core.js:pilResizeBox must match it exactly,
+    including the pass order Pillow 13 picks (vertical first for a page shrinking mostly in
+    height)."""
+    out = os.path.join(FIXTURES, "pil_box")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out)
+    rng = random.Random(5)
+    cases = []
+    for i in range(24):
+        w, h = rng.randint(5, 600), rng.randint(5, 600)
+        ow, oh = rng.randint(1, w), rng.randint(1, h)
+        if i % 3 == 0:  # binary, as the ink grid feeds it
+            data = bytes(255 if rng.random() < 0.3 else 0 for _ in range(w * h))
         else:
-            boxes = convert_manga.split_frames_over_subpanels(boxes, candidates)
-        boxes = convert_manga.sort_panels_reading_order(boxes)
-        result[name] = convert_manga.expand_panels_over_text(boxes, texts, img.width, img.height)
-    with open(os.path.join(out_dir, "boxes.json"), "w") as f:
+            data = bytes(rng.randint(0, 255) for _ in range(w * h))
+        img = Image.frombytes("L", (w, h), data)
+        with open(os.path.join(out, f"c{i:02d}.in"), "wb") as f:
+            f.write(data)
+        with open(os.path.join(out, f"c{i:02d}.out"), "wb") as f:
+            f.write(img.resize((ow, oh), Image.BOX).tobytes())
+        cases.append([w, h, ow, oh])
+    with open(os.path.join(out, "cases.json"), "w") as f:
+        json.dump({"pillow": Image.__version__ if hasattr(Image, "__version__") else "", "cases": cases}, f)
+    print(f"pillow BOX resize reference: {out}")
+
+
+def yolo_post_cases():
+    """(name, full-resolution page, stored page or None, detections by input size, rtl)."""
+    W, H = 760, 1200
+    cases = []
+    kept, missed = [40, 40, 720, 500], [40, 560, 720, 1160]
+    page = _art_page((W, H), [kept, missed])
+    cases.append(("weak proposal fills the gap", page, None,
+                  {640: [kept + [0.9, 0], [30, 550, 730, 1170, 0.3, 0]]}, True))
+    cases.append(("uncovered ink becomes a panel", page, None, {640: [kept + [0.9, 0]]}, True))
+    kept2 = [40, 40, 720, 1100]
+    cases.append(("page number and bleed are not panels",
+                  _art_page((W, H), [kept2, [360, 1150, 400, 1180], [0, 1110, 760, 1150]]), None,
+                  {640: [kept2 + [0.9, 0]]}, True))
+    art, blank, strip = [40, 40, 720, 600], [40, 640, 720, 900], [500, 1120, 760, 1200]
+    bubble = [40, 920, 400, 1100]
+    cases.append(("blank and edge panels dropped, a text panel kept",
+                  _art_page((W, H), [art, [700, 1150, 730, 1180]]), None,
+                  {640: [art + [0.9, 0], blank + [0.8, 0], strip + [0.7, 0], bubble + [0.6, 0],
+                         [100, 960, 300, 1060, 0.8, 1]]}, True))
+    quads = [[40, 40, 360, 580], [400, 40, 720, 580], [40, 620, 360, 1160], [400, 620, 720, 1160]]
+    cases.append(("one page-sized frame gives way to the grid", _art_page((W, H), quads), None,
+                  {640: [[0, 0, W, H, 0.9, 0]]}, True))
+    cases.append(("a prose page keeps its one frame", _text_page((W, H)), None,
+                  {640: [[0, 0, W, H, 0.9, 0]]}, True))
+    rows = [[40, 40 + 280 * i, 720, 40 + 280 * i + 250] for i in range(4)]
+    cases.append(("retry at the larger size wins", _art_page((W, H), rows), None,
+                  {640: [rows[0] + [0.9, 0]], 1600: [r + [0.8, 0] for r in rows]}, True))
+    cases.append(("a failed retry keeps the first pass", _art_page((W, H), rows), None,
+                  {640: [rows[0] + [0.9, 0]], 1600: [rows[1][:2] + [300, rows[1][3]] + [0.8, 0]]}, True))
+    cases.append(("nothing detected", _art_page((W, H), quads), None, {640: []}, True))
+    cases.append(("slivers, duplicates and sub-panels",
+                  _art_page((W, H), rows), None,
+                  {640: [[40, 40, 720, 570, 0.9, 0], [40, 40, 720, 290, 0.3, 0], [40, 320, 720, 570, 0.25, 0],
+                         [45, 45, 715, 565, 0.6, 0], [0, 600, 760, 640, 0.95, 0],
+                         rows[2] + [0.8, 0], rows[3] + [0.7, 0], [60, 900, 300, 980, 0.9, 1]]}, True))
+    # 4-koma: two strips of four with one panel cut in two by the detector.
+    right = [[420, 170 + 235 * i, 710, 390 + 235 * i] for i in range(4)]
+    left = [[100, 170 + 235 * i, 390, 390 + 235 * i] for i in range(4)]
+    cut = [[100, left[2][1], 240, left[2][3]], [200, left[2][1], 390, left[2][3]]]
+    strips = right + left[:2] + cut + left[3:]
+    for rtl in (True, False):
+        cases.append((f"4-koma strips, a cut panel merged ({'rtl' if rtl else 'ltr'})",
+                      _art_page((W, H), right + left), None,
+                      {640: [b + [0.9 - 0.01 * i, 0] for i, b in enumerate(strips)]}, rtl))
+    # A page over twice as tall as it is wide, with art inked near the ink grid's threshold: Pillow
+    # resizes such a page vertically first, and the rounding between its two passes decides cells.
+    tall = Image.new("L", (500, 1200), 255)
+    rng = random.Random(11)
+    px = tall.load()
+    for y in range(560, 1160):
+        for x in range(30, 470):
+            if rng.random() < 0.05:
+                px[x, y] = rng.randint(0, 199)
+    ImageDraw.Draw(tall).rectangle([30, 30, 469, 519], fill=0)
+    cases.append(("sparse art on a tall page", tall, None, {640: [[30, 30, 470, 520, 0.9, 0]]}, True))
+    # Detection at full resolution, panels stored at a quarter of the pixels.
+    full = _art_page((1520, 2400), [[80, 80, 1440, 1160], [80, 1240, 700, 2320], [780, 1240, 1440, 2320]])
+    stored = full.resize((760, 1200), Image.LANCZOS)
+    cases.append(("full-resolution boxes scaled to the stored page", full, stored,
+                  {640: [[80, 80, 1440, 1160, 0.9, 0], [80, 1240, 700, 2320, 0.9, 0], [780, 1240, 1440, 2320, 0.8, 0],
+                         [300, 60, 700, 200, 0.7, 1]]}, True))
+    full2 = _art_page((1520, 2400), [[80, 80, 700, 1160], [780, 80, 1440, 1160], [80, 1240, 1440, 2320]])
+    cases.append(("a page-sized frame at full resolution, the grid on the stored page", full2,
+                  full2.resize((760, 1200), Image.LANCZOS), {640: [[0, 0, 1520, 2400, 0.9, 0]]}, True))
+    return cases
+
+
+def run_yolo_post_reference():
+    """convert_manga.py's YOLO post-processing on fixed detections (yolo_post/): retry,
+    fill_uncovered_art, drop_blank_panels, scale_panel_boxes, the grid fallback, the 4-koma order
+    and the bubble-aware crops, all from the firmware tool's own functions. No model is involved,
+    so unlike ref_yolo the JS comparison is exact."""
+    try:
+        import numpy  # noqa: F401  (the fake boxes are numpy arrays, as ultralytics' are)
+    except ImportError as e:
+        print(f"yolo post-processing reference: SKIPPED ({e}; pip install numpy)")
+        return
+    sys.path.insert(0, os.path.join(FIRMWARE, "tools", "manga_convert"))
+    import convert_manga
+    if not hasattr(convert_manga, "fill_uncovered_art"):
+        print("yolo post-processing reference: SKIPPED (convert_manga.py predates fill_uncovered_art)")
+        return
+
+    out = os.path.join(FIXTURES, "yolo_post")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out)
+    result = []
+    for i, (name, full, stored, by_size, rtl) in enumerate(yolo_post_cases()):
+        page = stored or full
+        convert_manga._YOLO_MODEL = FixedDetectionsModel(by_size)
+        frames, texts = convert_manga.detect_panels(full, page)
+        if not frames:
+            frames = [[0, 0, page.width, page.height]]
+        ordered = convert_manga.yonkoma_reading_order(frames, page.width, rtl=rtl)
+        if ordered is None:
+            ordered = convert_manga.sort_panels_reading_order(frames, rtl=rtl)
+        boxes = convert_manga.expand_panels_over_text(ordered, texts, page.width, page.height)
+        dims = {}
+        dump_page_arrays(full, out, f"case{i:02d}_full", dims)
+        if stored is not None:
+            dump_page_arrays(stored, out, f"case{i:02d}_page", dims)
+        result.append({
+            "name": name, "rtl": rtl,
+            "full": dims[f"case{i:02d}_full.png"], "page": list(page.size),
+            "stored": stored is not None,
+            "detections": {str(k): v for k, v in by_size.items()},
+            "frames": [list(map(int, b)) for b in frames], "texts": [list(map(int, b)) for b in texts],
+            "boxes": [list(map(int, b)) for b in boxes],
+        })
+    convert_manga._YOLO_MODEL = None
+    with open(os.path.join(out, "cases.json"), "w") as f:
         json.dump(result, f, indent=1)
-    print(f"yolo reference: {out_dir}")
-    for name, boxes in result.items():
-        print(f"  {name}: {boxes}")
+    print(f"yolo post-processing reference: {out} ({len(result)} cases)")
 
 
 def make_manga_pdf():
@@ -989,12 +1291,16 @@ if __name__ == "__main__":
     os.makedirs(FIXTURES, exist_ok=True)
     make_manga_pages()
     run_manga_reference()
-    run_yolo_reference()
     make_manga_cbz()
     make_manga_fullbleed_cbz()
     make_manga_foldered_cbz()
     make_manga_epub()
     run_manga_epub_reference()
+    make_manga_layouts()
+    run_manga_layout_references()
+    run_pil_box_reference()
+    run_yolo_post_reference()
+    run_yolo_reference()
     make_manga_pdf()
     run_manga_pdf_reference()
     make_yomitan_zip()

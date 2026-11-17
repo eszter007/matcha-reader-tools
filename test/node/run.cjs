@@ -837,6 +837,225 @@ function testMangaBubbleCrops() {
         JSON.stringify([frame]));
 }
 
+/* ── Manga: panel layouts, 4-koma pages, spreads (vs convert_manga.py) ── */
+
+/* panels.idx/panels.dat as convert_manga.py --no-ocr writes them for pages detected on the grid
+ * path: gutter grid, 4-koma or gutter-cut order, the default 10px crop margin. */
+function gridFolder(pages, { rtl = true, columnMajor = false, yonkomaDetect = true } = {}) {
+  const idxRecords = [];
+  const chunks = [];
+  let offset = 0;
+  for (const { gray, w, h } of pages) {
+    const frames = manga.detectPanelsGrid(gray, w, h);
+    const boxes = manga.orderPanels(frames, w, rtl, columnMajor, yonkomaDetect);
+    const data = manga.encodePage(boxes.map((box) => ({
+      box,
+      crop: [Math.max(0, box[0] - 10), Math.max(0, box[1] - 10), Math.min(w, box[2] + 10), Math.min(h, box[3] + 10)],
+      textBlocks: [],
+      translation: "",
+    })));
+    idxRecords.push({ offset, length: data.length, w, h });
+    chunks.push(data);
+    offset += data.length;
+  }
+  const dat = new Uint8Array(offset);
+  let at = 0;
+  for (const c of chunks) { dat.set(c, at); at += c.length; }
+  return { idx: manga.writePanelsIdx(idxRecords), dat };
+}
+
+function cropGray(gray, w, [x1, y1, x2, y2]) {
+  const out = new Uint8Array((x2 - x1) * (y2 - y1));
+  for (let y = y1; y < y2; y++) out.set(gray.subarray(y * w + x1, y * w + x2), (y - y1) * (x2 - x1));
+  return { gray: out, w: x2 - x1, h: y2 - y1 };
+}
+
+function testMangaLayouts() {
+  console.log("manga layouts: gutter cuts, dark gutters, 4-koma pages, spreads (vs convert_manga.py):");
+  const dir = path.join(FIXTURES, "manga_layouts");
+  if (!fs.existsSync(path.join(FIXTURES, "ref_layouts", "panels.dat"))) {
+    console.log("  skip (no ref_layouts — rerun gen_references.py against a convert_manga.py with --split-spreads)");
+    return;
+  }
+  const dims = JSON.parse(fs.readFileSync(path.join(dir, "dims.json"), "utf-8"));
+  const pages = Object.keys(dims).sort().map((name) => {
+    const [w, h] = dims[name];
+    return { gray: new Uint8Array(fs.readFileSync(path.join(dir, name.replace(".png", ".gray")))), w, h };
+  });
+  const split = (rtl) => pages.flatMap((p) => {
+    const halves = manga.spreadHalves(p.w, p.h, rtl);
+    return halves ? halves.map((r) => cropGray(p.gray, p.w, r)) : [p];
+  });
+  const trimmed = (list) => list.map((p) => {
+    const box = manga.trimMarginsBox(p.gray, p.w, p.h);
+    return box ? cropGray(p.gray, p.w, box) : p;
+  });
+  const runs = [
+    ["ref_layouts", pages, {}],
+    ["ref_layouts_noyonkoma", pages, { yonkomaDetect: false }],
+    ["ref_layouts_split", split(true), {}],
+    ["ref_layouts_split_ltr", trimmed(split(false)), { rtl: false }],
+  ];
+  for (const [ref, list, opts] of runs) {
+    const { idx, dat } = gridFolder(list, opts);
+    compareFile(`${ref} panels.idx`, idx, path.join(FIXTURES, ref, "panels.idx"));
+    compareFile(`${ref} panels.dat`, dat, path.join(FIXTURES, ref, "panels.dat"));
+  }
+  // The 4-koma page must actually differ with detection off, or the comparison above proves nothing.
+  const lay01 = pages[0];
+  const cells = manga.detectPanelsGrid(lay01.gray, lay01.w, lay01.h);
+  check("4-koma page: 8 cells, read strip by strip only with detection on",
+    cells.length === 8 && manga.orderPanels(cells, lay01.w, true, false, true).map((b) => b.join()).join() !==
+      manga.orderPanels(cells, lay01.w, true, false, false).map((b) => b.join()).join());
+  const lay02 = pages[1];
+  check("black gutters cut the page", manga.detectPanelsGrid(lay02.gray, lay02.w, lay02.h).length === 3);
+}
+
+/* Coordinate-only cases from convert_manga.py's own test_panel_order.py. */
+function testMangaPanelOrderCases() {
+  console.log("manga reading order, 4-koma detection, spreads (cases from test_panel_order.py):");
+  const names = (named, boxes) => {
+    const byBox = new Map(Object.entries(named).map(([n, b]) => [b.join(), n]));
+    return boxes.map((b) => byBox.get(b.join())).join();
+  };
+  {
+    const named = {
+      strip: [27, 413, 695, 656],
+      right_top: [483, 673, 762, 892], right_bottom: [484, 911, 763, 1111],
+      tall: [352, 668, 474, 1198],
+      left_top: [26, 674, 347, 878], left_bottom: [26, 894, 347, 1110],
+    };
+    check("tall panel between two columns",
+      names(named, manga.sortPanelsReadingOrder(Object.values(named))) ===
+      "strip,right_top,right_bottom,tall,left_top,left_bottom");
+  }
+  {
+    const named = {
+      right_1: [476, 713, 764, 831], right_2: [488, 849, 764, 980], right_3: [503, 997, 763, 1110],
+      middle: [254, 713, 527, 1199],
+      left_1: [26, 714, 301, 884], left_2: [25, 901, 288, 1200],
+    };
+    check("slanted middle panel overlapping both columns",
+      names(named, manga.sortPanelsReadingOrder(Object.values(named))) ===
+      "right_1,right_2,right_3,middle,left_1,left_2");
+  }
+  {
+    const named = {};
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 3; col++) named[`r${row}c${col}`] = [col * 280, row * 300, col * 280 + 270, row * 300 + 260];
+    }
+    const panels = Object.values(named).reverse();
+    const want = (cols) => [0, 1, 2, 3].flatMap((r) => cols.map((c) => `r${r}c${c}`)).join();
+    check("strip page LTR", names(named, manga.sortPanelsReadingOrder(panels, false)) === want([0, 1, 2]));
+    check("strip page RTL", names(named, manga.sortPanelsReadingOrder(panels, true)) === want([2, 1, 0]));
+  }
+  {
+    // A cycle in the pairwise rules reads the rest by position instead of keeping the input order.
+    const a = [0, 0, 100, 100], b = [90, 50, 190, 150], c = [40, 95, 140, 195];
+    const out = manga.sortPanelsGraph([c, b, a]);
+    check("graph order keeps every panel", out.length === 3 && new Set(out).size === 3);
+  }
+
+  const R = [0, 1, 2, 3].map((i) => [420, 170 + 235 * i, 710, 390 + 235 * i]);
+  const L = [0, 1, 2, 3].map((i) => [100, 170 + 235 * i, 390, 390 + 235 * i]);
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const shuffled = R.flatMap((r, i) => [r, L[i]]);
+  check("4-koma page read down each strip", same(manga.yonkomaReadingOrder(shuffled, 760), R.concat(L)));
+  check("4-koma page LTR", same(manga.yonkomaReadingOrder(shuffled, 760, false), L.concat(R)));
+  const cut = [[L[2][0], L[2][1], 240, L[2][3]], [200, L[2][1], L[2][2], L[2][3]]];
+  check("a cut strip panel merges back",
+    same(manga.yonkomaReadingOrder(R.concat(L.slice(0, 2), cut, L.slice(3)), 760), R.concat(L)));
+  {
+    const title = [720, 170, 760, 1090];
+    const nr = R.map((b) => [400, b[1], 690, b[3]]), nl = L.map((b) => [60, b[1], 350, b[3]]);
+    check("a title panel beside the strips reads first",
+      same(manga.yonkomaReadingOrder(nl.concat([title], nr), 760), [title].concat(nr, nl)));
+  }
+  {
+    const rows = [[0, 100], [110, 500], [510, 600]];
+    const grid = rows.flatMap(([y1, y2]) => [[0, 370], [390, 760]].map(([x1, x2]) => [x1, y1, x2, y2]));
+    check("rows of differing heights are not 4-koma", manga.yonkomaReadingOrder(grid, 760) === null);
+    check("a full-width panel across both strips is not 4-koma",
+      manga.yonkomaReadingOrder(R.concat(L, [[0, 1100, 760, 1200]]), 760) === null);
+    check("two loose panels beside the strips are not 4-koma",
+      manga.yonkomaReadingOrder(R.concat(L, [[0, 100, 60, 500], [0, 600, 60, 1000]]), 760) === null);
+    check("full-width rows are not 4-koma",
+      manga.yonkomaReadingOrder([0, 250, 500, 750].map((y) => [0, y, 760, y + 200]), 760) === null);
+  }
+
+  check("scalePanelBoxes maps and clamps",
+    same(manga.scalePanelBoxes([[0, 0, 2000, 3000], [1000, 1500, 1500, 2250]], [2000, 3000], [480, 720]),
+      [[0, 0, 480, 720], [240, 360, 360, 540]]));
+  check("scalePanelBoxes rounds halves to even, as Python does",
+    same(manga.scalePanelBoxes([[5, 5, 15, 15]], [100, 100], [50, 50]), [[2, 2, 8, 8]]));
+  check("spread halves: right page first in manga",
+    same(manga.spreadHalves(2000, 1400, true), [[1000, 0, 2000, 1400], [0, 0, 1000, 1400]]));
+  check("spread halves: left page first left to right",
+    same(manga.spreadHalves(2001, 1400, false), [[0, 0, 1000, 1400], [1000, 0, 2001, 1400]]));
+  check("a portrait page is not a spread", manga.spreadHalves(1000, 1400) === null);
+  check("chapters move with the split pages",
+    same(manga.remapTocAfterSplit([[0, "a"], [2, "b"], [5, "gone"]], [0, 1, 3]), [[0, "a"], [3, "b"]]));
+}
+
+/* ── Manga: Pillow's BOX resize, which the ink grid is built on ── */
+
+function testPilBoxResize() {
+  console.log("Pillow BOX resize (vs Image.resize):");
+  const dir = path.join(FIXTURES, "pil_box");
+  if (!fs.existsSync(path.join(dir, "cases.json"))) {
+    console.log("  skip (no pil_box fixtures — rerun gen_references.py)");
+    return;
+  }
+  const { pillow, cases } = JSON.parse(fs.readFileSync(path.join(dir, "cases.json"), "utf-8"));
+  let bad = 0;
+  cases.forEach(([w, h, ow, oh], i) => {
+    const stem = `c${String(i).padStart(2, "0")}`;
+    const got = manga.pilResizeBox(new Uint8Array(fs.readFileSync(path.join(dir, `${stem}.in`))), w, h, ow, oh);
+    const ref = fs.readFileSync(path.join(dir, `${stem}.out`));
+    if (got.length !== ref.length || !got.every((v, k) => v === ref[k])) bad++;
+  });
+  // Pillow before 13.0 always resized horizontally first, which rounds some cells differently.
+  check(`${cases.length} images match Pillow ${pillow} byte for byte`, bad === 0, `${bad} differ`);
+}
+
+/* ── Manga: YOLO post-processing on fixed detections vs convert_manga.py, exactly ── */
+
+async function testMangaYoloPost() {
+  console.log("manga AI detection post-processing (vs convert_manga.py on fixed detections):");
+  const dir = path.join(FIXTURES, "yolo_post");
+  const casesPath = path.join(dir, "cases.json");
+  if (!fs.existsSync(casesPath)) {
+    console.log("  skip (no yolo_post fixtures — rerun gen_references.py with numpy installed)");
+    return;
+  }
+  const yolo = require("../../js/yolo.js");
+  const cases = JSON.parse(fs.readFileSync(casesPath, "utf-8"));
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (let i = 0; i < cases.length; i++) {
+    const c = cases[i];
+    const stem = `case${String(i).padStart(2, "0")}`;
+    const [fw, fh] = c.full, [pw, ph] = c.page;
+    const full = { gray: new Uint8Array(fs.readFileSync(path.join(dir, `${stem}_full.gray`))), w: fw, h: fh };
+    const page = c.stored
+      ? { gray: new Uint8Array(fs.readFileSync(path.join(dir, `${stem}_page.gray`))), w: pw, h: ph }
+      : full;
+    const runPass = (size) => {
+      const decoded = (c.detections[String(size)] || [])
+        .filter((d) => d[4] >= yolo.YOLO_WEAK_CONF)
+        .map((d) => [d.slice(0, 4), d[4], d[5]]);
+      return yolo.yoloPassFromDecoded(decoded, fw, fh, yolo.YOLO_CONF_THRESHOLD);
+    };
+    const detected = await yolo.detectPanelsYoloWith(runPass, full.gray, fw, fh);
+    const found = yolo.detectPanels(detected, full, page);
+    const frames = found.frames.length ? found.frames : [[0, 0, pw, ph]];
+    const boxes = yolo.yoloExpandPanelsOverText(manga.orderPanels(frames, pw, c.rtl, false, true), found.texts, pw, ph);
+    check(`${c.name}: frames`, same(found.frames, c.frames) && same(found.texts, c.texts),
+      `got ${JSON.stringify(found)}, reference ${JSON.stringify({ frames: c.frames, texts: c.texts })}`);
+    check(`${c.name}: crops in reading order`, same(boxes, c.boxes),
+      `got ${JSON.stringify(boxes)}, reference ${JSON.stringify(c.boxes)}`);
+  }
+}
+
 /* ── Manga: YOLO panel detection vs Python reference ──────────── */
 
 async function testMangaYolo() {
@@ -857,28 +1076,36 @@ async function testMangaYolo() {
   const model = new Uint8Array(fs.readFileSync(path.join(__dirname, "..", "..", "models", "manga_panel_detector_yolo26n.onnx")));
   const session = await ort.InferenceSession.create(model, { executionProviders: ["wasm"] });
 
-  const pagesDir = path.join(FIXTURES, "manga_pages");
-  const dims = JSON.parse(fs.readFileSync(path.join(pagesDir, "dims.json"), "utf-8"));
-  const ref = JSON.parse(fs.readFileSync(refPath, "utf-8"));
-
   // Inference backends round floats differently, so unlike the byte-exact
   // grid comparisons this is tolerance-based: same panels, same reading
-  // order, coordinates within ±2 px.
+  // order, coordinates within ±2 px. The page is detected as manga.html does it.
   const TOL = 2;
-  for (const name of Object.keys(ref)) {
-    const [w, h] = dims[name];
-    const rgba = new Uint8Array(fs.readFileSync(path.join(pagesDir, name.replace(".png", ".rgba"))));
-    const detected = await yolo.detectPanelsYolo(session, ort, rgba, w, h);
-    let boxes = manga.sortPanelsReadingOrder(detected.frames);
-    boxes = yolo.yoloExpandPanelsOverText(boxes, detected.texts, w, h);
-    const expected = ref[name];
-    if (boxes.length !== expected.length) {
-      check(`${name} panel count`, false, `got ${boxes.length}, reference ${expected.length}`);
+  for (const [pagesName, refName] of [["manga_pages", "boxes.json"], ["manga_layouts", "layouts.json"]]) {
+    const pagesDir = path.join(FIXTURES, pagesName);
+    const refFile = path.join(FIXTURES, "ref_yolo", refName);
+    if (!fs.existsSync(refFile)) {
+      console.log(`  skip ${refName} (rerun gen_references.py)`);
       continue;
     }
-    const ok = boxes.every((b, i) => b.every((v, j) => Math.abs(v - expected[i][j]) <= TOL));
-    check(`${name} ${boxes.length} panel(s) within ±${TOL}px`, ok,
-          ok ? "" : `got ${JSON.stringify(boxes)}, reference ${JSON.stringify(expected)}`);
+    const dims = JSON.parse(fs.readFileSync(path.join(pagesDir, "dims.json"), "utf-8"));
+    const ref = JSON.parse(fs.readFileSync(refFile, "utf-8"));
+    for (const name of Object.keys(ref)) {
+      const [w, h] = dims[name];
+      const rgba = new Uint8Array(fs.readFileSync(path.join(pagesDir, name.replace(".png", ".rgba"))));
+      const page = { gray: manga.grayFromRGBA(rgba, w, h), w, h };
+      const detected = await yolo.detectPanelsYolo(session, ort, rgba, w, h, undefined, page.gray);
+      const found = yolo.detectPanels(detected, page, page);
+      let boxes = manga.orderPanels(found.frames.length ? found.frames : [[0, 0, w, h]], w, true, false, true);
+      boxes = yolo.yoloExpandPanelsOverText(boxes, found.texts, w, h);
+      const expected = ref[name];
+      if (boxes.length !== expected.length) {
+        check(`${name} panel count`, false, `got ${JSON.stringify(boxes)}, reference ${JSON.stringify(expected)}`);
+        continue;
+      }
+      const ok = boxes.every((b, i) => b.every((v, j) => Math.abs(v - expected[i][j]) <= TOL));
+      check(`${name} ${boxes.length} panel(s) within ±${TOL}px`, ok,
+            ok ? "" : `got ${JSON.stringify(boxes)}, reference ${JSON.stringify(expected)}`);
+    }
   }
 }
 
@@ -1377,6 +1604,8 @@ function testMangaMokuro() {
 
 (async () => {
   testManga();
+  testMangaLayouts();
+  testMangaPanelOrderCases();
   testMangaBookType();
   testMangaDither();
   testMangaOcrPrompt();
@@ -1394,6 +1623,8 @@ function testMangaMokuro() {
   await testMangaEpub();
   testMangaCoverGate();
   testMangaBubbleCrops();
+  testPilBoxResize();
+  await testMangaYoloPost();
   await testMangaYolo();
   await testDictYomitan();
   testDictJmdict();

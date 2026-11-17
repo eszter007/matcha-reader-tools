@@ -34,6 +34,11 @@ MATCHA_READER=../matcha-reader python3 test/gen_references.py
 above needs no environment variable. Set it if the firmware lives elsewhere.
 
 `gen_references.py` prints `SKIPPED (...)` for anything it cannot build and carries on.
+
+Run it with **Python 3.10 or later and Pillow 13 or later**. `convert_manga.py` packs its output
+with a script that needs 3.10. Pillow 13 changed which way `Image.resize` resamples first, and the
+AI path's ink grid (`fill_uncovered_art`) is built on that resize, so `js/manga-core.js:pilResizeBox`
+follows Pillow 13; references from an older Pillow differ in a few cells (`pil_box/` shows it).
 A partial install is fine — you just get fewer comparisons.
 
 The references are only as new as that firmware checkout. Point `MATCHA_READER` at an
@@ -117,7 +122,11 @@ furigana with Gemini stubbed to the reference answers), and `fonts.html`.
 | `zh/`, `ref_dict_zh*/`, `ref_dict_yue/` | synthetic, `convert_jmdict.py --lang zh/yue` | the Chinese paths, every option at once |
 | `zh/book.epub`, `ref_pinyin/` | synthetic, `add_pinyin_ruby.py` | pinyin from the dictionary, XHTML comparison |
 | `zh/ai_*.xhtml`, `zh/ai_*_answers.json`, `ref_ruby_ai/` | synthetic, `add_pinyin_ruby.py` / `add_furigana_ruby.py` with the answers file standing in for Gemini | AI pinyin and furigana, XHTML comparison; some answers are wrong on purpose |
-| `ref_yolo/boxes.json` | the shipped ONNX model | panel boxes, ±2px |
+| `manga_layouts/`, `manga_layouts.epub` | synthetic | a 4-koma page, black gutters, a tall panel between two columns, a two-page spread, with a table of contents |
+| `ref_layouts*/` | `convert_manga.py` (default, `--no-yonkoma-detect`, `--split-spreads`, `--split-spreads --ltr --trim-margins`) | gutter cuts, 4-koma detection, split spreads and the chapter after them, byte comparison |
+| `yolo_post/` | `convert_manga.py`'s `detect_panels()` on fixed detections | the AI path's post-processing (retry, gap filling, blank panels, grid fallback, scaling, 4-koma order), exact |
+| `pil_box/` | Pillow's `Image.resize(..., BOX)` | the ink grid's resampling, byte comparison |
+| `ref_yolo/boxes.json`, `ref_yolo/layouts.json` | `convert_manga.py`'s `detect_panels()` with the shipped ONNX model | panel boxes, ±2px |
 | `ref_font/` | the firmware's `fontconvert_sdcard.py` | `.cpfont` structure |
 
 ## Adding a test

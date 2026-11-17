@@ -79,16 +79,29 @@ async function gotoManga(page, base) {
   await page.$$eval("details", (ds) => ds.forEach((d) => { d.open = true; }));
 }
 
+/* Set a control the page keeps hidden behind its cards and pills (the book type, the screen, the
+ * page mode) the way those cards do: write the value and fire "change". Playwright will not
+ * operate an element that is not visible. */
+async function setHiddenControl(page, selector, value) {
+  await page.$eval(selector, (el, v) => {
+    if (el.type === "checkbox") el.checked = v; else el.value = v;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+}
+
 /* bookType: the page refuses to run until one is picked. "manga" (right to left) is what the
  * references are generated with -- convert_manga.py's default order. */
-async function setMangaForm(page, { formats = ["matcha"], res = "full", panelsOnly = false, bookType = "manga" }) {
-  await page.selectOption("#manga-booktype", bookType);
+async function setMangaForm(page, { formats = ["matcha"], res = "full", panelsOnly = false, bookType = "manga",
+                                    splitSpreads = false, yonkomaDetect = true }) {
+  await setHiddenControl(page, "#manga-booktype", bookType);
+  if (splitSpreads) await page.check("#manga-split-spreads"); else await page.uncheck("#manga-split-spreads");
+  if (yonkomaDetect) await page.check("#manga-yonkoma-detect"); else await page.uncheck("#manga-yonkoma-detect");
   for (const f of MANGA_FORMATS) {
     const sel = `#manga-format .fmt[value="${f}"]`;
     if (formats.includes(f)) await page.check(sel); else await page.uncheck(sel);
   }
-  if (panelsOnly) await page.check("#manga-panels-only"); else await page.uncheck("#manga-panels-only");
-  await page.selectOption("#manga-res", res);
+  await setHiddenControl(page, "#manga-panels-only", panelsOnly);
+  await setHiddenControl(page, "#manga-res", res);
 }
 
 /* Page count from an XTC/XTCH container header (u16 at offset 6). */
@@ -263,6 +276,75 @@ async function testMangaEpub(page, base) {
     const ref = path.join(FIXTURES, "ref_manga_epub", f);
     const got = path.join(dir, f);
     check(`${f} matches Python reference`, fs.existsSync(got) && filesEqual(ref, got));
+  }
+}
+
+/* manga_layouts.epub: a 4-koma page, black gutters, a tall panel between two columns and a
+ * two-page spread, converted with the settings each reference was made with -- 4-koma detection
+ * off, spreads split (manga and left to right), or neither. toc.idx shows the chapter after the
+ * spread moving with its page. */
+async function testMangaLayouts(page, base) {
+  console.log("manga.html end-to-end (layouts EPUB: 4-koma pages, gutter cuts, split spreads):");
+  if (!fs.existsSync(path.join(FIXTURES, "ref_layouts", "panels.dat"))) {
+    console.log("  skip (no ref_layouts — rerun gen_references.py against a convert_manga.py with --split-spreads)");
+    return;
+  }
+  const runs = [
+    ["ref_layouts", {}, 5],
+    ["ref_layouts_noyonkoma", { yonkomaDetect: false }, 5],
+    ["ref_layouts_split", { splitSpreads: true }, 6],
+    ["ref_layouts_split_ltr", { splitSpreads: true, bookType: "western" }, 6],
+  ];
+  for (const [ref, opts, pageCount] of runs) {
+    await gotoManga(page, base);
+    await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga_layouts.epub"));
+    await page.check("#manga-no-ocr");
+    await page.uncheck("#manga-yolo");
+    await setMangaForm(page, { formats: ["matcha"], res: "full", ...opts });
+    const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+    const dest = path.join(OUT, ref);
+    fs.rmSync(dest, { recursive: true, force: true });
+    unzipTo(zipFile, dest);
+    const dir = path.join(dest, "Layout Test");
+    for (const f of ["panels.idx", "panels.dat", "meta.bin", "toc.idx"]) {
+      const got = path.join(dir, f);
+      check(`${ref}: ${f} matches Python reference`, fs.existsSync(got) && filesEqual(path.join(FIXTURES, ref, f), got));
+    }
+    const pngs = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => /^page_\d{4}\.png$/.test(n)) : [];
+    check(`${ref}: ${pageCount} pages written`, pngs.length === pageCount, `got ${pngs.length}`);
+  }
+}
+
+/* The AI detector on the layout pages, against convert_manga.py's detect_panels() with the same
+ * ONNX model: the gap filling, blank-panel drop, grid fallback and 4-koma order, ±2px. */
+async function testMangaYoloLayouts(page, base) {
+  console.log("manga.html end-to-end (layouts EPUB, AI panel detection):");
+  const refPath = path.join(FIXTURES, "ref_yolo", "layouts.json");
+  if (!fs.existsSync(refPath)) {
+    console.log("  skip (no ref_yolo/layouts.json — rerun gen_references.py with numpy + onnxruntime installed)");
+    return;
+  }
+  const ref = JSON.parse(fs.readFileSync(refPath, "utf-8"));
+  await gotoManga(page, base);
+  await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga_layouts.epub"));
+  await page.check("#manga-no-ocr");
+  await page.check("#manga-yolo");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
+  const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+  const dest = path.join(OUT, "manga_yolo_layouts");
+  fs.rmSync(dest, { recursive: true, force: true });
+  unzipTo(zipFile, dest);
+  const pages = parsePanelBoxes(path.join(dest, "Layout Test"));
+  const names = Object.keys(ref).sort();
+  check("page count", pages.length === names.length, `got ${pages.length}`);
+  const TOL = 2;
+  for (let p = 0; p < names.length && p < pages.length; p++) {
+    const expected = ref[names[p]];
+    const got = pages[p];
+    const ok = got.length === expected.length &&
+               got.every((b, i) => b.every((v, j) => Math.abs(v - expected[i][j]) <= TOL));
+    check(`${names[p]} ${expected.length} panel(s) within ±${TOL}px`, ok,
+          ok ? "" : `got ${JSON.stringify(got)}, reference ${JSON.stringify(expected)}`);
   }
 }
 
@@ -854,6 +936,8 @@ async function testRuby(page, base) {
     await testManga(page, base);
     await testMangaYolo(page, base);
     await testMangaEpub(page, base);
+    await testMangaLayouts(page, base);
+    await testMangaYoloLayouts(page, base);
     await testMangaPdf(page, base);
     await testMangaPanelsOnly(page, base);
     await testMangaFolderedCbz(page, base);
