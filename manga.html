@@ -84,7 +84,23 @@
       <input type="number" id="manga-res-w" min="1" max="4096">
       <input type="number" id="manga-res-h" min="1" max="4096">
     </div>
-    <p class="hint res-hint" id="manga-res-hint">Images are sized for BOOX Picco while preserving their proportions.</p>
+    <p class="hint res-hint" id="manga-res-hint">Every EPUB image is 480 × 800 pixels; unused areas are white.</p>
+    <div class="field-gap"></div>
+    <p class="field-label" id="manga-stretch-title">Image stretching</p>
+    <label><input type="checkbox" id="manga-stretch" checked>
+      <strong>Stretch matching portrait pages and panels to fill the screen</strong></label>
+    <div id="manga-stretch-controls">
+      <label for="manga-stretch-limit">Maximum aspect-ratio difference from 480 × 800</label>
+      <select id="manga-stretch-limit" aria-describedby="manga-stretch-hint">
+        <option value="5">5%</option>
+        <option value="10">10%</option>
+        <option value="18" selected>18% (original default)</option>
+        <option value="25">25%</option>
+        <option value="35">35%</option>
+        <option value="50">50%</option>
+      </select>
+    </div>
+    <p class="hint" id="manga-stretch-hint" aria-live="polite">Portrait images within 18% of the Picco screen's aspect ratio are stretched to 480 × 800. All others keep their proportions with white gaps. Landscape images are never stretched.</p>
   </div>
 
   <div class="card">
@@ -417,6 +433,6 @@
 <script src="js/manga-epub.js?v=picco-20261117-no-stretch"></script>
 <script src="js/manga-pdf.js"></script>
 <script src="js/yolo.js"></script>
-<script src="js/manga-ui.js?v=picco-20261117-no-stretch"></script>
+<script src="js/manga-ui.js?v=picco-20261117-stretch-options"></script>
 </body>
 </html>
