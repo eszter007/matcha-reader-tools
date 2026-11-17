@@ -88,9 +88,9 @@
     <div class="field-gap"></div>
     <p class="field-label" id="manga-stretch-title">Image stretching</p>
     <label><input type="checkbox" id="manga-stretch" checked>
-      <strong>Stretch matching portrait pages and panels to fill the screen</strong></label>
+      <strong>Stretch portrait and landscape pages and panels</strong></label>
     <div id="manga-stretch-controls">
-      <label for="manga-stretch-limit">Maximum aspect-ratio difference from 480 × 800</label>
+      <label for="manga-stretch-limit">Maximum aspect-ratio difference (relative to the matching screen orientation)</label>
       <select id="manga-stretch-limit" aria-describedby="manga-stretch-hint">
         <option value="5">5%</option>
         <option value="10">10%</option>
@@ -100,7 +100,7 @@
         <option value="50">50%</option>
       </select>
     </div>
-    <p class="hint" id="manga-stretch-hint" aria-live="polite">Portrait images within 18% of the Picco screen's aspect ratio are stretched to 480 × 800. All others keep their proportions with white gaps. Images that stay landscape are not stretched; rotated panels may qualify.</p>
+    <p class="hint" id="manga-stretch-hint" aria-live="polite">Portrait and landscape images within 18% of the matching screen ratio (480:800 or 800:480) are stretched to 480 × 800. Stretching landscape images can cause substantial distortion. Others retain their proportions with white space.</p>
   </div>
 
   <div class="card">
@@ -433,6 +433,6 @@
 <script src="js/manga-epub.js?v=picco-20261117-no-stretch"></script>
 <script src="js/manga-pdf.js"></script>
 <script src="js/yolo.js"></script>
-<script src="js/manga-ui.js?v=picco-20261117-stretch-v2"></script>
+<script src="js/manga-ui.js?v=picco-20261117-landscape-stretch"></script>
 </body>
 </html>
