@@ -1,6 +1,6 @@
 # 🍵 Matcha Reader Tools
 
-> **Fork attribution:** Modified from [Matcha Reader Tools by Eszter Schuffert](https://github.com/eszter007/matcha-reader-tools), © 2026, licensed under the original [MIT License](LICENSE). This fork adds automatic manga and 4-koma border trimming, zero default panel crop padding, correct EPUB export after trimming, and device-sized EPUB viewports. All credit for the original project belongs to Eszter Schuffert.
+> **Fork attribution:** Modified from [Matcha Reader Tools by Eszter Schuffert](https://github.com/eszter007/matcha-reader-tools), © 2026, licensed under the original [MIT License](LICENSE). This fork specializes the converter for BOOX Picco (480 × 800) and EPUB-only output. It adds automatic manga and 4-koma border trimming, zero-default panel crop padding, correct export of trimmed images, white screen-sized EPUB images, optional portrait stretching with selectable aspect-ratio thresholds, and automatic rotation of wide panels. All credit for the original project belongs to Eszter Schuffert.
 
 Browser-based converters for the [Matcha Reader](https://github.com/eszter007/matcha-reader)
 e-reader firmware, a CrossPoint Reader fork with Japanese and Chinese learning features. Everything runs
