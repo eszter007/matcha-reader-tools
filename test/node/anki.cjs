@@ -28,11 +28,39 @@ function firstDifference(a, b) {
   return a.length === b.length ? -1 : n;
 }
 
-function referenceDecks(dir) {
+// Python's output for each deck, keyed by deck name: its files as paths under the system folder
+// (anki/<id>.json, .cards.bin, .css, the empty anki/<id>/ marker, anki-cards/<id>/...), with the
+// deck id written as <deck>. Python imports the package into a fresh collection, which gives each
+// deck a new id; the converter keeps the package's own, so only the id may differ.
+function withoutDeckId(rel, id) {
+  return rel.replace(`anki/${id}`, "anki/<deck>").replace(`anki-cards/${id}/`, "anki-cards/<deck>/");
+}
+
+function referenceDecks(dir, cardsRoot) {
   const byName = new Map();
-  for (const id of fs.readdirSync(dir)) {
-    const deck = JSON.parse(fs.readFileSync(path.join(dir, id, "deck.json"), "utf8"));
-    byName.set(deck.name, path.join(dir, id));
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith(".json")) continue;
+    const id = entry.slice(0, -".json".length);
+    const deck = JSON.parse(fs.readFileSync(path.join(dir, entry), "utf8"));
+    const files = new Map();
+    for (const suffix of [".json", ".cards.bin", ".css"]) {
+      const file = path.join(dir, id + suffix);
+      if (fs.existsSync(file)) files.set(`anki/${id}${suffix}`, file);
+    }
+    if (fs.existsSync(path.join(dir, id))) files.set(`anki/${id}/`, null);
+    const walk = (abs, rel) => {
+      for (const name of fs.readdirSync(abs)) {
+        const childAbs = path.join(abs, name);
+        const childRel = `${rel}/${name}`;
+        if (fs.statSync(childAbs).isDirectory()) walk(childAbs, childRel);
+        else files.set(childRel, childAbs);
+      }
+    };
+    const cards = path.join(cardsRoot, id);
+    if (fs.existsSync(cards)) walk(cards, `anki-cards/${id}`);
+    const generic = new Map();
+    for (const [rel, abs] of files) generic.set(withoutDeckId(rel, id), abs);
+    byName.set(deck.name, generic);
   }
   return byName;
 }
@@ -70,22 +98,24 @@ async function compareWithPython(SQL, name) {
   const apkg = await anki.openApkg(new Uint8Array(fs.readFileSync(apkgPath)), { SQL, fzstd });
   const collection = anki.loadCollection(apkg.db);
   const decks = anki.defaultDecks(anki.listDecks(apkg.db, collection));
-  const refs = referenceDecks(refDir);
+  const refs = referenceDecks(refDir, path.join(FIXTURES, "ref_anki", "anki-cards"));
   check(`${name}: same decks`, decks.map((d) => d.name).sort().join("|") === [...refs.keys()].sort().join("|"),
         `${decks.map((d) => d.name)} vs ${[...refs.keys()]}`);
   for (const deck of decks) {
-    const ref = refs.get(deck.name);
-    if (!ref) continue;
+    const refFiles = refs.get(deck.name);
+    if (!refFiles) continue;
     // WebP needs a browser canvas: here a stand-in marks the file, its bytes are not compared.
-    const { files } = await anki.exportDeck(apkg, collection, deck, async () => new Uint8Array([1]));
-    const refFiles = fs.readdirSync(ref).sort();
-    check(`${name}/${deck.name}: same files`, [...files.keys()].sort().join("|") === refFiles.join("|"),
-          `${[...files.keys()].sort()} vs ${refFiles}`);
-    for (const file of refFiles) {
-      if (!files.has(file) || file.endsWith(".webp.png")) continue;
+    const exported = await anki.exportDeck(apkg, collection, deck, async () => new Uint8Array([1]));
+    const files = new Map([...exported.files].map(([rel, data]) => [withoutDeckId(rel, deck.id), data]));
+    const names = [...refFiles.keys()].sort();
+    check(`${name}/${deck.name}: same files`, [...files.keys()].sort().join("|") === names.join("|"),
+          `${[...files.keys()].sort()} vs ${names}`);
+    for (const file of names) {
+      const refPath = refFiles.get(file);
+      if (refPath === null || !files.has(file) || file.endsWith(".webp.png")) continue;
       const mine = files.get(file);
       const actual = typeof mine === "string" ? Buffer.from(mine, "utf8") : Buffer.from(mine);
-      const expected = fs.readFileSync(path.join(ref, file));
+      const expected = fs.readFileSync(refPath);
       const at = firstDifference(actual, expected);
       check(`${name}/${deck.name}/${file}`, at < 0,
             at < 0 ? "" : `differs at byte ${at}:\n      js: ${JSON.stringify(actual.slice(Math.max(0, at - 40), at + 60).toString())}` +

@@ -148,7 +148,7 @@ async function build() {
   const lock = new WakeLock();
   await lock.acquire();
   try {
-    const root = `${$("anki-folder").value}/anki`;
+    const root = $("anki-folder").value;
     const zip = new ZipWriter();
     const enc = new TextEncoder();
     let total = 0;
@@ -157,7 +157,7 @@ async function build() {
       const result = await exportDeck(apkg, collection, deck, webpToPng,
                                       (done, all, what) => setProgress(done, all, `${deck.name}: ${done} of ${all} ${what}`));
       for (const [name, data] of result.files) {
-        zip.addFile(`${root}/${deck.id}/${name}`, typeof data === "string" ? enc.encode(data) : data);
+        zip.addFile(`${root}/${name}`, typeof data === "string" ? enc.encode(data) : data);
       }
       total += result.cards;
       const notes = [];

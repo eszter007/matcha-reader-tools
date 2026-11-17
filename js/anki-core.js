@@ -2,9 +2,11 @@
  *
  * A browser port of tools/anki_import/apkg_to_flashcards.py in the matcha-reader repo: it reads
  * the package's collection, renders each card the way Anki does, cleans the HTML for the reader
- * and lays out the deck folder the reader's Anki sync writes:
+ * and lays out the files the reader's Anki sync writes, under the card's system folder:
  *
- *   .system/anki/<deck id>/deck.json, cards.bin, style.css, <card id>q.xhtml, <card id>a.xhtml, images
+ *   anki/<deck id>.json, <deck id>.cards.bin, <deck id>.css, and an empty anki/<deck id>/
+ *   anki-cards/<deck id>/<NN>/<card id>q.xhtml, <card id>a.xhtml   (NN: card id % 64)
+ *   anki-cards/<deck id>/media/   the images
  *
  * Needs sql.js (initSqlJs) and fzstd, passed in by the caller; the zip comes from zip.js.
  */
@@ -15,6 +17,9 @@ const ANKI_MAX_SIDE_BYTES = 40 * 1024;  // one side, as stored (the sync's limit
 const ANKI_MAX_CSS = 32 * 1024;
 const ANKI_TOO_LARGE = 1;               // cards.bin flag: shown as "too large" on the reader
 const ANKI_DRAWABLE = [".jpg", ".jpeg", ".png", ".gif", ".bmp"];
+// Sides go in this many small folders: one folder of thousands of files is slow to search on the
+// reader's FAT card (as ankideck::SIDE_FOLDERS).
+const ANKI_SIDE_FOLDERS = 64n;
 
 /* ------------------------------------------------------------------ package */
 
@@ -643,6 +648,7 @@ async function exportDeck(apkg, collection, deck, convertWebp, onProgress) {
   let cut = 0;
   if (cards.length > ANKI_MAX_CARDS) { cut = cards.length - ANKI_MAX_CARDS; cards = cards.slice(0, ANKI_MAX_CARDS); }
 
+  const cardsDir = `anki-cards/${deck.id}`;
   const noteStmt = db.prepare("SELECT CAST(id AS TEXT), CAST(mid AS TEXT), mod, tags, flds FROM notes WHERE id = ?");
   const files = new Map();
   const cssParts = [];
@@ -678,8 +684,9 @@ async function exportDeck(apkg, collection, deck, convertWebp, onProgress) {
       flags |= ANKI_TOO_LARGE;
       tooLarge++;
     } else {
-      files.set(`${cardId}q.xhtml`, sides[0]);
-      files.set(`${cardId}a.xhtml`, sides[1]);
+      const sideDir = `${cardsDir}/${String(BigInt(cardId) % ANKI_SIDE_FOLDERS).padStart(2, "0")}`;
+      files.set(`${sideDir}/${cardId}q.xhtml`, sides[0]);
+      files.set(`${sideDir}/${cardId}a.xhtml`, sides[1]);
       for (const side of sides) {
         for (const m of side.matchAll(/src="([^"]+)"/g)) wanted.add(decodeEntities(m[1]));
       }
@@ -704,12 +711,14 @@ async function exportDeck(apkg, collection, deck, convertWebp, onProgress) {
     if (!data) { imagesMissing++; continue; }
     const out = webp ? (convertWebp ? await convertWebp(data) : null) : data;
     if (!out) { imagesMissing++; continue; }
-    files.set(name, out);
+    files.set(`${cardsDir}/media/${name}`, out);
     images++;
   }
-  files.set("cards.bin", records);
-  files.set("style.css", cssParts.join("\n").slice(0, ANKI_MAX_CSS));
-  files.set("deck.json", `{"name": ${pyJsonString(deck.name)}, "lastReviewId": 0}`);
+  files.set(`anki/${deck.id}.cards.bin`, records);
+  files.set(`anki/${deck.id}.css`, cssParts.join("\n").slice(0, ANKI_MAX_CSS));
+  files.set(`anki/${deck.id}.json`, `{"name": ${pyJsonString(deck.name)}, "lastReviewId": 0, "cardsMoved": true}`);
+  // The deck's folder marks it as present: the reader forgets a deck whose folder is gone.
+  files.set(`anki/${deck.id}/`, new Uint8Array(0));
   return { files, cards: cards.length, cut, tooLarge, images, imagesMissing };
 }
 
