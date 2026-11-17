@@ -681,9 +681,9 @@ async function selectionIsMokuro(files) {
  * readers sometimes ignore CSS background/object-fit, leaving dark strips at
  * the bottom or sides of individual images. Baking the white matte into every
  * 480x800 pixel image prevents this for both portrait and landscape source art.
- * Stretching is optional for portrait artwork close to the target aspect ratio;
- * the threshold defaults to the original 18%. All other artwork is contained
- * without cropping, with a white backdrop for unused screen space. */
+ * Wide panels can be rotated upright before this step. Optional stretching
+ * then applies ONLY to portrait-oriented output close to 480:800; horizontal
+ * pages/panels are always uniformly contained on white. Nothing is cropped. */
 async function rasterizeEpubImage(im, deviceTarget, stretchOptions = { enabled: true, limit: 18 }) {
   if (!Array.isArray(deviceTarget)) return im;
   const [targetW, targetH] = deviceTarget;
@@ -694,12 +694,13 @@ async function rasterizeEpubImage(im, deviceTarget, stretchOptions = { enabled: 
     const ctx = smoothScaling(out.getContext("2d"));
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, targetW, targetH);
-    // Threshold is the percentage difference between the image's aspect
-    // ratio (width/height) and the Picco screen's aspect ratio (480/800).
-    // Check both landscape and portrait images against the matching screen orientation.
-    const targetAspect = bmp.width > bmp.height ? targetH / targetW : targetW / targetH;
-    const aspectDifference = Math.abs((bmp.width / bmp.height) / targetAspect - 1) * 100;
-    const stretch = stretchOptions.enabled && aspectDifference <= stretchOptions.limit;
+    // Never stretch horizontal artwork into a portrait 480x800 viewport:
+    // doing that distorts it drastically even when it matches the landscape
+    // screen ratio. A wide PANEL may already have been rotated upright.
+    const aspectDifference = Math.abs((bmp.width / bmp.height) /
+      (targetW / targetH) - 1) * 100;
+    const stretch = stretchOptions.enabled && bmp.height > bmp.width &&
+      aspectDifference <= stretchOptions.limit;
     if (stretch) {
       ctx.drawImage(bmp, 0, 0, targetW, targetH);
     } else {
@@ -2361,7 +2362,16 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-yolo").checked = loadSetting("manga-yolo", "1") === "1";
   $("manga-mono").checked = loadSetting("manga-mono", "0") === "1";
   $("manga-panels-only").checked = loadSetting("manga-panels-only", "0") === "1";
-  $("manga-rotate-panels").checked = loadSetting("manga-rotate-panels", "1") === "1";
+  // One-time migration: enable the recommended wide-panel rotation even if
+  // an old saved preference had disabled it. Afterwards the user may switch
+  // it off and that choice will be respected on future visits.
+  if (loadSetting("manga-picco-rotate-default-v1", "0") !== "1") {
+    $("manga-rotate-panels").checked = true;
+    saveSetting("manga-rotate-panels", "1");
+    saveSetting("manga-picco-rotate-default-v1", "1");
+  } else {
+    $("manga-rotate-panels").checked = loadSetting("manga-rotate-panels", "1") === "1";
+  }
   // First visit: replicate the original portrait stretch behavior (18%).
   // Later visits: respect the user's last chosen threshold and on/off setting.
   $("manga-stretch").checked = loadSetting("manga-stretch", "1") === "1";
@@ -2373,7 +2383,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     const limit = $("manga-stretch-limit").value;
     $("manga-stretch-limit").disabled = !enabled;
     $("manga-stretch-hint").textContent = enabled
-      ? `Portrait and landscape pages and panels within ${limit}% of the corresponding screen ratio (480:800 portrait, 800:480 landscape) are stretched into the 480 × 800 output. Landscape images may be strongly distorted. Other images retain their aspect ratio with white margins.`
+      ? `Wide panels are rotated upright when that option is on. Portrait pages and panels within ${limit}% of 480:800 may be stretched to fill the screen. Landscape images left horizontal are never stretched; they keep their proportions with white margins.`
       : "Stretching is OFF: every page and panel keeps its aspect ratio. Any unused space is white.";
   };
   $("manga-stretch").addEventListener("change", () => {
