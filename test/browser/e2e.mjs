@@ -670,6 +670,81 @@ async function testMangaPpocr(page, base) {
   check("nothing is sent to Gemini", geminiCalls.length === 0, `${geminiCalls.length} calls`);
 }
 
+/* The text check: read the pages first, fix a line and remove a bubble by hand, and the book carries
+ * exactly that text. */
+async function testMangaTextCheck(page, base) {
+  console.log("manga.html text check (fix and remove text before converting):");
+  const fixture = path.join(FIXTURES, "manga_jp.cbz");
+  if (!fs.existsSync(fixture)) {
+    console.log("  skip (no manga_jp.cbz: gen_references.py found no Japanese font)");
+    return;
+  }
+  await gotoManga(page, base);
+  await page.setInputFiles("#manga-file", fixture);
+  await setHiddenControl(page, "#manga-ocr-engine", "ppocr");
+  await page.uncheck("#manga-yolo");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
+  await page.fill("#manga-title", "Checked Manga");
+  await page.fill("#manga-language", "ja");
+  check("the text check is offered for built-in recognition", await page.isVisible("#text-check-btn"));
+  await page.click("#text-check-btn");
+  await page.waitForFunction(() => /Click a page/.test(document.querySelector("#text-check-summary").textContent), null, { timeout: 120000 });
+  const thumbs = await page.$$("#text-grid .panel-thumb");
+  check("every page is listed", thumbs.length > 0, `${thumbs.length} pages`);
+
+  await thumbs[0].click();
+  await page.waitForSelector("#text-editor[open] #te-blocks input");
+  const before = await page.$$eval("#te-blocks > li", (lis) => lis.length);
+  const first = await page.$("#te-blocks input");
+  await first.fill("テスト");
+  await page.keyboard.press("Tab");
+  check("Tab after an edit moves on to the next line", await page.evaluate(() =>
+    document.activeElement && document.activeElement.matches("#te-blocks input") && document.activeElement !== document.querySelector("#te-blocks input")));
+  let removedText = "";
+  if (before > 1) {
+    removedText = await page.$$eval("#te-blocks > li:last-child input", (ins) => ins.map((i) => i.value).join(""));
+    await page.click("#te-blocks > li:last-child .te-remove");
+  }
+  const after = await page.$$eval("#te-blocks > li", (lis) => lis.length);
+  check("a bubble marked not text is removed", before === 1 || after === before - 1, `${before} -> ${after}`);
+  // Text the reader missed: a bubble added from the keyboard, moved into place, then typed in.
+  await page.focus("#te-canvas");
+  await page.keyboard.press("a");
+  check("A on the page adds a bubble, selected on the page", await page.evaluate(() =>
+    document.activeElement.id === "te-canvas" && te.blocks[te.sel] && te.blocks[te.sel].added));
+  const placed = await page.evaluate(() => te.blocks[te.sel].box.slice());
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+ArrowDown");
+  const moved = await page.evaluate(() => te.blocks[te.sel].box.slice());
+  check("arrow keys move an added bubble, Shift resizes it",
+    moved[0] > placed[0] && moved[3] - moved[1] > placed[3] - placed[1], `${placed} -> ${moved}`);
+  await page.keyboard.press("Enter");
+  check("Enter goes to the added bubble's text", await page.evaluate(() => document.activeElement.tagName === "TEXTAREA"));
+  await page.keyboard.type("ふたつの");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("ことば");
+  await page.keyboard.press("Tab");
+  await page.click("#te-close");
+  // The dialog's close event, which redraws the grid, comes a moment after the click.
+  const fixed = await page.waitForFunction(() => /Fixed|Check/.test(document.querySelector("#text-grid .panel-thumb").textContent),
+    null, { timeout: 5000 }).then(() => page.textContent("#text-grid .panel-thumb"), () => "");
+  check("the page shows as fixed", fixed.includes("Fixed"), fixed);
+
+  const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+  const dest = path.join(OUT, "manga_text_check");
+  unzipTo(zipFile, dest);
+  const pages = parsePanelsDat(path.join(dest, "Checked Manga"));
+  const texts = pages[0].panels.flatMap((p) => p.texts);
+  check("the fixed line is in the book, its box kept",
+    texts.some((t) => t.text.split("\n")[0] === "テスト" && t.lines.length === t.text.split("\n").length),
+    JSON.stringify(texts.map((t) => t.text)));
+  check("the removed bubble is not", !removedText || !texts.some((t) => t.text.replace(/\n/g, "") === removedText),
+    JSON.stringify(texts.map((t) => t.text)));
+  const added = texts.find((t) => t.text === "ふたつの\nことば");
+  check("the added bubble is in the book, one box per line, right to left",
+    added && added.vertical && added.lines.length === 2 && added.lines[0][0] > added.lines[1][0], JSON.stringify(added));
+}
+
 async function testMangaPanelsOnly(page, base) {
   console.log("manga.html end-to-end (panels-only, borderless pages, XTC + EPUB):");
   const cbz = path.join(FIXTURES, "manga_fullbleed.cbz");
@@ -1001,6 +1076,7 @@ async function testRuby(page, base) {
     await testMangaFolderedCbz(page, base);
     await testMangaGeminiOcr(page, base);
     await testMangaPpocr(page, base);
+    await testMangaTextCheck(page, base);
     await testMangaNoOffscreenCanvas(browser, base);
     await testDict(page, base);
     await testDictMdx(page, base);

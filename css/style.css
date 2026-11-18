@@ -18,6 +18,9 @@
   --warn-bg: #fdf6e6;
   --warn-border: #e7d4a8;
   --error: #b42318;
+  --unsure: #b93a0b;        /* text check: lines hard to read */
+  --unsure-bg: #fff4ec;
+  --selected: #1c64b0;      /* text check: the bubble being edited */
   --card-shadow: 0 0 0 1px #1c19170d, 0 1px 3px #0000001a, 0 1px 2px -1px #0000001a;
 }
 
@@ -39,6 +42,9 @@
     --warn-bg: #403728;
     --warn-border: #7e6940;
     --error: #fca5a5;
+    --unsure: #ffb37a;
+    --unsure-bg: #3d2a1d;
+    --selected: #8cc2f5;
     --card-shadow: 0 0 0 1px #504b45, 0 1px 3px #0000001a, 0 1px 2px -1px #0000001a;
   }
 }
@@ -426,6 +432,76 @@ details { margin-top: 0.8rem; }
 @media (max-width: 560px) {
   .pe-head { grid-template-columns: 1fr auto; }
   .pe-head .segmented { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
+}
+
+/* Text check: the same page grid; the editor shows the page beside its bubbles. */
+#text-check-row { margin-top: 0.8rem; }
+.text-check-review { margin: 0; padding: 0.45rem 1rem; }
+#text-editor { width: min(1120px, 97vw); max-height: 96vh; border: 0; border-radius: 16px; padding: 14px 18px 12px;
+  background: var(--card); color: var(--text); box-shadow: 0 20px 60px #00000059; }
+#text-editor::backdrop { background: #1c191799; }
+#text-editor kbd { font: 600 11px ui-monospace, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; }
+/* The header stays in view while the bubbles scroll (on a phone the whole dialog scrolls). */
+.te-head { grid-template-columns: auto 1fr auto; position: sticky; top: -14px; z-index: 2; margin: -14px -18px 0; padding: 14px 18px 8px;
+  background: var(--card); border-radius: 16px 16px 0 0; }
+.te-queue { display: flex; align-items: center; justify-content: center; gap: 0.6rem; }
+.te-count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.te-next-unsure { display: inline-flex; align-items: center; gap: 0.2rem; margin: 0; padding: 0.4rem 0.6rem 0.4rem 0.9rem; }
+.te-next-unsure .ui-icon { width: 17px; height: 17px; }
+.te-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 1.1rem; margin-top: 0.75rem; align-items: start; }
+.te-page { display: flex; justify-content: center; min-width: 0; }
+#te-canvas { max-width: 100%; border-radius: 4px; box-shadow: 0 0 0 1px var(--border); cursor: pointer; }
+#te-canvas.drawing { cursor: crosshair; touch-action: none; box-shadow: 0 0 0 2px #2b7a3b; }
+.te-side-bar { display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.6rem; }
+.te-side-bar .te-help { flex: 1; margin: 0; }
+.te-add { display: inline-flex; align-items: center; gap: 0.3rem; flex: none; margin: 0; padding: 0.4rem 0.8rem 0.4rem 0.6rem; }
+.te-add .ui-icon { width: 17px; height: 17px; }
+.te-add[aria-pressed="true"] { background: #2b7a3b; border-color: #2b7a3b; color: #fff; }
+.te-draw-help { margin: 0 0 0.6rem; padding: 0.45rem 0.7rem; border-radius: 8px; font-size: 13px;
+  background: color-mix(in srgb, #2b7a3b 12%, var(--card)); color: var(--text); }
+.te-added-label { display: block; margin: 0.2rem 0 0.25rem; font-size: 12.5px; font-weight: 600; color: var(--label); }
+.te-block textarea { width: 100%; box-sizing: border-box; margin: 0; padding: 0.4rem 0.55rem; font: inherit; font-size: 16px;
+  line-height: 1.5; resize: vertical; }
+.te-vertical { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0.4rem 0 0; font-size: 13px; font-weight: 400; }
+.te-side { display: flex; flex-direction: column; min-height: 0; max-height: 72vh; }
+.te-help { margin: 0 0 0.6rem; font-size: 12.5px; }
+.te-blocks { list-style: none; margin: 0; padding: 2px 4px 2px 2px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.6rem; }
+.te-block { padding: 0.55rem 0.6rem 0.6rem; border-radius: 12px; background: var(--bg); box-shadow: 0 0 0 1px var(--border);
+  transition: box-shadow .12s; }
+.te-block.selected { box-shadow: 0 0 0 2px var(--selected); }
+.te-block-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.te-block-name { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px;
+  border-radius: 6px; background: #1c64b0; color: #fff; font-size: 12px; font-weight: 700; }
+.te-block.added .te-block-name { background: #2b7a3b; }
+.te-block-tag { flex: 1; font-size: 12px; font-weight: 600; color: var(--unsure); }
+.te-block.added .te-block-tag { color: var(--matcha-dark); }
+.te-remove { height: 28px; padding: 0 0.45rem; font-size: 12px; font-weight: 600; }
+.te-remove .ui-icon { width: 16px; height: 16px; }
+.te-zoom { display: block; max-width: 100%; margin: 0 auto 0.45rem; border-radius: 6px; background: #fff;
+  box-shadow: 0 1px 3px #00000026; cursor: pointer; }
+.te-line { display: flex; align-items: center; gap: 0.3rem; margin-top: 0.3rem; }
+.te-line input { flex: 1; min-width: 0; margin: 0; padding: 0.4rem 0.55rem; font-size: 16px; line-height: 1.35; }
+.te-line.unsure input { border-color: var(--unsure); border-left-width: 4px; background: var(--unsure-bg); }
+.te-flag { display: none; flex: none; color: var(--unsure); }
+.te-flag .ui-icon { width: 18px; height: 18px; }
+.te-line.unsure .te-flag { display: inline-flex; }
+.te-flag-inline { color: var(--unsure); font-weight: 700; }
+/* A focus ring with 3:1 contrast on the card in both themes, amber like the line outlined on the page. */
+.te-line input:focus-visible, .te-line input:focus, .te-block textarea:focus { outline: 3px solid #a86f00; outline-offset: 1px; border-color: #a86f00; }
+@media (prefers-color-scheme: dark) {
+  .te-line input:focus-visible, .te-line input:focus, .te-block textarea:focus { outline-color: #ffc94d; border-color: #ffc94d; }
+}
+.te-ok { min-width: 34px; height: 34px; padding: 0; color: #2f9e44; }
+.te-ok:hover:not(:disabled) { background: color-mix(in srgb, #2f9e44 14%, transparent); color: #2b8a3e; }
+.te-foot-hint { font-size: 12px; }
+@media (max-width: 720px) {
+  .te-head { grid-template-columns: 1fr auto; }
+  .te-queue { grid-column: 1 / -1; grid-row: 2; }
+  .te-body { grid-template-columns: 1fr; }
+  .te-side { max-height: none; }
+  .te-side-bar { flex-direction: column-reverse; align-items: stretch; gap: 0.5rem; }
+  .te-add { justify-content: center; padding: 0.55rem 0.8rem; }
+  .te-blocks { overflow: visible; }
 }
 
 /* A question above a set of choices, styled like a field label. */

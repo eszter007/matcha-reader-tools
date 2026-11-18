@@ -1679,6 +1679,61 @@ function testPpocr() {
   check("ppocr: blocks map to the page with a box per line",
     mapped.length === 2 && mapped.every((b, i) => b.lines.length === blocks[i].lines.length && b.text.includes("\n") === b.lines.length > 1),
     JSON.stringify(mapped));
+
+  // Confidence, for the text check: the least certain character of a line.
+  const probs = new Float32Array([0, 0.9, 0.1, 0, 0, 0.6, 0.4, 0, 1, 0, 0, 0, 0, 0, 0.95, 0.05, 0, 0, 0.99, 0.01]);
+  const read = ppocr.ppocrCtcRead(probs, 5, 4, vocab);
+  check("ppocr: a line's confidence is its least certain character", read.text === "ねこ" && Math.abs(read.conf - 0.9) < 1e-6,
+    JSON.stringify(read));
+  check("ppocr: an empty read has no confidence", ppocr.ppocrCtcRead(new Float32Array([1, 0, 0, 0]), 1, 4, vocab).conf === 0);
+  const dots = ppocr.ppocrCtcRead(new Float32Array([0, 0.95, 0.05, 0, 0.3, 0.15, 0.15, 0.4]), 2, 4, ["", "ね", "こ", "…"]);
+  check("ppocr: punctuation does not make a line unsure", dots.text === "ね…" && Math.abs(dots.conf - 0.95) < 1e-6,
+    JSON.stringify(dots));
+  const sure = ppocr.ppocrBubbles([
+    { text: "それじゃあ", box: [370, 110, 390, 200], vertical: true, conf: 0.99 },
+    { text: "お別れだ", box: [347, 110, 367, 185], vertical: true, conf: 0.4 },
+  ]);
+  check("ppocr: blocks carry one confidence per line, in line order",
+    JSON.stringify(sure[0].lines_conf) === "[0.99,0.4]", JSON.stringify(sure));
+  const split = ppocr.ppocrBubbles([
+    { text: "穴", box: [80, 19, 114, 97], vertical: true, conf: 0.7 },
+    { text: "の下の", box: [78, 82, 113, 197], vertical: true, conf: 1 },
+  ]);
+  check("ppocr: a joined column keeps its less certain piece's confidence", JSON.stringify(split[0].lines_conf) === "[0.7]",
+    JSON.stringify(split));
+  check("ppocr: the unsure bar sits between misread and correct lines", ppocr.PPOCR_UNSURE_CONF > 0.5 && ppocr.PPOCR_UNSURE_CONF < 0.9);
+
+  // The text check's line edits.
+  const tb = manga.mokuroTextBlocks(sure, (x, y) => [x, y])[0];
+  check("text check: confidence reaches the page's text blocks", JSON.stringify(tb.conf) === "[0.99,0.4]", JSON.stringify(tb));
+  check("text check: a block's lines pair text, box and confidence",
+    JSON.stringify(manga.textBlockLines(tb).map((l) => [l.text, l.conf])) === '[["それじゃあ",0.99],["お別れだ",0.4]]');
+  const fixedLine = manga.textBlockFromLines(tb, manga.textBlockLines(tb).map((l, i) => (i === 1 ? { ...l, text: "お別れね", conf: 1 } : l)));
+  check("text check: a fixed line keeps its box and is no longer unsure",
+    fixedLine.text === "それじゃあ\nお別れね" && fixedLine.lines.length === 2 && JSON.stringify(fixedLine.conf) === "[0.99,1]"
+    && JSON.stringify(fixedLine.lines[1]) === JSON.stringify(tb.lines[1]), JSON.stringify(fixedLine));
+  const dropped = manga.textBlockFromLines(tb, manga.textBlockLines(tb).map((l, i) => (i === 0 ? { ...l, text: "  " } : l)));
+  check("text check: clearing a line removes it and its box",
+    dropped.text === "お別れだ" && dropped.lines.length === 1 && JSON.stringify(dropped.lines[0]) === JSON.stringify(tb.lines[1]),
+    JSON.stringify(dropped));
+  check("text check: clearing every line removes the block",
+    manga.textBlockFromLines(tb, manga.textBlockLines(tb).map((l) => ({ ...l, text: "" }))) === null);
+  const noBoxes = { box: [0, 0, 10, 10], text: "ゴゴゴ", lines: [], vertical: true };
+  check("text check: a block without line boxes is edited as one line",
+    manga.textBlockLines(noBoxes).length === 1 && manga.textBlockFromLines(noBoxes, [{ text: "ゴゴ\nゴ", box: noBoxes.box, conf: 1 }]).text === "ゴゴゴ");
+  const added = manga.textBlockFromBox([100, 50, 160, 250], "ここに\n\n何かが\nある ", true);
+  check("text check: an added vertical bubble has one column per line, right to left",
+    added.text === "ここに\n何かが\nある" && added.added === true && added.vertical
+    && JSON.stringify(added.lines) === "[[140,50,160,250],[120,50,140,250],[100,50,120,250]]"
+    && JSON.stringify(added.conf) === "[1,1,1]", JSON.stringify(added));
+  const across = manga.textBlockFromBox([0, 0, 300, 90], "HELLO\nTHERE", false);
+  check("text check: an added horizontal bubble has one row per line, top to bottom",
+    JSON.stringify(across.lines) === "[[0,0,300,45],[0,45,300,90]]", JSON.stringify(across));
+  check("text check: an added bubble with no text has no lines", manga.textBlockFromBox([0, 0, 10, 10], " \n ", true).text === "");
+  const scaled = manga.scaleTextBlocks([tb], 400, 1200, 200, 600)[0];
+  check("text check: fixed text follows the page to another size",
+    JSON.stringify(scaled.box) === JSON.stringify(tb.box.map((v) => Math.round(v / 2)))
+    && JSON.stringify(scaled.lines[0]) === JSON.stringify(tb.lines[0].map((v) => Math.round(v / 2))) && scaled.text === tb.text);
 }
 
 

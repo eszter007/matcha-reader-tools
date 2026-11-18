@@ -288,6 +288,25 @@
     <p class="hint" id="ocr-hint-none" hidden>Finds the panels but doesn't read the text. Fastest, but dictionary
     lookup and translations on the device are off.</p>
 
+    <div id="text-check-row" hidden>
+      <div class="callout panel-check-row">
+        <div class="callout-text">
+          <span class="callout-title">Check the text <span class="hint">· optional</span></span>
+          <span class="hint" id="text-check-hint">Read every page first, then fix or remove wrong lines. Lines the
+          reader was unsure of are marked; they stay in the book unless you change them.</span>
+        </div>
+        <button type="button" class="secondary" id="text-check-btn" aria-describedby="text-check-hint">Check text</button>
+      </div>
+      <div id="text-check" hidden>
+        <div class="panel-check-bar">
+          <label><input type="checkbox" id="text-check-flagged"> Only pages with unsure lines</label>
+          <span class="hint" id="text-check-summary"></span>
+          <button type="button" class="primary text-check-review" id="text-check-review" hidden>Review unsure lines</button>
+        </div>
+        <ul id="text-grid" class="panel-grid"></ul>
+      </div>
+    </div>
+
     <div id="manga-ocr-fields" hidden>
       <label for="manga-ocr-out" style="margin-top:0.6rem">Translate into</label>
       <select id="manga-ocr-out">
@@ -470,6 +489,60 @@
     </details>
   </div>
   <p id="pe-status" class="sr-only" role="status" aria-live="polite"></p>
+</dialog>
+
+<dialog id="text-editor" aria-labelledby="te-title">
+  <div class="pe-head te-head">
+    <div class="pe-nav">
+      <button type="button" class="tool-btn" id="te-prev" aria-label="Previous page" title="Previous page"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6l6 6"/></svg></button>
+      <h3 id="te-title">Page</h3>
+      <button type="button" class="tool-btn" id="te-next" aria-label="Next page" title="Next page"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6l-6 6"/></svg></button>
+    </div>
+    <div class="te-queue">
+      <span class="te-count" id="te-unsure-count"></span>
+      <button type="button" class="secondary te-next-unsure" id="te-next-unsure" title="Next unsure line (Enter in a line)">Next unsure<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6l-6 6"/></svg></button>
+    </div>
+    <button type="button" class="primary pe-done" id="te-close">Done</button>
+  </div>
+  <div class="te-body">
+    <div class="te-page"><canvas id="te-canvas" tabindex="0" role="application" aria-roledescription="page" aria-label="Page"
+      aria-describedby="te-canvas-help"></canvas></div>
+    <div class="te-side">
+      <div class="te-side-bar">
+        <p class="hint te-help">Lines marked <span class="te-flag-inline" aria-hidden="true">⚠</span> were hard to read. Fix
+        the text, or press <kbd>Enter</kbd> to keep it and go to the next one. Clear a line to remove it.</p>
+        <button type="button" class="secondary te-add" id="te-add" aria-pressed="false"
+          aria-describedby="te-add-help"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5l0 14"/><path d="M5 12l14 0"/></svg>Add a bubble</button>
+      </div>
+      <p class="te-draw-help" id="te-draw-help" hidden>Drag over the text on the page, or click two opposite corners.
+      <kbd>Esc</kbd> cancels.</p>
+      <p class="hint" id="te-empty" hidden>No text was found on this page. If there is some, add a bubble over it.</p>
+      <ol id="te-blocks" class="te-blocks"></ol>
+    </div>
+  </div>
+  <div class="pe-foot">
+    <div class="pe-foot-actions">
+      <button type="button" class="link-btn" id="te-drop-unsure">Remove this page's unsure lines</button>
+      <button type="button" class="link-btn" id="te-reset">Reset page</button>
+    </div>
+    <span class="hint te-foot-hint">Changes are kept as you go. Reset page undoes them.</span>
+    <details class="pe-keys">
+      <summary>Shortcuts</summary>
+      <p class="hint">In a line: <kbd>Enter</kbd> keeps it and goes to the next unsure line. In an added bubble:
+      <kbd>Ctrl</kbd>+<kbd>Enter</kbd> (<kbd>⌘</kbd>+<kbd>Enter</kbd> on a Mac) does the same. On the page:
+      <kbd>[</kbd> <kbd>]</kbd> pick a bubble · <kbd>Enter</kbd> edit its text · <kbd>A</kbd> add a bubble ·
+      arrows move an added bubble · Shift+arrows resize it · <kbd>Delete</kbd> remove</p>
+    </details>
+  </div>
+  <p id="te-canvas-help" class="sr-only">The page with its text bubbles. Press [ or ] to go through the bubbles,
+  Enter to edit the selected one's text, A to add a bubble, Delete to remove one. Arrow keys move a bubble you
+  added; Shift and the arrows resize it.</p>
+  <p id="te-add-help" class="sr-only">For text the reader missed. With a mouse, drag over the text on the page.
+  With the keyboard, a bubble is placed in the middle of the page to move over the text with the arrow keys.</p>
+  <p id="te-added-help" class="sr-only">Each line is one printed line of the bubble, so word lookup can find it.</p>
+  <p id="te-unsure-help" class="sr-only">The reader was unsure of this line. Fix it, or press Enter to keep it and
+  go to the next unsure line.</p>
+  <p id="te-status" class="sr-only" role="status" aria-live="polite"></p>
 </dialog>
 
 <footer>
