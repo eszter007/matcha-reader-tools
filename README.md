@@ -107,8 +107,8 @@ can pair a fresh page with a stale script. That happened once and killed every c
 page. Stamping at deploy time means the version cannot be forgotten, and local development keeps
 plain paths.
 
-The vendored ONNX Runtime, PDF.js and the YOLO model stay unstamped on purpose: pinned, rarely
-changed, and 21 MB for the model alone. Bump their paths if one is replaced.
+The vendored ONNX Runtime, PDF.js, the YOLO model and the PP-OCR models stay unstamped on purpose:
+pinned, rarely changed, and 21 MB for the YOLO model alone. Bump their paths if one is replaced.
 
 ## Manga converter options
 
@@ -118,6 +118,7 @@ changed, and 21 MB for the model alone. Bump their paths if one is replaced.
 | **Book type** | `--ltr` `--trim-margins` `--webtoon` | Manga reads right to left. Western comic reads left to right and trims the paper border; the detector is manga-trained, so it misses panels on dense strip layouts and the page warns about it. Webtoon reassembles the strip and re-cuts it at the artwork's gutters, no model involved. Nothing preselected. |
 | **Panels only** | *(browser only)* | Ships panel crops without full pages. A page whose panels miss artwork keeps its full page; so does the cover. |
 | **Device** (screen size cards) | `--device NAME` (or `--x4` / `--x3`) | Downscales before detection. 480×800 for the X4/X4C, X4 Pro, Sticky, Papermono, BOOX Picco and Metalio E-Ink 4; 528×792 for the X3; 552×768 for the EEGO Reader A4; 684×1216 for the Metalio E-Ink 4 Plus; or a custom 1–4096 px size (browser only). Never upscales. Full resolution warns: the Xteink firmware struggles with it. |
+| **Text recognition** | `--no-ocr` (Skip) | *Built-in* (the default, browser only) reads Japanese and Chinese with [PP-OCRv6_manga](https://huggingface.co/Kellenok/PP-OCRv6_manga): no key, nothing uploaded, 12 MB downloaded on first use, 2–3 s a page, no translations. *Gemini* reads any language and translates, with your API key. *Skip* stores panels without text, so word lookup is off. A Mokuro volume keeps its own text. |
 | **Translate into** | *(browser only)* | Language the translations come back in. The desktop tool always uses English. |
 | **Language** (step 5) | `--language` | Splits reading stats by language, and tells OCR what to expect. `jp`→`ja`, `cn`→`zh`, `kr`→`ko`; `zh-Hant` kept intact. |
 | **Split two-page spreads** | `--split-spreads` | Cuts each landscape page into its two pages, right-hand page first for manga. Chapters move with their pages. Disabled for webtoons and Mokuro volumes. |
@@ -233,6 +234,8 @@ node test/browser/e2e.mjs
 
 ## Notes & limits
 
+- **Built-in text recognition** reads Japanese and Chinese only, with no translations. It
+  runs on the CPU, so a 200-page volume takes several minutes.
 - **Gemini OCR** needs your own API key. Rate limits can make long volumes slow, so
   the converter retries with backoff and keeps the screen awake. *Stop* still packages every
   finished page. The key lives in `localStorage` and goes only to Google.
@@ -242,6 +245,7 @@ node test/browser/e2e.mjs
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The PP-OCR models in `models/ppocr/` are Apache-2.0; see
+[models/ppocr/README.md](models/ppocr/README.md).
 
 Icons: [Tabler Icons](https://tabler.io/icons) by Paweł Kuna, MIT License.

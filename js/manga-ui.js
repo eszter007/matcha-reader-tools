@@ -558,13 +558,18 @@ const YOLO_MODEL_URL = "models/manga_panel_detector_yolo26n.onnx";
 const ORT_DIR = "js/vendor/ort/";
 let yoloLoadPromise = null; // resolves to {ort, session}; reset to null on failure
 
+/* ONNX Runtime Web, shared by panel detection and PP-OCR. */
+async function loadOrtRuntime() {
+  if (typeof ort === "undefined") await loadScriptOnce(ORT_DIR + "ort.wasm.min.js");
+  // Must be absolute: ort dynamic-import()s its .mjs loader, and bare
+  // relative specifiers are invalid module specifiers.
+  ort.env.wasm.wasmPaths = new URL(ORT_DIR, location.href).href;
+}
+
 function loadYoloDetector() {
   if (!yoloLoadPromise) {
     yoloLoadPromise = (async () => {
-      if (typeof ort === "undefined") await loadScriptOnce(ORT_DIR + "ort.wasm.min.js");
-      // Must be absolute: ort dynamic-import()s its .mjs loader, and bare
-      // relative specifiers are invalid module specifiers.
-      ort.env.wasm.wasmPaths = new URL(ORT_DIR, location.href).href;
+      await loadOrtRuntime();
       const resp = await fetch(YOLO_MODEL_URL);
       if (!resp.ok) throw new Error(`model download failed (HTTP ${resp.status})`);
       const bytes = new Uint8Array(await resp.arrayBuffer());
@@ -715,11 +720,29 @@ function applyPageOptionsUi() {
     webtoon ? YONKOMA_DETECT_HINT_WEBTOON : YONKOMA_DETECT_HINT);
 }
 
+/* Text recognition: PP-OCR in this browser, Gemini, or none. */
+const OCR_ENGINES = ["ppocr", "gemini", "none"];
+
+function ocrEngine() {
+  const v = $("manga-ocr-engine").value;
+  return OCR_ENGINES.includes(v) ? v : "none";
+}
+
+/* The engine picked last, else PP-OCR, which needs no key. Someone who used Gemini before the
+ * choice existed keeps it. */
+function savedOcrEngine() {
+  const saved = loadSetting("manga-ocr-engine", "");
+  if (OCR_ENGINES.includes(saved)) return saved;
+  return loadSetting("manga-no-ocr", "1") === "0" ? "gemini" : "ppocr";
+}
+
 /* The key field and the language pickers are only meaningful when Gemini will be called,
- * so they appear when text recognition is switched on rather than sitting there greyed. */
+ * so they appear when it is picked rather than sitting there greyed. */
 function applyOcrUi() {
-  const fields = $("manga-ocr-fields");
-  if (fields) fields.hidden = $("manga-no-ocr").checked;
+  const engine = ocrEngine();
+  $("manga-ocr-fields").hidden = engine !== "gemini";
+  $("ocr-hint-ppocr").hidden = engine !== "ppocr";
+  $("ocr-hint-none").hidden = engine !== "none";
 }
 
 // mokuroInput: the chosen files are Mokuro volumes, which bring their own text (no Gemini).
@@ -1016,6 +1039,12 @@ async function preparePage(page, o) {
     const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
     pageText = mokuroTextBlocks(page.mokuro.blocks,
       (x, y) => [clamp((x * kx - trimX) * sx, imgW), clamp((y * ky - trimY) * sy, imgH)]);
+  } else if (o.ppocr && o.detect !== false) {
+    // Read on the trimmed page at full resolution, then scaled to the stored page like Mokuro's.
+    const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH);
+    const sx = imgW / origW, sy = imgH / origH;
+    const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
+    pageText = mokuroTextBlocks(record.blocks, (x, y) => [clamp(x * sx, imgW), clamp(y * sy, imgH)]);
   }
 
   let boxes = null;
@@ -1211,7 +1240,10 @@ async function runMangaConversion() {
   // there is nowhere for them to go -- skip OCR implicitly rather than demanding an API key for
   // output that would be discarded. (The OCR section is hidden in that case too.)
   const matchaFile = formats.has("matchafile");
-  const noOcr = $("manga-no-ocr").checked || !(formats.has("matcha") || matchaFile);
+  const engine = ocrEngine();
+  // noOcr: Gemini is not called. PP-OCR's text, like Mokuro's, comes in with the page instead.
+  const noOcr = engine !== "gemini" || !(formats.has("matcha") || matchaFile);
+  const usePpocr = engine === "ppocr" && (formats.has("matcha") || matchaFile);
   const mono = $("manga-mono").checked;
   const pdf = formats.has("pdf");
   // The PDF is built from the same page/panel images as the EPUB, so either one collects them.
@@ -1301,7 +1333,7 @@ async function runMangaConversion() {
   const apiKey = $("manga-key").value.trim();
   const model = $("manga-model").value.trim() || GEMINI_DEFAULT_MODEL;
   if (!noOcr && !apiKey && !mangaState.mokuroInput) {
-    logValidation("Enter a Gemini API key, or tick \"Skip text recognition\" for panels-only output.");
+    logValidation("Enter a Gemini API key, or pick another text recognition.");
     return;
   }
   saveSetting("gemini-key", apiKey);
@@ -1320,7 +1352,7 @@ async function runMangaConversion() {
   saveSetting("manga-levels", cleanup.levels ? "1" : "0");
   saveSetting("manga-sharpen", cleanup.sharpen ? "1" : "0");
   saveSetting("manga-contrast", cleanup.contrast);
-  saveSetting("manga-no-ocr", $("manga-no-ocr").checked ? "1" : "0");
+  saveSetting("manga-ocr-engine", engine);
   saveSetting("manga-ocr-out", $("manga-ocr-out").value);
   saveSetting("manga-res", resChoice);
   if (resChoice === RES_CUSTOM) {
@@ -1434,7 +1466,19 @@ async function runMangaConversion() {
           logLine(`Could not load the AI panel detector (${e.message}); using the grid heuristic.`, "warn");
         }
       }
-      const pageOpts = { trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor, yonkomaDetect };
+      // A Mokuro volume brings its own text, so PP-OCR does not read it again.
+      let bookPpocr = null;
+      if (usePpocr && !collected.mokuro) {
+        logLine("Loading text recognition (first load downloads ~12 MB, then it's cached)…");
+        try {
+          bookPpocr = await loadPpocr(loadOrtRuntime);
+        } catch (e) {
+          throw new Error(`Text recognition could not load (${e.message}). Pick Skip to convert without it.`);
+        }
+        logLine("Text recognition ready");
+      }
+      const pageOpts = { trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor, yonkomaDetect,
+        ppocr: bookPpocr };
 
       // What the user typed wins, then the book's own metadata, then a guess from the file name.
       const fileMeta = fileNameMeta(files);
@@ -1455,6 +1499,10 @@ async function runMangaConversion() {
       const ocrSourceLang = metaLanguage;
       const ocrTargetLang = $("manga-ocr-out").value || "en";
       const ocrPrompt = buildPanelOcrPrompt(ocrSourceLang, ocrTargetLang, rtl && !isWebtoon);
+      if (bookPpocr && ocrSourceLang && !["ja", "zh", "yue"].includes(normalizeLanguage(ocrSourceLang).split("-")[0])) {
+        logLine(`Built-in text recognition reads Japanese and Chinese; this book is set to "${ocrSourceLang}", ` +
+          "so its text may come out wrong. Gemini reads other languages.", "warn");
+      }
       if (!bookNoOcr && !ocrSourceLang) {
         logLine("No book language set, so the model is not told which one to expect. " +
           "Filling in Language in Book details improves recognition.", "warn");
@@ -1778,7 +1826,7 @@ async function runMangaConversion() {
 
       setProgress(pagesDone, pages.length, "Packaging…");
       const summary = `Done: ${pagesDone} pages, ${totalPanels} panels` +
-        (bookNoOcr && !collected.mokuro ? "" : `, ${totalTextBlocks} text blocks`) +
+        (bookNoOcr && !collected.mokuro && !bookPpocr ? "" : `, ${totalTextBlocks} text blocks`) +
         (deviceTarget ? `, ${deviceTarget[0]}×${deviceTarget[1]}` : "") +
         (mono && matchaFolder ? ", 1-bit dithered BMP" : "") +
         (pagesKeptForCoverage ? `, ${pagesKeptForCoverage} full page(s) kept where panels missed content` : "");
@@ -1890,7 +1938,13 @@ async function panelCheckSettings() {
   if ($("manga-yolo").checked) {
     try { yolo = await loadYoloDetector(); } catch (e) { logLine(`AI panel detector unavailable (${e.message}); using the grid heuristic.`, "warn"); }
   }
+  // The same text the conversion will read, since panel crops grow over its bubbles.
+  let ppocr = null;
+  if (ocrEngine() === "ppocr") {
+    try { ppocr = await loadPpocr(loadOrtRuntime); } catch (e) { logLine(`Text recognition unavailable (${e.message}); panels are shown without it.`, "warn"); }
+  }
   return {
+    ppocr,
     trimMargins: bookType === BOOK_WESTERN, deviceTarget, cleanup,
     cleanupOn: cleanup.levels || cleanup.contrast !== "off" || cleanup.sharpen,
     isWebtoon: false, yolo, rtl: bookType === BOOK_MANGA || bookType === BOOK_YONKOMA,
@@ -2440,6 +2494,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-levels").checked = loadSetting("manga-levels", "0") === "1";
   $("manga-sharpen").checked = loadSetting("manga-sharpen", "0") === "1";
   $("manga-contrast").value = loadSetting("manga-contrast", "off");
+  $("manga-ocr-engine").value = savedOcrEngine();
   $("manga-preview-btn").addEventListener("click", () => {
     if ($("manga-preview").hidden) { showCleanupPreview(); return; }
     $("manga-preview").hidden = true;
@@ -2486,10 +2541,6 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     $(id).addEventListener("change", () => { if (!$("manga-preview").hidden) showCleanupPreview(); });
   }
   $("manga-ocr-out").value = loadSetting("manga-ocr-out", "en");
-  // Skip text recognition is the default: it needs no API key, sends nothing anywhere and
-  // is the fast path, so the key field and the language pickers only appear once someone
-  // asks for OCR by unticking it.
-  $("manga-no-ocr").checked = loadSetting("manga-no-ocr", "1") === "1";
   applyBookTypeUi();
   applyOcrUi();
   $("manga-res").value = validResChoice(loadSetting("manga-res", ""));
@@ -2521,8 +2572,8 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   });
   // The API-key warning is fixed by either supplying a key or skipping text recognition.
   $("manga-key").addEventListener("input", clearValidationWarnings);
-  $("manga-no-ocr").addEventListener("change", clearValidationWarnings);
-  $("manga-no-ocr").addEventListener("change", applyOcrUi);
+  $("manga-ocr-engine").addEventListener("change", clearValidationWarnings);
+  $("manga-ocr-engine").addEventListener("change", applyOcrUi);
   // Ticking 1-bit BMP is what brings a dithered output into play for the device folder.
   $("manga-mono").addEventListener("change", applyFormatVisibility);
   for (const r of document.querySelectorAll('input[name="booktype"]')) {

@@ -9,6 +9,7 @@ Produces under test/fixtures/:
     manga_pages/         synthetic PNG pages + raw grayscale (.gray) and RGBA (.rgba) dumps
     manga_fullbleed.cbz  borderless pages (one full-page panel each), for panels-only
     manga_foldered.cbz   one folder per chapter, page numbers restarting in each
+    manga_jp.cbz         vertical Japanese in speech bubbles (needs a Japanese font, else skipped)
     ref_manga/           convert_manga.py --no-ocr output
     ref_yolo/boxes.json  YOLO panel boxes (needs numpy + onnxruntime, else skipped)
     ref_manga_pdf/       convert_manga.py --no-ocr output for the PDF fixture
@@ -168,6 +169,72 @@ def make_manga_fullbleed_cbz():
             if name.endswith(".png"):
                 z.write(os.path.join(out, name), name)
     print(f"manga full-bleed cbz: {path}")
+
+
+# Text the Japanese pages carry, one entry per speech bubble: its columns, right to left.
+MANGA_JP_BUBBLES = [
+    ["それじゃあ", "また明日"],
+    ["本当に", "行くの？"],
+    ["電車が来る"],
+    ["待って", "ください"],
+]
+JP_FONT_CANDIDATES = [
+    "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+    "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+]
+
+
+def make_manga_jp_cbz():
+    """CBZ of two pages with vertical Japanese in speech bubbles, for the in-browser OCR test.
+
+    Needs a Japanese font (TEST_JP_FONT, or one of JP_FONT_CANDIDATES); skipped without one.
+    The text is listed in MANGA_JP_BUBBLES and in testMangaPpocr in test/browser/e2e.mjs.
+    """
+    from PIL import ImageFont
+    font_path = os.environ.get("TEST_JP_FONT") or next((f for f in JP_FONT_CANDIDATES if os.path.exists(f)), None)
+    if not font_path:
+        print("manga jp cbz: SKIPPED (no Japanese font; set TEST_JP_FONT)")
+        return
+    font = ImageFont.truetype(font_path, 34)
+    out = os.path.join(FIXTURES, "manga_jp")
+    os.makedirs(out, exist_ok=True)
+    rng = random.Random(7)
+
+    def column(d, x, y, text):
+        for ch in text:
+            # Upright glyphs, one per cell; real vertical typesetting nudges small kana, which the
+            # model does not need.
+            l, t, r, b = d.textbbox((0, 0), ch, font=font)
+            d.text((x + (34 - (r - l)) / 2 - l, y), ch, font=font, fill=0)
+            y += 40
+
+    for page in range(2):
+        img = Image.new("RGB", (900, 1300), "white")
+        d = ImageDraw.Draw(img)
+        panels = [(40, 40, 860, 620), (40, 660, 440, 1260), (480, 660, 860, 1260)]
+        for x1, y1, x2, y2 in panels:
+            d.rectangle([x1, y1, x2, y2], outline=0, width=6)
+            for _ in range(60):  # some artwork, kept clear of the bubbles' corner
+                cx, cy = rng.randint(x1 + 20, x2 - 220), rng.randint(y1 + 300, y2 - 30)
+                d.ellipse([cx, cy, cx + 30, cy + 20], fill=(rng.randint(80, 200),) * 3)
+        for i, (x1, y1, x2, y2) in enumerate(panels[:2]):
+            cols = MANGA_JP_BUBBLES[page * 2 + i]
+            bw = 60 * len(cols) + 60
+            bx2, by1 = x2 - 30, y1 + 30
+            d.ellipse([bx2 - bw, by1, bx2, by1 + 360], fill="white", outline=0, width=4)
+            for c, text in enumerate(cols):
+                column(d, bx2 - 75 - 60 * c, by1 + 50, text)
+        d.text((440, 1270), str(page + 1), font=font, fill=0)
+        img.save(os.path.join(out, f"jp{page + 1:02d}.png"))
+    path = os.path.join(FIXTURES, "manga_jp.cbz")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for name in sorted(os.listdir(out)):
+            if name.endswith(".png"):
+                z.write(os.path.join(out, name), name)
+    print(f"manga jp cbz: {path}")
 
 
 def make_manga_foldered_cbz():
@@ -1294,6 +1361,7 @@ if __name__ == "__main__":
     make_manga_cbz()
     make_manga_fullbleed_cbz()
     make_manga_foldered_cbz()
+    make_manga_jp_cbz()
     make_manga_epub()
     run_manga_epub_reference()
     make_manga_layouts()

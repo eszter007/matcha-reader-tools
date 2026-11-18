@@ -202,7 +202,7 @@ async function testManga(page, base) {
   console.log("manga.html end-to-end (CBZ, no OCR, grid detection):");
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
-  await page.check("#manga-no-ocr");
+  await setHiddenControl(page, "#manga-ocr-engine", "none");
   await page.uncheck("#manga-yolo"); // byte-exact references use the grid path
   // References are generated with no device downscaling, so "full" is the matching pick.
   await setMangaForm(page, { formats: ["matcha"], res: "full" });
@@ -238,7 +238,7 @@ async function testMangaYolo(page, base) {
   const ref = JSON.parse(fs.readFileSync(refPath, "utf-8"));
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
-  await page.check("#manga-no-ocr");
+  await setHiddenControl(page, "#manga-ocr-engine", "none");
   await page.check("#manga-yolo");
   await setMangaForm(page, { formats: ["matcha"], res: "full" });
   await page.fill("#manga-title", "Yolo Manga");
@@ -265,7 +265,7 @@ async function testMangaEpub(page, base) {
   console.log("manga.html end-to-end (EPUB with nav TOC, no OCR):");
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.epub"));
-  await page.check("#manga-no-ocr");
+  await setHiddenControl(page, "#manga-ocr-engine", "none");
   await page.uncheck("#manga-yolo");
   await setMangaForm(page, { formats: ["matcha"], res: "full" });
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
@@ -298,7 +298,7 @@ async function testMangaLayouts(page, base) {
   for (const [ref, opts, pageCount] of runs) {
     await gotoManga(page, base);
     await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga_layouts.epub"));
-    await page.check("#manga-no-ocr");
+    await setHiddenControl(page, "#manga-ocr-engine", "none");
     await page.uncheck("#manga-yolo");
     await setMangaForm(page, { formats: ["matcha"], res: "full", ...opts });
     const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
@@ -327,7 +327,7 @@ async function testMangaYoloLayouts(page, base) {
   const ref = JSON.parse(fs.readFileSync(refPath, "utf-8"));
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga_layouts.epub"));
-  await page.check("#manga-no-ocr");
+  await setHiddenControl(page, "#manga-ocr-engine", "none");
   await page.check("#manga-yolo");
   await setMangaForm(page, { formats: ["matcha"], res: "full" });
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
@@ -357,7 +357,7 @@ async function testMangaPdf(page, base) {
   }
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.pdf"));
-  await page.check("#manga-no-ocr");
+  await setHiddenControl(page, "#manga-ocr-engine", "none");
   await page.uncheck("#manga-yolo");
   await setMangaForm(page, { formats: ["matcha"], res: "full" });
   const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
@@ -481,7 +481,7 @@ async function testMangaFolderedCbz(page, base) {
   // device-folder export below.
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", cbz);
-  await page.check("#manga-no-ocr");
+  await setHiddenControl(page, "#manga-ocr-engine", "none");
   await page.uncheck("#manga-yolo");
   await setMangaForm(page, { formats: ["xtch"], res: "x4" });
   await page.fill("#manga-title", "Foldered");
@@ -501,7 +501,7 @@ async function testMangaFolderedCbz(page, base) {
 
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", cbz);
-  await page.check("#manga-no-ocr");
+  await setHiddenControl(page, "#manga-ocr-engine", "none");
   await page.uncheck("#manga-yolo");
   await setMangaForm(page, { formats: ["matcha"], res: "full" });
   await page.fill("#manga-title", "Foldered");
@@ -544,7 +544,7 @@ async function testMangaGeminiOcr(page, base) {
   try {
     await gotoManga(page, base);
     await page.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
-    await page.uncheck("#manga-no-ocr");
+    await setHiddenControl(page, "#manga-ocr-engine", "gemini");
     await page.uncheck("#manga-yolo");
     await setMangaForm(page, { formats: ["matcha"], res: "full" });
     await page.fill("#manga-key", KEY);
@@ -612,6 +612,64 @@ async function testMangaGeminiOcr(page, base) {
   }
 }
 
+/* In-browser text recognition (PP-OCR) on pages of vertical Japanese with known text. Needs the
+ * manga_jp.cbz fixture, which gen_references.py only builds when it finds a Japanese font. */
+const MANGA_JP_BUBBLES = [["それじゃあ", "また明日"], ["本当に", "行くの？"], ["電車が来る"], ["待って", "ください"]];
+
+async function testMangaPpocr(page, base) {
+  console.log("manga.html in-browser text recognition (PP-OCR):");
+  const fixture = path.join(FIXTURES, "manga_jp.cbz");
+  if (!fs.existsSync(fixture)) {
+    console.log("  skip (no manga_jp.cbz: gen_references.py found no Japanese font)");
+    return;
+  }
+  await gotoManga(page, base);
+  await page.setInputFiles("#manga-file", fixture);
+  await setHiddenControl(page, "#manga-ocr-engine", "ppocr");
+  await page.uncheck("#manga-yolo");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
+  await page.fill("#manga-title", "Ppocr Manga");
+  await page.fill("#manga-language", "ja");
+  const geminiCalls = [];
+  await page.route("https://generativelanguage.googleapis.com/**", (route) => { geminiCalls.push(route.request().url()); route.abort(); });
+  const started = Date.now();
+  const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+  const seconds = (Date.now() - started) / 1000;
+  await page.unroute("https://generativelanguage.googleapis.com/**");
+  const dest = path.join(OUT, "manga_ppocr");
+  unzipTo(zipFile, dest);
+  const pages = parsePanelsDat(path.join(dest, "Ppocr Manga"));
+  const texts = pages.flatMap((pg) => pg.panels.flatMap((p) => p.texts.map((t) => ({ ...t, pg }))));
+  const want = MANGA_JP_BUBBLES.map((cols) => cols.join(""));
+  const got = texts.map((t) => t.text.replace(/\n/g, ""));
+  // Character error rate of the best-matching block for each bubble.
+  const dist = (a, b) => {
+    const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      let prev = row[0];
+      row[0] = i;
+      for (let j = 1; j <= b.length; j++) {
+        const cur = row[j];
+        row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+        prev = cur;
+      }
+    }
+    return row[b.length];
+  };
+  let errors = 0, chars = 0;
+  for (const w of want) {
+    errors += Math.min(w.length, ...got.map((g) => dist(w, g)));
+    chars += w.length;
+  }
+  console.log(`  read: ${JSON.stringify(got)} in ${seconds.toFixed(1)} s`);
+  check("one text block per bubble", texts.length === want.length, `${texts.length} blocks`);
+  check("the bubbles' text is read", errors / chars <= 0.1, `${errors} wrong of ${chars} characters`);
+  check("each column has its line box, vertical, on the page",
+    texts.every((t) => t.vertical && t.lines.length === t.text.split("\n").length
+      && t.lines.every(([x1, y1, x2, y2]) => x1 < x2 && y1 < y2 && x2 <= t.pg.w && y2 <= t.pg.h)));
+  check("nothing is sent to Gemini", geminiCalls.length === 0, `${geminiCalls.length} calls`);
+}
+
 async function testMangaPanelsOnly(page, base) {
   console.log("manga.html end-to-end (panels-only, borderless pages, XTC + EPUB):");
   const cbz = path.join(FIXTURES, "manga_fullbleed.cbz");
@@ -622,7 +680,7 @@ async function testMangaPanelsOnly(page, base) {
   const pageCount = 3;  // full01..full03, one full-page panel each
   await gotoManga(page, base);
   await page.setInputFiles("#manga-file", cbz);
-  await page.check("#manga-no-ocr");
+  await setHiddenControl(page, "#manga-ocr-engine", "none");
   await page.uncheck("#manga-yolo");
   // XTC needs a fixed page size, hence a device resolution rather than "full".
   await setMangaForm(page, { formats: ["matcha", "epub", "xtc"], res: "x4", panelsOnly: true });
@@ -668,7 +726,7 @@ async function testMangaNoOffscreenCanvas(browser, base) {
   const setup = async (pg) => {
     await gotoManga(pg, base);
     await pg.setInputFiles("#manga-file", path.join(FIXTURES, "manga.cbz"));
-    await pg.check("#manga-no-ocr");
+    await setHiddenControl(pg, "#manga-ocr-engine", "none");
     await pg.uncheck("#manga-yolo");
     await setMangaForm(pg, { formats: ["matcha", "epub", "xtc"], res: "x4" });
     await pg.fill("#manga-title", "NoOffscreen");
@@ -942,6 +1000,7 @@ async function testRuby(page, base) {
     await testMangaPanelsOnly(page, base);
     await testMangaFolderedCbz(page, base);
     await testMangaGeminiOcr(page, base);
+    await testMangaPpocr(page, base);
     await testMangaNoOffscreenCanvas(browser, base);
     await testDict(page, base);
     await testDictMdx(page, base);

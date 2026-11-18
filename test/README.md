@@ -84,6 +84,7 @@ The node suite needs **no npm packages at all** (the YOLO comparison skips witho
 | --- | --- | --- |
 | `MATCHA_READER` | `../matcha-reader` | Firmware checkout, for `gen_references.py` |
 | `TEST_FONT` | `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` | Font converted by the `fonts.html` test |
+| `TEST_JP_FONT` | Hiragino Mincho on macOS, Noto CJK on Linux | Japanese font for `manga_jp.cbz` |
 | `CHROMIUM_PATH` | Playwright's managed browser | Override for environments shipping Chromium elsewhere |
 
 Non-ASCII download filenames need a UTF-8 locale. Under a bare `POSIX` locale Chromium
@@ -118,6 +119,7 @@ furigana with Gemini stubbed to the reference answers), and `fonts.html`.
 | `manga.epub`, `manga.pdf` | synthetic | EPUB spine order, PDF rasterisation |
 | `manga_fullbleed.cbz` | synthetic | panels-only on borderless pages |
 | `manga_foldered.cbz` | synthetic | page order through chapter subfolders |
+| `manga_jp.cbz` | synthetic, needs a Japanese font | built-in text recognition (PP-OCR); its test is skipped without it |
 | `ref_manga*/`, `ref_dict_*/` | `convert_manga.py`, `convert_jmdict.py` | byte comparison |
 | `zh/`, `ref_dict_zh*/`, `ref_dict_yue/` | synthetic, `convert_jmdict.py --lang zh/yue` | the Chinese paths, every option at once |
 | `zh/book.epub`, `ref_pinyin/` | synthetic, `add_pinyin_ruby.py` | pinyin from the dictionary, XHTML comparison |
