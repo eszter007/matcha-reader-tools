@@ -1057,6 +1057,49 @@ async function testMangaYoloPost() {
   }
 }
 
+/* ── Panel benchmark scoring (test/panels/metrics.cjs) ─────────── */
+
+function testPanelMetrics() {
+  console.log("panel benchmark scoring:");
+  const m = require("../panels/metrics.cjs");
+  check("IoU of identical boxes is 1", m.boxIoU([0, 0, 10, 10], [0, 0, 10, 10]) === 1);
+  check("IoU of disjoint boxes is 0", m.boxIoU([0, 0, 10, 10], [20, 20, 30, 30]) === 0);
+  check("IoU of half-overlapping boxes is 1/3", Math.abs(m.boxIoU([0, 0, 10, 10], [5, 0, 15, 10]) - 1 / 3) < 1e-9);
+
+  // Greedy matching takes the best pair first, so one prediction cannot claim two panels.
+  const gt = [[0, 0, 100, 100], [100, 0, 200, 100]];
+  const r = m.matchBoxes([[0, 0, 100, 100], [0, 0, 220, 100]], gt, 0.5);
+  check("matching is one-to-one, best IoU first",
+        r.pairs.length === 1 && r.pairs[0][0] === 0 && r.pairs[0][1] === 0 &&
+        r.unmatchedPred.join() === "1" && r.unmatchedGt.join() === "1");
+
+  // A detection on an ignored panel is neither a hit nor a false positive.
+  const ign = m.scorePage([[0, 0, 100, 100], [100, 0, 200, 100]],
+                          [{ box: [0, 0, 100, 100] }, { box: [100, 0, 200, 100], ignore: true }]);
+  check("ignored panel absorbs its detection", ign.gt === 1 && ign.pred === 1 && ign.fp50 === 0 && ign.exact);
+  const miss = m.scorePage([[0, 0, 100, 100]],
+                           [{ box: [0, 0, 100, 100] }, { box: [100, 0, 200, 100], ignore: true }]);
+  check("missing an ignored panel costs nothing", miss.fn50 === 0 && miss.exact);
+
+  // Exact needs the right count and every panel at IoU >= 0.75; 0.5 is not enough.
+  const loose = m.scorePage([[0, 0, 100, 140]], [{ box: [0, 0, 100, 100] }]);
+  check("a loose box counts at 0.5 but not at 0.75", loose.tp50 === 1 && loose.tp75 === 0 && !loose.exact);
+
+  // Reading order: right panel first is right; swapping the prediction order is wrong.
+  const page = [{ box: [100, 0, 200, 100] }, { box: [0, 0, 100, 100] }];
+  check("reading order followed", m.scorePage([[100, 0, 200, 100], [0, 0, 100, 100]], page).orderCorrect === true);
+  check("reading order broken", m.scorePage([[0, 0, 100, 100], [100, 0, 200, 100]], page).orderCorrect === false);
+  check("an extra detection between panels does not break the order",
+        m.scorePage([[100, 0, 200, 100], [40, 40, 60, 60], [0, 0, 100, 100]], page).orderCorrect === true);
+  check("order is only judged when every panel was found",
+        m.scorePage([[100, 0, 200, 100]], page).orderCorrect === null);
+
+  const sum = m.summarize([m.scorePage([[0, 0, 100, 100]], [{ box: [0, 0, 100, 100] }]),
+                           m.scorePage([[0, 0, 50, 50]], [{ box: [0, 0, 100, 100] }])]);
+  check("micro-averaged precision and recall", sum.p50 === 0.5 && sum.r50 === 0.5 && sum.exactCount === 1);
+}
+
+
 /* ── Manga: YOLO panel detection vs Python reference ──────────── */
 
 async function testMangaYolo() {
@@ -1748,6 +1791,7 @@ function testPpocr() {
   testMangaPanelOrderCases();
   testMangaBookType();
   testMangaDither();
+  testPanelMetrics();
   testMangaOcrPrompt();
   testMangaLineBoxes();
   testXtc();

@@ -580,7 +580,6 @@ async function epubNativeToc(zip, opf, opfDir, spineMap, pages) {
 
 /* ── AI panel detection (lazy-loaded ONNX Runtime + YOLO26 model) ── */
 
-const YOLO_MODEL_URL = "models/manga_panel_detector_yolo26n.onnx";
 const ORT_DIR = "js/vendor/ort/";
 let yoloLoadPromise = null; // resolves to {ort, session}; reset to null on failure
 
