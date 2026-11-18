@@ -156,10 +156,70 @@ function ppocrSameBubble(a, b) {
     && ppocrOverlap(ax1, ax2, bx1, bx2) > 0.3 * Math.min(ax2 - ax1, bx2 - bx1);
 }
 
-/* lines: [{text, box: [x1, y1, x2, y2], vertical}] → a mokuro page record's blocks. */
-function ppocrBubbles(lines) {
-  const kept = lines
-    .map((l) => ({ ...l, text: ppocrLineText(l.text) }))
+/* Pieces of one printed line, split where the detector lost a mark such as 〝 〟: same orientation
+ * and size, one in line with the other, and close along it. */
+function ppocrSameColumn(a, b) {
+  if (a.vertical !== b.vertical) return false;
+  const ta = ppocrThickness(a), tb = ppocrThickness(b);
+  if (!(ta / tb >= 0.7 && ta / tb <= 1.43)) return false;
+  const t = Math.max(ta, tb);
+  const [ax1, ay1, ax2, ay2] = a.box, [bx1, by1, bx2, by2] = b.box;
+  if (a.vertical) {
+    return ppocrOverlap(ax1, ax2, bx1, bx2) > 0.6 * Math.min(ta, tb) && Math.max(by1 - ay2, ay1 - by2) < 0.6 * t;
+  }
+  return ppocrOverlap(ay1, ay2, by1, by2) > 0.6 * Math.min(ta, tb) && Math.max(bx1 - ax2, ax1 - bx2) < 0.6 * t;
+}
+
+/* Merge the pieces of a printed line back into one line, read top to bottom (or left to right). */
+function ppocrJoinColumns(input) {
+  const lines = input.slice();
+  let merged = true;
+  while (merged) {
+    merged = false;
+    for (let i = 0; i < lines.length && !merged; i++) {
+      for (let j = i + 1; j < lines.length; j++) {
+        const a = lines[i], b = lines[j];
+        if (!ppocrSameColumn(a, b)) continue;
+        const axis = a.vertical ? 1 : 0;
+        const [first, second] = a.box[axis] <= b.box[axis] ? [a, b] : [b, a];
+        lines[i] = {
+          text: first.text + second.text,
+          vertical: a.vertical,
+          box: [Math.min(a.box[0], b.box[0]), Math.min(a.box[1], b.box[1]),
+            Math.max(a.box[2], b.box[2]), Math.max(a.box[3], b.box[3])],
+        };
+        lines.splice(j, 1);
+        merged = true;
+        break;
+      }
+    }
+  }
+  return lines;
+}
+
+/* Blocks in reading order: rows of blocks that sit side by side, top to bottom, each row right to
+ * left (left to right when not rtl). */
+function ppocrReadingOrder(blocks, rtl = true) {
+  const rows = [];
+  for (const b of blocks.slice().sort((p, q) => p.box[1] - q.box[1])) {
+    const [, y1, , y2] = b.box;
+    const row = rows.find((r) => ppocrOverlap(y1, y2, r.top, r.bottom) > 0.5 * Math.min(y2 - y1, r.bottom - r.top));
+    if (row) {
+      row.top = Math.min(row.top, y1);
+      row.bottom = Math.max(row.bottom, y2);
+      row.blocks.push(b);
+    } else {
+      rows.push({ top: y1, bottom: y2, blocks: [b] });
+    }
+  }
+  return rows.sort((p, q) => p.top - q.top)
+    .flatMap((r) => r.blocks.sort(rtl ? (p, q) => q.box[2] - p.box[2] : (p, q) => p.box[0] - q.box[0]));
+}
+
+/* lines: [{text, box: [x1, y1, x2, y2], vertical}] → a mokuro page record's blocks, in reading order
+ * (right to left unless rtl is false). */
+function ppocrBubbles(lines, rtl = true) {
+  const kept = ppocrJoinColumns(lines.map((l) => ({ ...l, text: ppocrLineText(l.text) })))
     .filter((l) => l.text && (PPOCR_HAS_CJK.test(l.text) || l.text.length >= 4));
   const lines2 = kept.filter((l) => !ppocrIsFurigana(l, kept));
   const parent = lines2.map((_, i) => i);
@@ -188,7 +248,7 @@ function ppocrBubbles(lines) {
       lines_coords: group.map(({ box: [x1, y1, x2, y2] }) => [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]),
     });
   }
-  return blocks;
+  return ppocrReadingOrder(blocks, rtl);
 }
 
 /* ── Half precision ─────────────────────────────────────────────────
@@ -348,13 +408,14 @@ async function ppocrReadLines(engine, image, w, h) {
 }
 
 /* One page as a mokuro page record, measured on the image given. */
-async function ppocrReadPage(engine, image, w, h) {
-  return { img_width: w, img_height: h, blocks: ppocrBubbles(await ppocrReadLines(engine, image, w, h)) };
+async function ppocrReadPage(engine, image, w, h, rtl = true) {
+  return { img_width: w, img_height: h, blocks: ppocrBubbles(await ppocrReadLines(engine, image, w, h), rtl) };
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
-    ppocrDetSize, ppocrDbBoxes, ppocrCtcDecode, ppocrRecWidth, ppocrLineText, ppocrBubbles,
+    ppocrDetSize, ppocrDbBoxes, ppocrCtcDecode, ppocrRecWidth, ppocrLineText, ppocrBubbles, ppocrJoinColumns,
+    ppocrReadingOrder,
     ppocrToHalf, ppocrFromHalf, ppocrValues,
   };
 }

@@ -1041,7 +1041,7 @@ async function preparePage(page, o) {
       (x, y) => [clamp((x * kx - trimX) * sx, imgW), clamp((y * ky - trimY) * sy, imgH)]);
   } else if (o.ppocr && o.detect !== false) {
     // Read on the trimmed page at full resolution, then scaled to the stored page like Mokuro's.
-    const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH);
+    const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH, o.rtl && !o.isWebtoon);
     const sx = imgW / origW, sy = imgH / origH;
     const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
     pageText = mokuroTextBlocks(record.blocks, (x, y) => [clamp(x * sx, imgW), clamp(y * sy, imgH)]);
