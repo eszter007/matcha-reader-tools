@@ -288,6 +288,25 @@
     <p class="hint" id="ocr-hint-none" hidden>Finds the panels but doesn't read the text. Fastest, but dictionary
     lookup and translations on the device are off.</p>
 
+    <div id="text-check-row" hidden>
+      <div class="callout panel-check-row">
+        <div class="callout-text">
+          <span class="callout-title">Check the text <span class="hint">· optional</span></span>
+          <span class="hint" id="text-check-hint">Read every page first, then fix or remove wrong lines. Lines the
+          reader was unsure of are marked; they stay in the book unless you change them.</span>
+        </div>
+        <button type="button" class="secondary" id="text-check-btn" aria-describedby="text-check-hint">Check text</button>
+      </div>
+      <div id="text-check" hidden>
+        <div class="panel-check-bar">
+          <label><input type="checkbox" id="text-check-flagged"> Only pages with unsure lines</label>
+          <span class="hint" id="text-check-summary"></span>
+          <button type="button" class="primary text-check-review" id="text-check-review" hidden>Review unsure lines</button>
+        </div>
+        <ul id="text-grid" class="panel-grid"></ul>
+      </div>
+    </div>
+
     <div id="manga-ocr-fields" hidden>
       <label for="manga-ocr-out" style="margin-top:0.6rem">Translate into</label>
       <select id="manga-ocr-out">
@@ -470,6 +489,38 @@
     </details>
   </div>
   <p id="pe-status" class="sr-only" role="status" aria-live="polite"></p>
+</dialog>
+
+<dialog id="text-editor" aria-labelledby="te-title">
+  <div class="pe-head te-head">
+    <div class="pe-nav">
+      <button type="button" class="tool-btn" id="te-prev" aria-label="Previous page" title="Previous page"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6l6 6"/></svg></button>
+      <h3 id="te-title">Page</h3>
+      <button type="button" class="tool-btn" id="te-next" aria-label="Next page" title="Next page"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6l-6 6"/></svg></button>
+    </div>
+    <div class="te-queue">
+      <span class="te-count" id="te-unsure-count" aria-live="polite"></span>
+      <button type="button" class="secondary te-next-unsure" id="te-next-unsure" title="Next unsure line (Enter in a line)">Next unsure<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6l-6 6"/></svg></button>
+    </div>
+    <button type="button" class="primary pe-done" id="te-close">Done</button>
+  </div>
+  <div class="te-body">
+    <div class="te-page"><canvas id="te-canvas" role="img" aria-label="The page, with its text bubbles numbered"></canvas></div>
+    <div class="te-side">
+      <p class="hint te-help">Orange lines were hard to read. Fix the text, or press <kbd>Enter</kbd> to keep it
+      as it is and go to the next one. Clear a line to remove it.</p>
+      <p class="hint" id="te-empty" hidden>No text was found on this page.</p>
+      <ol id="te-blocks" class="te-blocks"></ol>
+    </div>
+  </div>
+  <div class="pe-foot">
+    <div class="pe-foot-actions">
+      <button type="button" class="link-btn" id="te-drop-unsure">Remove this page's unsure lines</button>
+      <button type="button" class="link-btn" id="te-reset">Reset page</button>
+    </div>
+    <span class="hint te-foot-hint">Changes are kept as you go. Reset page undoes them.</span>
+  </div>
+  <p id="te-status" class="sr-only" role="status" aria-live="polite"></p>
 </dialog>
 
 <footer>

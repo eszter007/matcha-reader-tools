@@ -1933,9 +1933,40 @@ function mokuroTextBlocks(blocks, toPage) {
       }
     }
     const text = lines.length ? texts.join("\n") : texts.join("");
-    out.push({ box: [x1, y1, x2, y2], text, lines: lines.slice(0, 255), vertical: !!block.vertical });
+    const tb = { box: [x1, y1, x2, y2], text, lines: lines.slice(0, 255), vertical: !!block.vertical };
+    // Built-in recognition's per-line confidence, for the text check; never written to the book.
+    const conf = block.lines_conf;
+    if (lines.length && Array.isArray(conf) && conf.length === texts.length) tb.conf = conf.slice(0, 255);
+    out.push(tb);
   }
   return out;
+}
+
+/* Text blocks found on a w x h page, mapped onto the same page at tw x th. */
+function scaleTextBlocks(blocks, w, h, tw, th) {
+  const sx = tw / w, sy = th / h;
+  const map = ([x1, y1, x2, y2]) => [Math.round(x1 * sx), Math.round(y1 * sy), Math.round(x2 * sx), Math.round(y2 * sy)];
+  return blocks.map((b) => ({ ...b, box: map(b.box), lines: b.lines.map(map), ...(b.conf ? { conf: b.conf.slice() } : {}) }));
+}
+
+/* A block's lines as [{text, box, conf}]: one per line box, or the whole text as one line when the
+ * block has no line boxes. */
+function textBlockLines(block) {
+  if (!block.lines.length) return [{ text: block.text, box: block.box, conf: 1 }];
+  const texts = block.text.split("\n");
+  return block.lines.map((box, i) => ({ text: texts[i] ?? "", box, conf: block.conf ? block.conf[i] ?? 1 : 1 }));
+}
+
+/* The block rebuilt from edited lines; empty lines are dropped, and with them the block (null). A
+ * block that had no line boxes stays one line. */
+function textBlockFromLines(block, lines) {
+  const kept = lines.map((l) => ({ ...l, text: String(l.text).replace(/\s*\n\s*/g, "").trim() })).filter((l) => l.text);
+  if (!kept.length) return null;
+  if (!block.lines.length) return { ...block, text: kept.map((l) => l.text).join("") };
+  const b = { ...block, text: kept.map((l) => l.text).join("\n"), lines: kept.map((l) => l.box.slice()) };
+  if (block.conf) b.conf = kept.map((l) => l.conf);
+  else delete b.conf;
+  return b;
 }
 
 /* Each block goes to the panel holding its centre, else the one it overlaps most, else the
@@ -1990,6 +2021,6 @@ if (typeof module !== "undefined") {
     epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo, comicInfoBookmarks, chaptersFromFolders,
     xmlUnescape,
     epubTocFromNav, epubTocFromNcx, epubNavHref, epubNcxHref, parseTocText,
-    parseMokuroVolume, mokuroMeta, mokuroTextBlocks, assignBlocksToPanels,
+    parseMokuroVolume, mokuroMeta, mokuroTextBlocks, assignBlocksToPanels, scaleTextBlocks, textBlockLines, textBlockFromLines,
   };
 }

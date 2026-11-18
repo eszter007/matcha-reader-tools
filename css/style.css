@@ -428,6 +428,52 @@ details { margin-top: 0.8rem; }
   .pe-head .segmented { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
 }
 
+/* Text check: the same page grid; the editor shows the page beside its bubbles. */
+#text-check-row { margin-top: 0.8rem; }
+.text-check-review { margin: 0; padding: 0.45rem 1rem; }
+#text-editor { width: min(1120px, 97vw); max-height: 96vh; border: 0; border-radius: 16px; padding: 14px 18px 12px;
+  background: var(--card); color: var(--text); box-shadow: 0 20px 60px #00000059; }
+#text-editor::backdrop { background: #1c191799; }
+#text-editor kbd { font: 600 11px ui-monospace, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; }
+/* The header stays in view while the bubbles scroll (on a phone the whole dialog scrolls). */
+.te-head { grid-template-columns: auto 1fr auto; position: sticky; top: -14px; z-index: 2; margin: -14px -18px 0; padding: 14px 18px 8px;
+  background: var(--card); border-radius: 16px 16px 0 0; }
+.te-queue { display: flex; align-items: center; justify-content: center; gap: 0.6rem; }
+.te-count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.te-next-unsure { display: inline-flex; align-items: center; gap: 0.2rem; margin: 0; padding: 0.4rem 0.6rem 0.4rem 0.9rem; }
+.te-next-unsure .ui-icon { width: 17px; height: 17px; }
+.te-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 1.1rem; margin-top: 0.75rem; align-items: start; }
+.te-page { display: flex; justify-content: center; min-width: 0; }
+#te-canvas { max-width: 100%; border-radius: 4px; box-shadow: 0 0 0 1px var(--border); cursor: pointer; }
+.te-side { display: flex; flex-direction: column; min-height: 0; max-height: 72vh; }
+.te-help { margin: 0 0 0.6rem; font-size: 12.5px; }
+.te-blocks { list-style: none; margin: 0; padding: 2px 4px 2px 2px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.6rem; }
+.te-block { padding: 0.55rem 0.6rem 0.6rem; border-radius: 12px; background: var(--bg); box-shadow: 0 0 0 1px var(--border);
+  transition: box-shadow .12s; }
+.te-block.selected { box-shadow: 0 0 0 2px #1971c2; }
+.te-block-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.te-block-name { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px;
+  border-radius: 6px; background: #1971c2; color: #fff; font-size: 12px; font-weight: 700; }
+.te-block-tag { flex: 1; font-size: 12px; font-weight: 600; color: #d9480f; }
+.te-remove { height: 28px; padding: 0 0.45rem; font-size: 12px; font-weight: 600; }
+.te-remove .ui-icon { width: 16px; height: 16px; }
+.te-zoom { display: block; max-width: 100%; margin: 0 auto 0.45rem; border-radius: 6px; background: #fff;
+  box-shadow: 0 1px 3px #00000026; cursor: pointer; }
+.te-line { display: flex; align-items: center; gap: 0.3rem; margin-top: 0.3rem; }
+.te-line input { flex: 1; min-width: 0; margin: 0; padding: 0.4rem 0.55rem; font-size: 16px; line-height: 1.35; }
+.te-line.unsure input { border-color: #f08c4b; background: color-mix(in srgb, #fd7e14 9%, var(--card)); }
+.te-line input:focus { outline: none; border-color: #fab005; box-shadow: 0 0 0 3px color-mix(in srgb, #fab005 35%, transparent); }
+.te-ok { min-width: 34px; height: 34px; padding: 0; color: #2f9e44; }
+.te-ok:hover:not(:disabled) { background: color-mix(in srgb, #2f9e44 14%, transparent); color: #2b8a3e; }
+.te-foot-hint { font-size: 12px; }
+@media (max-width: 720px) {
+  .te-head { grid-template-columns: 1fr auto; }
+  .te-queue { grid-column: 1 / -1; grid-row: 2; }
+  .te-body { grid-template-columns: 1fr; }
+  .te-side { max-height: none; }
+  .te-blocks { overflow: visible; }
+}
+
 /* A question above a set of choices, styled like a field label. */
 .field-label { margin: 0.2rem 0 0.5rem; color: var(--label); font-size: 0.9rem; font-weight: 600; }
 

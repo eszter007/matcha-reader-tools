@@ -948,6 +948,10 @@ function clearValidationWarnings() {
  * they were drawn in. Cleared when another file is chosen. */
 const panelEdits = new Map();
 
+/* Text fixed by hand in the text check, by source page name: {w, h, trim, blocks} in the page space it
+ * was read in (trim: whether the paper border was cut off first). Cleared when another file is chosen. */
+const textEdits = new Map();
+
 /* The decoded page at full resolution on white -- transparent sources composite onto white, the
  * device's alpha handling and convert_manga.py:normalize_for_output's. */
 function fullResolutionCanvas(bitmap, w, h) {
@@ -1040,17 +1044,24 @@ async function preparePage(page, o) {
     pageText = mokuroTextBlocks(page.mokuro.blocks,
       (x, y) => [clamp((x * kx - trimX) * sx, imgW), clamp((y * ky - trimY) * sy, imgH)]);
   } else if (o.ppocr && o.detect !== false) {
-    // Read on the trimmed page at full resolution, then scaled to the stored page like Mokuro's.
-    const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH, o.rtl && !o.isWebtoon);
-    const sx = imgW / origW, sy = imgH / origH;
-    const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
-    pageText = mokuroTextBlocks(record.blocks, (x, y) => [clamp(x * sx, imgW), clamp(y * sy, imgH)]);
+    const fixed = textEdits.get(page.name);
+    // A fix only fits the page it was made on: trimming the border moves every coordinate.
+    if (fixed && fixed.trim === !!o.trimMargins) {
+      // Text fixed by hand in the text check is used as it is, not read again.
+      pageText = scaleTextBlocks(fixed.blocks, fixed.w, fixed.h, imgW, imgH);
+    } else {
+      // Read on the trimmed page at full resolution, then scaled to the stored page like Mokuro's.
+      const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH, o.rtl && !o.isWebtoon);
+      const sx = imgW / origW, sy = imgH / origH;
+      const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
+      pageText = mokuroTextBlocks(record.blocks, (x, y) => [clamp(x * sx, imgW), clamp(y * sy, imgH)]);
+    }
   }
 
   let boxes = null;
   let sourceCanvas = null;
-  if (o.detect === false) {
-    // The panel editor only needs the page image.
+  if (o.detect === false || o.panels === false) {
+    // The panel editor only needs the page image, the text check only its text.
   } else if (o.isWebtoon) {
     // Already one top-to-bottom column, cut at its own gutters. The manga detector
     // looks for bordered rectangles in a grid and a webtoon has none, and reordering
@@ -1543,6 +1554,9 @@ async function runMangaConversion() {
         const edited = panelEdits.get(page.name);
         const boxes = edited ? scaleBoxes(edited.boxes, edited.w, edited.h, imgW, imgH) : prep.boxes;
         if (edited) logLine(`  Using ${boxes.length} panel(s) set in the panel check.`);
+        const textFix = bookPpocr && textEdits.get(page.name);
+        if (textFix && textFix.trim === trimMargins) logLine("  Using the text fixed in the text check.");
+        else if (textFix) logLine("  The book type changed since the text check, so this page's text was read again.", "warn");
 
         // Panel boxes stay in resized page space (panels.idx records the page at that
         // size); only the crop comes from the original, so map the rect back across.
@@ -1926,25 +1940,37 @@ function releasePanelCheckSource() {
 }
 
 /* The page settings the conversion would use, or null (with a message) when one is missing. */
-async function panelCheckSettings() {
+async function panelCheckSettings(forText = false) {
   const bookType = validBookType($("manga-booktype").value);
-  if (!bookType) { logValidation("Pick a book type first: it sets the order panels are read in."); return null; }
-  if (bookType === BOOK_WEBTOON) { logValidation("Webtoon panels come from the strip's gutters and are not checked here."); return null; }
+  if (!bookType) {
+    logValidation(`Pick a book type first: it sets the order ${forText ? "the text" : "panels"} are read in.`);
+    return null;
+  }
+  if (bookType === BOOK_WEBTOON) {
+    logValidation(forText ? "Webtoon pages are re-cut when converting, so their text can't be checked here."
+      : "Webtoon panels come from the strip's gutters and are not checked here.");
+    return null;
+  }
   const resChoice = validResChoice($("manga-res").value);
   const deviceTarget = resChoice === RES_CUSTOM ? customResTarget()
     : resChoice && resChoice !== RES_FULL ? MANGA_DEVICE_TARGETS[resChoice] : null;
   const cleanup = cleanupSettings();
   let yolo = null;
-  if ($("manga-yolo").checked) {
+  if ($("manga-yolo").checked && !forText) {
     try { yolo = await loadYoloDetector(); } catch (e) { logLine(`AI panel detector unavailable (${e.message}); using the grid heuristic.`, "warn"); }
   }
   // The same text the conversion will read, since panel crops grow over its bubbles.
   let ppocr = null;
   if (ocrEngine() === "ppocr") {
-    try { ppocr = await loadPpocr(loadOrtRuntime); } catch (e) { logLine(`Text recognition unavailable (${e.message}); panels are shown without it.`, "warn"); }
+    try {
+      ppocr = await loadPpocr(loadOrtRuntime);
+    } catch (e) {
+      if (forText) { logLine(`Text recognition could not load (${e.message}).`, "error"); return null; }
+      logLine(`Text recognition unavailable (${e.message}); panels are shown without it.`, "warn");
+    }
   }
   return {
-    ppocr,
+    ppocr, panels: !forText,
     trimMargins: bookType === BOOK_WESTERN, deviceTarget, cleanup,
     cleanupOn: cleanup.levels || cleanup.contrast !== "off" || cleanup.sharpen,
     isWebtoon: false, yolo, rtl: bookType === BOOK_MANGA || bookType === BOOK_YONKOMA,
@@ -2467,6 +2493,549 @@ function deleteSelectedPanel() {
   peAnnounce(`Panel deleted. ${pe.boxes.length} left.`);
 }
 
+/* ── Text check ───────────────────────────────────────────────────
+ * Read every page's text before converting, show it, and let the user fix or remove wrong lines.
+ * Lines the recogniser was unsure of are marked; nothing is removed unless the user removes it.
+ * Fixes land in textEdits, which the conversion uses instead of reading the page again. */
+
+const textCheck = { files: null, opts: null, source: [], pages: [], editIndex: -1, release: null };
+const TE_ZOOM_W = 260, TE_ZOOM_H = 180;   // largest bubble preview, in screen pixels
+
+function releaseTextCheckSource() {
+  if (textCheck.release) textCheck.release();
+  textCheck.release = null;
+}
+
+function isUnsureLine(conf) { return conf < PPOCR_UNSURE_CONF; }
+function unsureLineCount(blocks) {
+  return blocks.reduce((n, b) => n + textBlockLines(b).filter((l) => isUnsureLine(l.conf)).length, 0);
+}
+
+/* The blocks a page uses now: the user's fix, or what was read. */
+function textCheckBlocks(p) {
+  const e = textEdits.get(p.name);
+  return e ? scaleTextBlocks(e.blocks, e.w, e.h, p.w, p.h) : p.blocks;
+}
+
+/* Draw a page with its numbered text blocks: blue, orange where a line is unsure, filled when selected. */
+function drawTextBlocksOn(ctx, page, blocks, scale, selected = -1) {
+  ctx.drawImage(page, 0, 0, page.width * scale, page.height * scale);
+  ctx.lineWidth = Math.max(1.5, 2.5 * scale);
+  ctx.font = `bold ${Math.max(10, Math.round(22 * scale))}px system-ui, sans-serif`;
+  blocks.forEach((b, i) => {
+    const [x1, y1, x2, y2] = b.box;
+    const color = textBlockLines(b).some((l) => isUnsureLine(l.conf)) ? "#d9480f" : "#1971c2";
+    if (i === selected) {
+      ctx.fillStyle = "rgba(25,113,194,0.16)";
+      ctx.fillRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+    }
+    ctx.strokeStyle = color;
+    ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+    const label = String(i + 1);
+    const tw = ctx.measureText(label).width + 8 * Math.max(0.5, scale);
+    const th = Math.max(13, Math.round(28 * scale));
+    // The number sits on the box's top edge, inside it when there is no room above.
+    const ty = y1 * scale >= th ? y1 * scale - th : y1 * scale;
+    ctx.fillStyle = color;
+    ctx.fillRect(x1 * scale, ty, tw, th);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(label, x1 * scale + 3 * Math.max(0.5, scale), ty + th - 4 * Math.max(0.5, scale));
+  });
+}
+
+function textCheckThumb(page, blocks) {
+  const scale = PANEL_CHECK_THUMB_W / page.width;
+  const c = document.createElement("canvas");
+  c.width = PANEL_CHECK_THUMB_W;
+  c.height = Math.round(page.height * scale);
+  drawTextBlocksOn(c.getContext("2d"), page, blocks, scale);
+  return c.toDataURL("image/jpeg", 0.75);
+}
+
+function renderTextGrid() {
+  const grid = $("text-grid");
+  const onlyFlagged = $("text-check-flagged").checked;
+  grid.textContent = "";
+  let flagged = 0, lines = 0;
+  textCheck.pages.forEach((p, i) => {
+    const edited = textEdits.has(p.name);
+    const blocks = textCheckBlocks(p);
+    const unsure = unsureLineCount(blocks);
+    const flag = unsure > 0;
+    if (flag) { flagged++; lines += unsure; }
+    if (onlyFlagged && !flag) return;
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "panel-thumb" + (flag ? " flagged" : "") + (edited && !flag ? " edited" : "");
+    const frame = document.createElement("span");
+    frame.className = "panel-thumb-frame";
+    const img = document.createElement("img");
+    img.src = p.thumb; img.alt = "";
+    frame.append(img);
+    if (flag || edited) {
+      const pill = document.createElement("span");
+      pill.className = "panel-thumb-pill";
+      pill.textContent = flag ? "Check" : "Fixed";
+      frame.append(pill);
+    }
+    const cap = document.createElement("span");
+    cap.className = "panel-thumb-cap";
+    const title = document.createElement("span");
+    title.className = "panel-thumb-title";
+    title.textContent = `Page ${i + 1}`;
+    const count = document.createElement("span");
+    count.className = "panel-thumb-count";
+    count.textContent = `${blocks.length} bubble${blocks.length === 1 ? "" : "s"}`;
+    cap.append(title, count);
+    btn.append(frame, cap);
+    if (flag) {
+      const note = document.createElement("span");
+      note.className = "panel-thumb-note";
+      note.textContent = `${unsure} unsure line${unsure === 1 ? "" : "s"}`;
+      btn.append(note);
+    }
+    btn.setAttribute("aria-label", `Page ${i + 1}, ${blocks.length} bubble${blocks.length === 1 ? "" : "s"}` +
+      (flag ? `, ${unsure} unsure line${unsure === 1 ? "" : "s"}` : edited ? ", fixed by hand" : ""));
+    btn.addEventListener("click", () => openTextEditor(i));
+    li.append(btn);
+    grid.append(li);
+  });
+  $("text-check-review").hidden = !flagged;
+  $("text-check-summary").textContent = (flagged
+    ? `${lines} unsure line${lines === 1 ? "" : "s"} on ${flagged} of ${textCheck.pages.length} pages.`
+    : `No unsure lines on ${textCheck.pages.length} pages.`) + " Click a page to see its text.";
+}
+
+async function runTextCheck() {
+  const files = $("manga-file").files;
+  if (!files || !files.length) { logValidation("Choose a manga first."); return; }
+  if (splitIntoBooks(files).length > 1) { logValidation("The text check works on one book at a time."); return; }
+  const btn = $("text-check-btn");
+  btn.disabled = true;
+  try {
+    const opts = await panelCheckSettings(true);
+    if (!opts || !opts.ppocr) return;
+    if (textCheck.files !== files) textEdits.clear();
+    releaseTextCheckSource();
+    const collected = await collectPagesFromInput(files);
+    textCheck.release = collected.cleanup || null;
+    let pages = collected.pages;
+    // The same pages the conversion will see, so a fix lands on the page it was made on.
+    if (opts.splitSpreads) pages = (await splitSpreadPages(pages, opts.rtl)).pages;
+    const maxPages = parseInt($("manga-max-pages").value, 10);
+    if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
+    Object.assign(textCheck, { files, opts, source: pages, pages: [] });
+    $("text-check").hidden = false;
+    for (let i = 0; i < pages.length; i++) {
+      setProgress(i, pages.length, `Reading text: page ${i + 1} / ${pages.length}`);
+      // Read fresh: a fix made earlier is kept in textEdits and shown over this.
+      const fixed = textEdits.get(pages[i].name);
+      textEdits.delete(pages[i].name);
+      const prep = await preparePage(pages[i], opts);
+      if (fixed) textEdits.set(pages[i].name, fixed);
+      prep.bitmap.close && prep.bitmap.close();
+      const p = { name: pages[i].name, w: prep.imgW, h: prep.imgH, blocks: prep.pageText || [], thumb: "" };
+      p.thumb = textCheckThumb(prep.canvas, textCheckBlocks(p));
+      textCheck.pages.push(p);
+      if (i % 4 === 3 || i === pages.length - 1) renderTextGrid();
+    }
+    setProgress(pages.length, pages.length, "Text check done");
+    btn.textContent = "Check again";
+    announce($("text-check-summary").textContent);
+  } catch (e) {
+    logLine("Text check failed: " + e.message, "error");
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ── Text editor ──
+ * The page on one side, its bubbles on the other: each bubble enlarged, with one field per line.
+ * The line being edited is outlined on the page and in the enlarged bubble. Enter keeps the line as
+ * it stands (fixed or not) and moves on to the next unsure line, across pages, so a book can be
+ * reviewed line by line without touching the mouse. */
+
+// line: [block, line] being edited, or null. cursor: the last line visited, where "next unsure" goes on from.
+const te = { page: null, blocks: [], sel: -1, line: null, cursor: null, scale: 1 };
+
+/* Every unsure line of the book, in reading order: [page, block, line]. */
+function unsureLines() {
+  const out = [];
+  textCheck.pages.forEach((p, pi) => {
+    const blocks = pi === textCheck.editIndex && $("text-editor").open ? te.blocks : textCheckBlocks(p);
+    blocks.forEach((b, bi) => textBlockLines(b).forEach((l, li) => { if (isUnsureLine(l.conf)) out.push([pi, bi, li]); }));
+  });
+  return out;
+}
+
+/* The next unsure line after [page, block, line] (wrapping round), or null when none is left. */
+function nextUnsureLine(from) {
+  const all = unsureLines();
+  if (!all.length) return null;
+  const after = (a) => a[0] > from[0] || (a[0] === from[0] && (a[1] > from[1] || (a[1] === from[1] && a[2] > from[2])));
+  return all.find(after) || all[0];
+}
+
+async function openTextEditor(i, focus = null) {
+  const p = textCheck.pages[i];
+  if (!p) return;
+  let prep;
+  try {
+    prep = await preparePage(textCheck.source[i], { ...textCheck.opts, detect: false });
+  } catch (e) {
+    logLine(`Could not open page ${i + 1}: ${e.message}`, "error");
+    console.error(e);
+    return;
+  }
+  textCheck.editIndex = i;
+  prep.bitmap.close && prep.bitmap.close();
+  te.page = prep.canvas;
+  te.blocks = textCheckBlocks(p).map((b) => ({ ...b }));
+  te.sel = -1;
+  te.line = null;
+  te.cursor = null;
+  $("te-title").textContent = `Page ${i + 1} of ${textCheck.pages.length}`;
+  $("te-prev").disabled = i === 0;
+  $("te-next").disabled = i === textCheck.pages.length - 1;
+  const dlg = $("text-editor");
+  if (!dlg.open) dlg.showModal();
+  layoutTextEditor();
+  renderTextBlockList();
+  if (focus) {
+    focusTextLine(focus[0], focus[1]);
+  } else {
+    const unsure = unsureLineCount(te.blocks);
+    teAnnounce(`${te.blocks.length} bubble${te.blocks.length === 1 ? "" : "s"} on this page` +
+      (unsure ? `, ${unsure} unsure line${unsure === 1 ? "" : "s"}.` : "."));
+    const first = $("te-blocks").querySelector(".te-line.unsure input") || $("te-blocks").querySelector("input");
+    (first || $("te-close")).focus();
+  }
+}
+
+/* Open the next unsure line after the one being edited (or from the start of the book). */
+async function goToNextUnsure() {
+  const here = $("text-editor").open ? [textCheck.editIndex, ...(te.cursor || [-1, -1])] : [0, -1, -1];
+  const next = nextUnsureLine(here);
+  if (!next) {
+    teAnnounce("No unsure lines left.");
+    updateUnsureCounter();
+    return;
+  }
+  const [pi, bi, li] = next;
+  if (pi !== textCheck.editIndex || !$("text-editor").open) await openTextEditor(pi, [bi, li]);
+  else focusTextLine(bi, li);
+}
+
+function updateUnsureCounter() {
+  const n = unsureLines().length;
+  $("te-unsure-count").textContent = n ? `${n} unsure line${n === 1 ? "" : "s"} left` : "No unsure lines left";
+  $("te-next-unsure").disabled = !n;
+  const here = unsureLineCount(te.blocks);
+  $("te-drop-unsure").hidden = !here;
+  $("te-drop-unsure").textContent = `Remove this page's ${here} unsure line${here === 1 ? "" : "s"}`;
+}
+
+/* Drop every unsure line on the page at once: a page of background lettering (a newspaper, a sign
+ * wall) is read as many lines of noise that are quicker to clear together. */
+function dropUnsureLines() {
+  const before = unsureLineCount(te.blocks);
+  te.blocks = te.blocks.map((b) => textBlockFromLines(b, textBlockLines(b).filter((l) => !isUnsureLine(l.conf)))).filter(Boolean);
+  te.sel = -1;
+  te.line = null;
+  te.cursor = null;
+  commitTextEdits();
+  renderTextBlockList();
+  teAnnounce(`Removed ${before} unsure line${before === 1 ? "" : "s"}. Reset page brings them back.`);
+  ($("te-blocks").querySelector("input") || $("te-close")).focus();
+}
+
+function layoutTextEditor() {
+  const c = $("te-canvas");
+  const box = c.parentElement.getBoundingClientRect();
+  const narrow = window.innerWidth <= 720;
+  const maxW = Math.max(160, box.width), maxH = Math.max(200, window.innerHeight * (narrow ? 0.38 : 0.72));
+  te.scale = Math.min(maxW / te.page.width, maxH / te.page.height);
+  c.width = Math.round(te.page.width * te.scale);
+  c.height = Math.round(te.page.height * te.scale);
+  drawTextEditor();
+}
+
+/* The line being edited, outlined on top of whatever `scale` the target is drawn at. */
+function outlineLine(ctx, box, scale, ox = 0, oy = 0) {
+  const [x1, y1, x2, y2] = box;
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "#fab005";
+  ctx.fillStyle = "rgba(250,176,5,0.18)";
+  ctx.fillRect((x1 - ox) * scale, (y1 - oy) * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+  ctx.strokeRect((x1 - ox) * scale - 1, (y1 - oy) * scale - 1, (x2 - x1) * scale + 2, (y2 - y1) * scale + 2);
+  ctx.restore();
+}
+
+function drawTextEditor() {
+  const c = $("te-canvas");
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+  drawTextBlocksOn(ctx, te.page, te.blocks, te.scale, te.sel);
+  if (te.line && te.blocks[te.line[0]]) {
+    const l = textBlockLines(te.blocks[te.line[0]])[te.line[1]];
+    if (l) outlineLine(ctx, l.box, te.scale);
+  }
+  c.setAttribute("aria-label", `The page, ${te.blocks.length} text bubble${te.blocks.length === 1 ? "" : "s"}` +
+    (te.sel >= 0 ? `, bubble ${te.sel + 1} selected` : ""));
+}
+
+function teAnnounce(text) {
+  const s = $("te-status");
+  s.textContent = "";
+  setTimeout(() => { s.textContent = text; }, 50);
+}
+
+/* A bubble's part of the page, enlarged so its lettering can be read beside its text; `line` is
+ * outlined. */
+function drawTextBlockZoom(canvas, block, line) {
+  const [x1, y1, x2, y2] = block.box;
+  const pad = Math.round(Math.max(x2 - x1, y2 - y1) * 0.08) + 4;
+  const sx = Math.max(0, x1 - pad), sy = Math.max(0, y1 - pad);
+  const sw = Math.min(te.page.width, x2 + pad) - sx, sh = Math.min(te.page.height, y2 + pad) - sy;
+  const scale = Math.min(TE_ZOOM_W / sw, TE_ZOOM_H / sh, 3);
+  canvas.width = Math.max(1, Math.round(sw * scale));
+  canvas.height = Math.max(1, Math.round(sh * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(te.page, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  if (line) outlineLine(ctx, line.box, scale, sx, sy);
+}
+
+/* Save the editor's blocks for this page and refresh what shows them. */
+function commitTextEdits() {
+  const p = textCheck.pages[textCheck.editIndex];
+  textEdits.set(p.name, { w: te.page.width, h: te.page.height, trim: !!textCheck.opts.trimMargins,
+    blocks: te.blocks.map((b) => ({ ...b })) });
+  p.thumb = textCheckThumb(te.page, te.blocks);
+  drawTextEditor();
+  updateUnsureCounter();
+}
+
+/* Change line `j` of bubble `i`: new text (an empty one removes the line) and/or marked right.
+ * Returns whether the bubble is still there. */
+function applyTextLine(i, j, { text, confirm }) {
+  const lines = textBlockLines(te.blocks[i]);
+  const old = lines[j];
+  const changed = text !== undefined && text.trim() !== old.text;
+  if (!changed && !(confirm && isUnsureLine(old.conf))) return true;
+  const edited = lines.map((l, k) => (k === j ? { ...l, text: changed ? text : l.text, conf: 1 } : l));
+  const rebuilt = textBlockFromLines(te.blocks[i], edited);
+  if (rebuilt) te.blocks[i] = rebuilt; else te.blocks.splice(i, 1);
+  commitTextEdits();
+  return !!rebuilt;
+}
+
+function selectTextBlock(i, scroll) {
+  te.sel = i;
+  if (!te.line || te.line[0] !== i) te.line = null;
+  drawTextEditor();
+  for (const li of $("te-blocks").children) li.classList.toggle("selected", Number(li.dataset.i) === i);
+  if (scroll && i >= 0) {
+    const li = $("te-blocks").querySelector(`li[data-i="${i}"]`);
+    if (li) { li.scrollIntoView({ block: "nearest" }); const input = li.querySelector("input"); if (input) input.focus(); }
+  }
+}
+
+function focusTextLine(i, j) {
+  const input = $("te-blocks").querySelectorAll(`li[data-i="${i}"] .te-line input`)[j];
+  if (!input) return;
+  input.focus();
+  input.select();
+  input.closest("li").scrollIntoView({ block: "nearest" });
+}
+
+function renderTextBlockList() {
+  const list = $("te-blocks");
+  list.textContent = "";
+  $("te-empty").hidden = te.blocks.length > 0;
+  updateUnsureCounter();
+  te.blocks.forEach((block, i) => {
+    const lines = textBlockLines(block);
+    const li = document.createElement("li");
+    li.dataset.i = String(i);
+    li.className = "te-block" + (i === te.sel ? " selected" : "");
+    const head = document.createElement("div");
+    head.className = "te-block-head";
+    const name = document.createElement("span");
+    name.className = "te-block-name";
+    name.textContent = `${i + 1}`;
+    name.setAttribute("aria-label", `Bubble ${i + 1}`);
+    const unsure = lines.filter((l) => isUnsureLine(l.conf)).length;
+    const tag = document.createElement("span");
+    tag.className = "te-block-tag";
+    tag.textContent = unsure ? `${unsure} unsure` : "";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tool-btn danger te-remove";
+    remove.innerHTML = '<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l16 0"/><path d="M10 11l0 6"/><path d="M14 11l0 6"/><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12"/><path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3"/></svg><span>Not text</span>';
+    remove.title = "Remove this bubble: it isn't text";
+    remove.setAttribute("aria-label", `Remove bubble ${i + 1}: it isn't text`);
+    remove.addEventListener("click", () => {
+      te.blocks.splice(i, 1);
+      te.sel = -1;
+      te.line = null;
+      commitTextEdits();
+      renderTextBlockList();
+      teAnnounce(`Bubble ${i + 1} removed. ${te.blocks.length} left.`);
+      const next = list.querySelector(`li[data-i="${Math.min(i, te.blocks.length - 1)}"] input`);
+      (next || $("te-close")).focus();
+    });
+    head.append(name, tag, remove);
+    const zoom = document.createElement("canvas");
+    zoom.className = "te-zoom";
+    zoom.setAttribute("aria-hidden", "true");
+    drawTextBlockZoom(zoom, block, null);
+    li.append(head, zoom);
+
+    lines.forEach((line, j) => {
+      const row = document.createElement("div");
+      const isUnsure = isUnsureLine(line.conf);
+      row.className = "te-line" + (isUnsure ? " unsure" : "");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.lang = $("manga-language").value.trim() || "ja";
+      input.value = line.text;
+      input.spellcheck = false;
+      input.enterKeyHint = "next";
+      input.setAttribute("aria-label", `Bubble ${i + 1}, line ${j + 1} of ${lines.length}` +
+        (isUnsure ? ", unsure: Enter keeps it and moves to the next unsure line" : ""));
+      const current = () => textBlockLines(te.blocks[i])[j];
+      // The row as it is now that the line was saved or marked right: no longer unsure.
+      const settle = () => {
+        row.classList.remove("unsure");
+        const okBtn = row.querySelector(".te-ok");
+        if (okBtn) okBtn.remove();
+        input.setAttribute("aria-label", `Bubble ${i + 1}, line ${j + 1} of ${lines.length}`);
+        const left = textBlockLines(te.blocks[i]).filter((l) => isUnsureLine(l.conf)).length;
+        tag.textContent = left ? `${left} unsure` : "";
+      };
+      // Saves the field. The list is only rebuilt when a line or bubble went away, so focus and
+      // scrolling stay where they are while typing through a bubble.
+      const save = (confirm) => {
+        const count = lines.length;
+        const changed = input.value.trim() !== current().text;
+        if (!changed && !(confirm && isUnsureLine(current().conf))) return "same";
+        const kept = applyTextLine(i, j, { text: input.value, confirm });
+        if (kept && textBlockLines(te.blocks[i]).length === count) { settle(); return "saved"; }
+        renderTextBlockList();
+        return kept ? "line-removed" : "bubble-removed";
+      };
+      input.addEventListener("focus", () => {
+        te.sel = i;
+        te.line = [i, j];
+        te.cursor = [i, j];
+        for (const other of list.children) other.classList.toggle("selected", other === li);
+        drawTextEditor();
+        drawTextBlockZoom(zoom, te.blocks[i], current());
+      });
+      input.addEventListener("blur", () => {
+        if (!input.isConnected) return;
+        drawTextBlockZoom(zoom, te.blocks[i], null);
+        if (te.line && te.line[0] === i && te.line[1] === j) { te.line = null; drawTextEditor(); }
+      });
+      // Typing saves on leaving the field; Enter saves too and moves on.
+      input.addEventListener("change", () => {
+        if (!input.isConnected) return;
+        const r = save(false);
+        if (r === "saved") teAnnounce("Line saved.");
+        else if (r === "line-removed") teAnnounce("Line removed.");
+        else if (r === "bubble-removed") teAnnounce(`Bubble ${i + 1} is empty and was removed.`);
+      });
+      input.addEventListener("keydown", async (ev) => {
+        if (ev.key !== "Enter" || ev.isComposing) return;
+        ev.preventDefault();
+        const r = save(true);
+        const rebuilt = r === "line-removed" || r === "bubble-removed";
+        // Where to look on from: the lines and bubbles after this one moved up when it went.
+        te.cursor = r === "bubble-removed" ? [i - 1, Infinity] : [i, r === "line-removed" ? j - 1 : j];
+        if (unsureLines().length) { await goToNextUnsure(); return; }
+        teAnnounce("No unsure lines left.");
+        const inputs = [...list.querySelectorAll(".te-line input")];
+        const at = rebuilt ? null : inputs.indexOf(input);
+        const nextInput = at !== null && at >= 0 ? inputs[at + 1] : list.querySelector(`li[data-i="${i}"] input`);
+        (nextInput || $("te-close")).focus();
+      });
+      row.append(input);
+      if (isUnsure) {
+        const ok = document.createElement("button");
+        ok.type = "button";
+        ok.className = "tool-btn te-ok";
+        ok.innerHTML = '<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5l10 -10"/></svg>';
+        ok.title = "Looks right (Enter)";
+        ok.setAttribute("aria-label", `Bubble ${i + 1}, line ${j + 1} looks right`);
+        ok.addEventListener("click", () => {
+          const r = save(true);
+          teAnnounce(r === "saved" ? "Marked as right." : "Line saved.");
+          if (r === "saved") input.focus();
+        });
+        row.append(ok);
+      }
+      li.append(row);
+    });
+    li.addEventListener("click", (ev) => { if (ev.target === li || ev.target === zoom) selectTextBlock(i, true); });
+    list.append(li);
+  });
+  drawTextEditor();
+}
+
+function wireTextEditor() {
+  const c = $("te-canvas");
+  c.addEventListener("click", (ev) => {
+    const r = c.getBoundingClientRect();
+    const x = (ev.clientX - r.left) / te.scale, y = (ev.clientY - r.top) / te.scale;
+    // The smallest bubble under the click, so one inside a larger one can still be picked.
+    let hit = -1, area = Infinity;
+    te.blocks.forEach((b, i) => {
+      const [x1, y1, x2, y2] = b.box;
+      const a = (x2 - x1) * (y2 - y1);
+      if (x >= x1 && x <= x2 && y >= y1 && y <= y2 && a < area) { hit = i; area = a; }
+    });
+    selectTextBlock(hit, true);
+  });
+  $("te-reset").addEventListener("click", () => {
+    const p = textCheck.pages[textCheck.editIndex];
+    textEdits.delete(p.name);
+    te.blocks = p.blocks.map((b) => ({ ...b }));
+    te.sel = -1;
+    te.line = null;
+    p.thumb = textCheckThumb(te.page, te.blocks);
+    renderTextBlockList();
+    teAnnounce("Back to the text as read.");
+  });
+  $("te-drop-unsure").addEventListener("click", dropUnsureLines);
+  $("te-prev").addEventListener("click", () => openTextEditor(textCheck.editIndex - 1));
+  $("te-next").addEventListener("click", () => openTextEditor(textCheck.editIndex + 1));
+  $("te-next-unsure").addEventListener("click", goToNextUnsure);
+  $("text-check-review").addEventListener("click", goToNextUnsure);
+  $("te-close").addEventListener("click", () => $("text-editor").close());
+  $("text-editor").addEventListener("close", () => {
+    // A field still being typed in is saved, as leaving it would.
+    const a = document.activeElement;
+    if (a && a.tagName === "INPUT" && $("te-blocks").contains(a)) a.dispatchEvent(new Event("change"));
+    renderTextGrid();
+    const thumbs = [...document.querySelectorAll("#text-grid .panel-thumb")];
+    const back = thumbs.find((t) => t.getAttribute("aria-label").startsWith(`Page ${textCheck.editIndex + 1},`));
+    (back || $("text-check-btn")).focus();
+  });
+  window.addEventListener("resize", () => { if ($("text-editor").open) layoutTextEditor(); });
+  $("text-check-btn").addEventListener("click", runTextCheck);
+  $("text-check-flagged").addEventListener("change", renderTextGrid);
+}
+
+/* The text check is for built-in recognition, which is the only one read before converting. */
+function applyTextCheckUi() {
+  $("text-check-row").hidden = ocrEngine() !== "ppocr" || mangaState.mokuroInput;
+  if ($("text-check-row").hidden) $("text-check").hidden = true;
+}
+
 /* ── Page wiring ──────────────────────────────────────────────── */
 
 if (typeof document !== "undefined" && document.getElementById("manga-run")) {
@@ -2504,6 +3073,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-preview-prev").addEventListener("click", () => { previewPage--; showCleanupPreview(); });
   $("manga-preview-next").addEventListener("click", () => { previewPage++; showCleanupPreview(); });
   wirePanelEditor();
+  wireTextEditor();
   // Screen cards: one per screen size. Any device with that size converts the same, so a card
   // stores the first device key for its size; Other leaves the choice to its pills.
   const screenKey = { "480x800": "x4", "528x792": "x3", "552x768": "eego", "684x1216": "metalio4plus" };
@@ -2543,6 +3113,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-ocr-out").value = loadSetting("manga-ocr-out", "en");
   applyBookTypeUi();
   applyOcrUi();
+  applyTextCheckUi();
   $("manga-res").value = validResChoice(loadSetting("manga-res", ""));
   $("manga-res-w").value = loadSetting("manga-res-w", "");
   $("manga-res-h").value = loadSetting("manga-res-h", "");
@@ -2558,6 +3129,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
         if ($("manga-file").files !== files) return;  // a newer pick replaced this one
         mangaState.mokuroInput = isMokuro;
         applyFormatVisibility();
+        applyTextCheckUi();
       }).catch(() => {});
       const bookCount = splitIntoBooks(files).length;
       $("manga-file-label").textContent = files.length === 1 ? files[0].name
@@ -2567,6 +3139,11 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
       releasePanelCheckSource();
       panelCheck.pages = [];
       $("panel-check").hidden = true;
+      textEdits.clear();
+      releaseTextCheckSource();
+      textCheck.pages = [];
+      $("text-check").hidden = true;
+      $("text-check-btn").textContent = "Check text";
       clearValidationWarnings();
     }
   });
@@ -2574,6 +3151,7 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   $("manga-key").addEventListener("input", clearValidationWarnings);
   $("manga-ocr-engine").addEventListener("change", clearValidationWarnings);
   $("manga-ocr-engine").addEventListener("change", applyOcrUi);
+  $("manga-ocr-engine").addEventListener("change", applyTextCheckUi);
   // Ticking 1-bit BMP is what brings a dithered output into play for the device folder.
   $("manga-mono").addEventListener("change", applyFormatVisibility);
   for (const r of document.querySelectorAll('input[name="booktype"]')) {

@@ -84,22 +84,39 @@ function ppocrDbBoxes(pred, mw, mh, thresh = PPOCR_THRESH, boxThresh = PPOCR_BOX
   return boxes;
 }
 
-/* Greedy CTC: the most likely symbol per step, repeats and blanks (index 0) dropped. */
-function ppocrCtcDecode(logits, steps, classes, vocab) {
+/* Greedy CTC: the most likely symbol per step, repeats and blanks (index 0) dropped. `probs` are the
+ * recogniser's per-step probabilities. Returns {text, conf}: conf is the probability of the least
+ * certain character kept, so one misread character is enough to make the line unsure. Punctuation
+ * does not count: an ellipsis read as … or ・・・ is often uncertain and never changes a lookup. */
+const PPOCR_PUNCT = /^[\p{P}\p{S}\s]$/u;
+function ppocrCtcRead(probs, steps, classes, vocab) {
   let text = "";
   let prev = -1;
+  let conf = 1;
   for (let t = 0; t < steps; t++) {
     let best = 0, bestV = -Infinity;
     const base = t * classes;
     for (let c = 0; c < classes; c++) {
-      const v = logits[base + c];
+      const v = probs[base + c];
       if (v > bestV) { bestV = v; best = c; }
     }
-    if (best !== 0 && best !== prev && best < vocab.length) text += vocab[best];
+    if (best !== 0 && best !== prev && best < vocab.length) {
+      text += vocab[best];
+      if (!PPOCR_PUNCT.test(vocab[best])) conf = Math.min(conf, bestV);
+    }
     prev = best;
   }
-  return text;
+  return { text, conf: text ? conf : 0 };
 }
+
+function ppocrCtcDecode(probs, steps, classes, vocab) {
+  return ppocrCtcRead(probs, steps, classes, vocab).text;
+}
+
+/* Below this, a line is shown as unsure in the text check. Measured on manga-ocr's example crops
+ * and a scanned Chinese page: misread lines had a character under 0.7; most correct ones stayed
+ * above 0.9. A confidently wrong line (a sound effect cut short) still passes. */
+const PPOCR_UNSURE_CONF = 0.7;
 
 /* The recogniser's input width for a line `w` x `h` (after turning vertical lines): its natural
  * width at 48 px high, as the reference does, capped so a page-long stroke cannot make a huge tensor. */
@@ -185,6 +202,7 @@ function ppocrJoinColumns(input) {
         lines[i] = {
           text: first.text + second.text,
           vertical: a.vertical,
+          conf: Math.min(a.conf ?? 1, b.conf ?? 1),
           box: [Math.min(a.box[0], b.box[0]), Math.min(a.box[1], b.box[1]),
             Math.max(a.box[2], b.box[2]), Math.max(a.box[3], b.box[3])],
         };
@@ -216,8 +234,8 @@ function ppocrReadingOrder(blocks, rtl = true) {
     .flatMap((r) => r.blocks.sort(rtl ? (p, q) => q.box[2] - p.box[2] : (p, q) => p.box[0] - q.box[0]));
 }
 
-/* lines: [{text, box: [x1, y1, x2, y2], vertical}] → a mokuro page record's blocks, in reading order
- * (right to left unless rtl is false). */
+/* lines: [{text, box: [x1, y1, x2, y2], vertical, conf}] → a mokuro page record's blocks, in reading
+ * order (right to left unless rtl is false). Each block also carries lines_conf, one per line. */
 function ppocrBubbles(lines, rtl = true) {
   const kept = ppocrJoinColumns(lines.map((l) => ({ ...l, text: ppocrLineText(l.text) })))
     .filter((l) => l.text && (PPOCR_HAS_CJK.test(l.text) || l.text.length >= 4));
@@ -245,6 +263,7 @@ function ppocrBubbles(lines, rtl = true) {
         Math.max(...group.map((l) => l.box[2])), Math.max(...group.map((l) => l.box[3]))].map(Math.round),
       vertical,
       lines: group.map((l) => l.text),
+      lines_conf: group.map((l) => l.conf ?? 1),
       lines_coords: group.map(({ box: [x1, y1, x2, y2] }) => [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]),
     });
   }
@@ -401,8 +420,8 @@ async function ppocrReadLines(engine, image, w, h) {
       [0.5, 0.5, 0.5], [0.5, 0.5, 0.5], engine.recHalf);
     const recOut = (await engine.rec.run({ [engine.rec.inputNames[0]]: recIn }))[engine.rec.outputNames[0]];
     const [, steps, classes] = recOut.dims;
-    const text = ppocrCtcDecode(ppocrValues(recOut), steps, classes, engine.vocab);
-    if (text) lines.push({ text, box: [x1, y1, x2, y2], vertical });
+    const { text, conf } = ppocrCtcRead(ppocrValues(recOut), steps, classes, engine.vocab);
+    if (text) lines.push({ text, box: [x1, y1, x2, y2], vertical, conf });
   }
   return lines;
 }
@@ -414,7 +433,7 @@ async function ppocrReadPage(engine, image, w, h, rtl = true) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    ppocrDetSize, ppocrDbBoxes, ppocrCtcDecode, ppocrRecWidth, ppocrLineText, ppocrBubbles, ppocrJoinColumns,
+    ppocrDetSize, ppocrDbBoxes, ppocrCtcDecode, ppocrCtcRead, PPOCR_UNSURE_CONF, ppocrRecWidth, ppocrLineText, ppocrBubbles, ppocrJoinColumns,
     ppocrReadingOrder,
     ppocrToHalf, ppocrFromHalf, ppocrValues,
   };
