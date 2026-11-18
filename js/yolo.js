@@ -16,6 +16,8 @@
 const mangaCore = typeof module !== "undefined" && typeof require === "function"
   ? require("./manga-core.js") : globalThis;
 
+// The panel model, relative to the page (and to the repo root for the panel benchmark).
+const YOLO_MODEL_URL = "models/manga_panel_detector_yolo26n.onnx";
 const YOLO_INPUT_SIZE = 640;
 const YOLO_STRIDE = 32;            // ultralytics LetterBox(auto=True) pads to this multiple
 const YOLO_CONF_THRESHOLD = 0.4;   // convert_manga.py:_detect_panels_yolo(conf=0.4)
@@ -516,7 +518,7 @@ function detectPanels(detected, full, page) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    YOLO_INPUT_SIZE, YOLO_STRIDE, YOLO_CONF_THRESHOLD, YOLO_WEAK_CONF,
+    YOLO_MODEL_URL, YOLO_INPUT_SIZE, YOLO_STRIDE, YOLO_CONF_THRESHOLD, YOLO_WEAK_CONF,
     YOLO_PANEL_CLASS, YOLO_TEXT_CLASS,
     TEXT_OWNERSHIP_MIN_FRAC, TEXT_PAD_FRAC_OF_PAGE, TEXT_PAD_MIN,
     SUBPANEL_MAX_AREA_FRAC, SUBPANEL_INSIDE_FRAC, SUBPANEL_COVER_FRAC,

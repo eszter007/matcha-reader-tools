@@ -1,6 +1,7 @@
 # Tests
 
-Two suites, plus a script that builds everything they compare against.
+Two suites, plus a script that builds everything they compare against, and a
+[panel-detection benchmark](#panel-detection-benchmark) scored against hand-labelled pages.
 
 Most of what these tests assert is **byte equality with the firmware's own Python
 tools**. `js/` is a browser port of `tools/manga_convert/convert_manga.py` and
@@ -130,6 +131,69 @@ furigana with Gemini stubbed to the reference answers), and `fonts.html`.
 | `pil_box/` | Pillow's `Image.resize(..., BOX)` | the ink grid's resampling, byte comparison |
 | `ref_yolo/boxes.json`, `ref_yolo/layouts.json` | `convert_manga.py`'s `detect_panels()` with the shipped ONNX model | panel boxes, ±2px |
 | `ref_font/` | the firmware's `fontconvert_sdcard.py` | `.cpfont` structure |
+
+## Panel-detection benchmark
+
+`test/panels/` measures how well a detector finds panels on real manga pages, against boxes drawn
+by hand. It is not part of either suite: it downloads about 690 MB and takes a few minutes. Use it
+before changing the panel model or its post-processing, and put the numbers in the PR.
+
+```sh
+pip install pymupdf numpy pillow
+python3 test/panels/blackjack/fetch.py ~/bench/bj --scan ~/bench/bj-scan   # pages + a scan-like copy
+python3 test/panels/prepare.py ~/bench/bj         # decode once to raw RGBA (~11 MB a page)
+python3 test/panels/prepare.py ~/bench/bj-scan
+node test/panels/eval.cjs ~/bench/bj              # grid and shipped, at full resolution
+node test/panels/eval.cjs ~/bench/bj-scan --verbose --json out.json
+```
+
+Pages are scored at full resolution, as the converter detects on the page before reducing it to
+the screen; `--size device` (with `prepare.py --device 480x800`) scores the screen-sized page
+instead. ONNX Runtime runs single-threaded, as on GitHub Pages, so the times are what a browser
+sees. `--extra FILE.cjs` adds detector variants; their shape is described in `variants.cjs`, where
+`shipped` is the converter's own path (the model, then missed art recovered, blank boxes dropped
+and a page-sized frame tried with the grid).
+
+What it reports (`metrics.cjs`, unit-tested in the Node suite):
+
+- precision, recall and F1 at IoU 0.5 and 0.75: greedy one-to-one matching, best IoU first,
+  micro-averaged over all panels;
+- **exact**: the share of pages with the right number of panels, each matched at IoU >= 0.75;
+- **order**: on pages where every panel was found, the share whose panels come out of
+  `sortPanelsReadingOrder()` in the labelled order;
+- mean IoU of the matched panels, milliseconds per page, and the model download.
+
+### The Black Jack set
+
+76 pages of ブラックジャックによろしく 佐藤秀峰 (*Give My Regards to Black Jack*, Shuho Sato), which the
+author offers for free secondary use at <https://densho810.com/free/>: 40 consecutive pages of
+volume 1 (PDF pages 6–45) and 36 of volume 13 (pages 100–139, four blank pages left out), 340
+panels. The pages are not in this repo. `fetch.py` downloads the official volumes and takes each
+page's image out of the PDF unchanged, checked against the sha256 in `labels.json`. `--scan`
+makes a scan-like copy (1600 px tall, tilted up to 0.8°, paper tint, noise, blur, a binding shadow,
+JPEG 65) with the boxes moved to match, since most converted books are scans. It is not one of
+the Manga109 titles the panel models were trained on.
+
+How the labels were made: a flood fill of the white gutters from the page edge drafted the boxes,
+boxes inside another box were dropped, and every page was then checked by eye on contact sheets.
+Seven pages with slanted or overlapping panels were drawn by hand on a pixel grid. A box is the
+outer edge of the frame line, art bleeding off the page goes to the edge, and a slanted panel
+gets its bounding rectangle. The labelling was done by Claude (an AI model).
+
+Caveats: one artist, with clean frames and white gutters, so it says little about borderless or
+4-koma pages; the scan-like copy is simulated; the labelled reading order is the one
+`sortPanelsReadingOrder()` gives, so the **order** column is not an independent check on this set.
+
+Results on 2026-11-18, at full resolution (exact pages of 76):
+
+| | Clean | Scan-like | Time a page | Download |
+|---|---|---|---|---|
+| Gutter grid | 7 | 4 | – | – |
+| Shipped (YOLO26n) | 71 | 71 | about 0.1 s | 9.6 MB |
+
+On the same pages bee's Manga109 YOLO26s (bee-san/matcha-reader-tools) scored 69 and 67 of 76 in
+its own pipeline, and 70 and 70 inside ours, at about 0.34 s a page and 19.8 MB, so the
+smaller model stayed.
 
 ## Adding a test
 
