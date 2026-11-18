@@ -766,9 +766,18 @@ function savedOcrEngine() {
  * so they appear when it is picked rather than sitting there greyed. */
 function applyOcrUi() {
   const engine = ocrEngine();
-  $("manga-ocr-fields").hidden = engine !== "gemini";
+  // A Mokuro volume's text is already read: the card keeps only the text check.
+  const mokuro = mangaState.mokuroInput;
+  $("ocr-engine-part").hidden = mokuro;
+  $("ocr-hint-mokuro").hidden = !mokuro;
+  $("manga-ocr-fields").hidden = mokuro || engine !== "gemini";
   $("ocr-hint-ppocr").hidden = engine !== "ppocr";
   $("ocr-hint-none").hidden = engine !== "none";
+  const h = document.querySelector("#card-ocr h3");
+  if (h && h.dataset.base !== undefined) {
+    h.dataset.base = mokuro ? "Text" : "Text recognition";
+    renumberSteps();
+  }
 }
 
 // mokuroInput: the chosen files are Mokuro volumes, which bring their own text (no Gemini).
@@ -922,8 +931,8 @@ function applyFormatVisibility() {
   const matcha = nothingPicked || f.has("matcha") || f.has("matchafile");
   const show = (id, on) => { const el = document.getElementById(id); if (el) el.hidden = !on; };
   applyPageOptionsUi();
-  // A Mokuro volume already has its text, so the Gemini card has nothing to do.
-  show("card-ocr", matcha && !mangaState.mokuroInput);
+  // A Mokuro volume already has its text: its card only offers the text check (see applyOcrUi).
+  show("card-ocr", matcha);
   show("notice-ocr", matcha && !mangaState.mokuroInput);
   show("card-install", matcha);
   show("card-book", matcha || nothingPicked || f.has("epub") || f.has("pdf") || f.has("xtc") || f.has("xtch"));
@@ -1063,7 +1072,12 @@ async function preparePage(page, o) {
 
   // A Mokuro page's text, in its source image's pixels: undo the trim, then scale to the page.
   let pageText = null;
-  if (page.mokuro) {
+  // Text fixed by hand in the text check is used as it is, not read again. It only fits the page it
+  // was made on: trimming the border moves every coordinate.
+  const fixed = o.detect !== false && (page.mokuro || o.ppocr) ? textEdits.get(page.name) : null;
+  if (fixed && fixed.trim === !!o.trimMargins) {
+    pageText = scaleTextBlocks(fixed.blocks, fixed.w, fixed.h, imgW, imgH);
+  } else if (page.mokuro) {
     const kx = page.mokuro.width ? srcW / page.mokuro.width : 1;
     const ky = page.mokuro.height ? srcH / page.mokuro.height : 1;
     const sx = imgW / origW, sy = imgH / origH;
@@ -1071,18 +1085,11 @@ async function preparePage(page, o) {
     pageText = mokuroTextBlocks(page.mokuro.blocks,
       (x, y) => [clamp((x * kx - trimX) * sx, imgW), clamp((y * ky - trimY) * sy, imgH)]);
   } else if (o.ppocr && o.detect !== false) {
-    const fixed = textEdits.get(page.name);
-    // A fix only fits the page it was made on: trimming the border moves every coordinate.
-    if (fixed && fixed.trim === !!o.trimMargins) {
-      // Text fixed by hand in the text check is used as it is, not read again.
-      pageText = scaleTextBlocks(fixed.blocks, fixed.w, fixed.h, imgW, imgH);
-    } else {
-      // Read on the trimmed page at full resolution, then scaled to the stored page like Mokuro's.
-      const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH, o.rtl && !o.isWebtoon);
-      const sx = imgW / origW, sy = imgH / origH;
-      const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
-      pageText = mokuroTextBlocks(record.blocks, (x, y) => [clamp(x * sx, imgW), clamp(y * sy, imgH)]);
-    }
+    // Read on the trimmed page at full resolution, then scaled to the stored page like Mokuro's.
+    const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH, o.rtl && !o.isWebtoon);
+    const sx = imgW / origW, sy = imgH / origH;
+    const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
+    pageText = mokuroTextBlocks(record.blocks, (x, y) => [clamp(x * sx, imgW), clamp(y * sy, imgH)]);
   }
 
   let boxes = null;
@@ -1640,7 +1647,7 @@ async function runMangaConversion() {
         const edited = panelEdits.get(page.name);
         const boxes = edited ? scaleBoxes(edited.boxes, edited.w, edited.h, imgW, imgH) : prep.boxes;
         if (edited) logLine(`  Using ${boxes.length} panel(s) set in the panel check.`);
-        const textFix = bookPpocr && textEdits.get(page.name);
+        const textFix = (bookPpocr || collected.mokuro) && textEdits.get(page.name);
         if (textFix && textFix.trim === trimMargins) logLine("  Using the text fixed in the text check.");
         else if (textFix) logLine("  The book type changed since the text check, so this page's text was read again.", "warn");
 
@@ -2047,7 +2054,7 @@ async function panelCheckSettings(forText = false) {
   }
   // The same text the conversion will read, since panel crops grow over its bubbles.
   let ppocr = null;
-  if (ocrEngine() === "ppocr") {
+  if (ocrEngine() === "ppocr" && !mangaState.mokuroInput) {
     try {
       ppocr = await loadPpocr(loadOrtRuntime);
     } catch (e) {
@@ -2706,6 +2713,13 @@ function renderTextGrid() {
     grid.append(li);
   });
   $("text-check-review").hidden = !flagged;
+  // Mokuro's text has no unsure lines to filter by.
+  $("text-check-flagged").closest("label").hidden = !!textCheck.mokuro;
+  if (textCheck.mokuro) {
+    const bubbles = textCheck.pages.reduce((n, p) => n + textCheckBlocks(p).length, 0);
+    $("text-check-summary").textContent = `${bubbles} bubble${bubbles === 1 ? "" : "s"} from Mokuro on ${textCheck.pages.length} pages. Click a page to see its text.`;
+    return;
+  }
   $("text-check-summary").textContent = (flagged
     ? `${lines} unsure line${lines === 1 ? "" : "s"} on ${flagged} of ${textCheck.pages.length} pages.`
     : `No unsure lines on ${textCheck.pages.length} pages.`) + " Click a page to see its text.";
@@ -2719,7 +2733,7 @@ async function runTextCheck() {
   btn.disabled = true;
   try {
     const opts = await panelCheckSettings(true);
-    if (!opts || !opts.ppocr) return;
+    if (!opts || (!opts.ppocr && !mangaState.mokuroInput)) return;
     if (textCheck.files !== files) textEdits.clear();
     releaseTextCheckSource();
     const collected = await collectPagesFromInput(splitIntoBooks(files)[0]);
@@ -2729,7 +2743,7 @@ async function runTextCheck() {
     if (opts.splitSpreads) pages = (await splitSpreadPages(pages, opts.rtl)).pages;
     const maxPages = parseInt($("manga-max-pages").value, 10);
     if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
-    Object.assign(textCheck, { files, opts, source: pages, pages: [] });
+    Object.assign(textCheck, { files, opts, source: pages, pages: [], mokuro: !!collected.mokuro });
     $("text-check").hidden = false;
     for (let i = 0; i < pages.length; i++) {
       setProgress(i, pages.length, `Reading text: page ${i + 1} / ${pages.length}`);
@@ -2809,6 +2823,12 @@ async function openTextEditor(i, focus = null) {
   te.drag = null;
   setTextDrawMode(false);
   $("te-title").textContent = `Page ${i + 1} of ${textCheck.pages.length}`;
+  // Mokuro's text has no confidence to go by, so there is no queue of unsure lines.
+  document.querySelector(".te-queue").hidden = textCheck.mokuro;
+  const help = $("te-help");
+  if (help.dataset.reader === undefined) help.dataset.reader = help.innerHTML;
+  if (textCheck.mokuro) help.textContent = "Fix a line by typing over it, or clear it to remove it. Add a bubble for text Mokuro missed.";
+  else help.innerHTML = help.dataset.reader;
   $("te-prev").disabled = i === 0;
   $("te-next").disabled = i === textCheck.pages.length - 1;
   const dlg = $("text-editor");
@@ -3437,8 +3457,12 @@ function placeBubbleInMiddle() {
 
 /* The text check is for built-in recognition, which is the only one read before converting. */
 function applyTextCheckUi() {
-  $("text-check-row").hidden = ocrEngine() !== "ppocr" || mangaState.mokuroInput;
+  const mokuro = mangaState.mokuroInput;
+  $("text-check-row").hidden = !mokuro && ocrEngine() !== "ppocr";
   if ($("text-check-row").hidden) $("text-check").hidden = true;
+  $("text-check-hint").textContent = mokuro
+    ? "See Mokuro's text on every page and fix it before converting: correct lines, remove what isn't text, add what it missed."
+    : "Read every page first, then fix or remove wrong lines. Lines the reader was unsure of are marked; they stay in the book unless you change them.";
 }
 
 /* ── Page wiring ──────────────────────────────────────────────── */
@@ -3533,11 +3557,13 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
     mangaState.files = files;
     mangaState.mokuroInput = false;
     applyFormatVisibility();
+    applyOcrUi();
     {
       selectionIsMokuro(files).then((isMokuro) => {
         if (mangaState.files !== files) return;  // a newer pick replaced this one
         mangaState.mokuroInput = isMokuro;
         applyFormatVisibility();
+        applyOcrUi();
         applyTextCheckUi();
         updateRunSummary();
       }).catch(() => {});
