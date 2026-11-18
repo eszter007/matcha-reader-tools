@@ -45,7 +45,10 @@
       <input type="file" id="manga-file" multiple
              accept=".cbz,.zip,.epub,.pdf,.mokuro,application/pdf,image/jpeg,image/png,image/webp,image/avif,image/bmp">
     </label>
-    <p class="hint">One book, or several at once for a whole series.</p>
+    <input type="file" id="manga-folder" webkitdirectory multiple hidden aria-hidden="true" tabindex="-1">
+    <p class="hint">One book, or several at once for a whole series. Or
+      <button type="button" class="link-btn inline" id="manga-folder-btn">choose a folder</button>: a folder of page
+      images, or Mokuro volumes, up to a whole library.</p>
     <details>
       <summary>How pages are ordered</summary>
       <p class="hint">By file name, cover and copyright first. A .cbz or .zip with a folder per chapter
@@ -55,10 +58,13 @@
     <details>
       <summary>Manga already read with Mokuro</summary>
       <p class="hint">A <a href="https://github.com/kha-white/mokuro" target="_blank" rel="noopener">Mokuro</a>
-      volume already has its text, so no Gemini key is needed and step 4 disappears. Zip the
-      <code>.mokuro</code> file together with its image folder (<code>vol1.mokuro</code> and
-      <code>vol1/</code>) and choose the zip, or choose the <code>.mokuro</code> file and all its
-      page images at once. Pages are read in the order the <code>.mokuro</code> file lists them.</p>
+      volume already has its text, so no Gemini key is needed and step 4 disappears. Choose the
+      folder holding <code>vol1.mokuro</code> and <code>vol1/</code> (<code>vol1.mo.mokuro</code> works too),
+      or a zip of them. A folder or zip with several volumes, up to a whole Mokuro library, makes one
+      book per volume, converted and downloaded one after another. Pages are read in the order the
+      <code>.mokuro</code> file lists them. For a large library on your computer, the desktop script
+      <a href="https://github.com/eszter007/matcha-reader/blob/develop/docs/manga-conversion.md#manga-already-read-by-mokuro" target="_blank" rel="noopener">convert_mokuro_library.py</a>
+      skips volumes already converted and can write straight to the SD card.</p>
     </details>
   </div>
 

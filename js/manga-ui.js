@@ -357,17 +357,24 @@ async function collectFromPdf(bytes, name) {
 
 const isMokuroName = (name) => /\.mokuro$/i.test(name);
 
-/* A Mokuro volume picked as its .mokuro file plus the page images. Images are matched by path
- * (from a folder pick) or, failing that, by file name. */
+/* A Mokuro volume picked as its .mokuro file plus the page images. From a folder pick, images are
+ * matched by their path in the volume's own folder beside the .mokuro file; picked loose, by name. */
 async function collectFromMokuroFiles(files) {
   const mokuroFiles = files.filter((f) => isMokuroName(f.name));
   if (mokuroFiles.length !== 1) throw new Error("Pick one .mokuro file with its page images (one volume at a time).");
-  const volume = parseMokuroVolume(new TextDecoder().decode(await readFileBytes(mokuroFiles[0])), mokuroFiles[0].name);
+  const mf = mokuroFiles[0];
+  const volume = parseMokuroVolume(new TextDecoder().decode(await readFileBytes(mf)), mf.name);
   const images = files.filter((f) => isImageName(f.name));
   const byPath = new Map(images.map((f) => [pathNorm(f.webkitRelativePath || f.name), f]));
   const byName = new Map(images.map((f) => [f.name, f]));
-  return mokuroCollected(volume, mokuroFiles[0].name, (rel) => {
-    const f = [...byPath.entries()].find(([p]) => p.endsWith(`${volume.folder}/${rel}`))?.[1] || byName.get(baseName(rel));
+  const here = mf.webkitRelativePath ? pathDirname(pathNorm(mf.webkitRelativePath)) : "";
+  return mokuroCollected(volume, mf.name, (rel) => {
+    for (const dir of volume.folders) {
+      const f = here ? byPath.get(pathJoinNorm(here, `${dir}/${rel}`))
+        : [...byPath.entries()].find(([p]) => p.endsWith(`${dir}/${rel}`))?.[1];
+      if (f) return () => readFileBytes(f);
+    }
+    const f = here ? null : byName.get(baseName(rel));
     return f ? () => readFileBytes(f) : null;
   });
 }
@@ -378,9 +385,18 @@ async function collectFromMokuroZip(zip, mokuroEntry, fileName) {
   const dir = pathDirname(pathNorm(mokuroEntry.name));
   const byPath = new Map(zip.entries.filter((e) => !e.isDir).map((e) => [pathNorm(e.name), e]));
   return mokuroCollected(volume, fileName, (rel) => {
-    const e = byPath.get(pathJoinNorm(dir, `${volume.folder}/${rel}`));
-    return e ? () => zip.readEntry(e) : null;
+    for (const folder of volume.folders) {
+      const e = byPath.get(pathJoinNorm(dir, `${folder}/${rel}`));
+      if (e) return () => zip.readEntry(e);
+    }
+    return null;
   });
+}
+
+/* The Mokuro volumes in an archive, in natural order of their .mokuro paths. */
+function mokuroVolumesInZip(zip) {
+  return zip.entries.filter((e) => !e.isDir && isMokuroMember(e.name))
+    .sort((a, b) => compareNaturalKeys(naturalSortKey(a.name), naturalSortKey(b.name)));
 }
 
 function mokuroCollected(volume, label, readerFor) {
@@ -396,20 +412,22 @@ function mokuroCollected(volume, label, readerFor) {
   return { pages, meta: mokuroMeta(volume), tocEntries: [], sourceLabel: baseName(label), mokuro: true };
 }
 
+/* `files` is one book from splitIntoBooks(); `files.member` picks one volume of a Mokuro series archive. */
 async function collectPagesFromInput(files) {
   if ([...files].some((f) => isMokuroName(f.name))) return collectFromMokuroFiles([...files]);
   if (files.length === 1 && !isImageName(files[0].name)) {
     const ext = mangaFileExt(files[0].name);
     const bytes = await readFileBytes(files[0]);
-    if (ext === ".cbz" || ext === ".zip") return collectFromCbz(bytes, files[0].name);
+    if (ext === ".cbz" || ext === ".zip") return collectFromCbz(bytes, files[0].name, files.member);
     if (ext === ".epub") return collectFromEpub(bytes, files[0].name);
     if (ext === ".pdf") return collectFromPdf(bytes, files[0].name);
     throw new Error(`Unsupported input: ${files[0].name} (use .cbz, .zip, .epub, .pdf, or image files)`);
   }
-  // Image list / folder selection.
+  // Image list / folder selection. A folder pick keys pages by their path, so two chapter folders
+  // that both start at 001.jpg keep both pages.
   const images = [...files].filter((f) => isImageName(f.name));
   if (!images.length) throw new Error("No image files found in the selection");
-  const byName = new Map(images.map((f) => [f.name, f]));
+  const byName = new Map(images.map((f) => [f.webkitRelativePath || f.name, f]));
   const ordered = naturalSortPaths([...byName.keys()]);
   return {
     pages: ordered.map((name) => ({ name, read: () => readFileBytes(byName.get(name)) })),
@@ -419,10 +437,18 @@ async function collectPagesFromInput(files) {
   };
 }
 
-async function collectFromCbz(bytes, fileName) {
+async function collectFromCbz(bytes, fileName, member) {
   const zip = new ZipReader(bytes);
-  const mokuroEntries = zip.entries.filter((e) => !e.isDir && isMokuroName(e.name));
-  if (mokuroEntries.length > 1) throw new Error(`${fileName} holds ${mokuroEntries.length} Mokuro volumes; zip one volume at a time.`);
+  const mokuroEntries = mokuroVolumesInZip(zip);
+  if (member) {
+    const entry = mokuroEntries.find((e) => e.name === member);
+    if (!entry) throw new Error(`${member} is no longer in ${fileName}.`);
+    return collectFromMokuroZip(zip, entry, `${fileName}: ${baseName(member)}`);
+  }
+  if (mokuroEntries.length > 1) {
+    throw new Error(`${fileName} holds ${mokuroEntries.length} Mokuro volumes. Convert makes a book of each; ` +
+      "the checks work on one volume at a time.");
+  }
   if (mokuroEntries.length === 1) return collectFromMokuroZip(zip, mokuroEntries[0], fileName);
   // Keyed by FULL path, not basename. Archives that give each chapter its own folder
   // restart page numbering inside it, so ch01/001.jpg and ch08/001.jpg share a basename
@@ -746,7 +772,8 @@ function applyOcrUi() {
 }
 
 // mokuroInput: the chosen files are Mokuro volumes, which bring their own text (no Gemini).
-const mangaState = { running: false, cancelled: false, mokuroInput: false };
+// files: the last pick, from the file picker or the folder picker.
+const mangaState = { running: false, cancelled: false, mokuroInput: false, files: null };
 
 /* Whether the selection is Mokuro: a .mokuro file, or archives naming one. An archive's file
  * list sits at its end, so only the last 256 KB are read rather than the whole book. */
@@ -1128,13 +1155,13 @@ function cleanCrop(ctx, w, h, tone, sharpen) {
 let previewSource = null;
 let previewPage = 1;
 async function showCleanupPreview() {
-  const files = $("manga-file").files;
+  const files = chosenFiles();
   if (!files || !files.length) { logValidation("Choose a file first to preview a page."); return; }
   const btn = $("manga-preview-btn");
   btn.disabled = true;
   try {
     if (!previewSource || previewSource.files !== files) {
-      previewSource = { files, collected: await collectPagesFromInput(files) };
+      previewSource = { files, collected: await collectPagesFromInput(splitIntoBooks(files)[0]) };
     }
     const pages = previewSource.collected.pages;
     previewPage = Math.min(pages.length, Math.max(1, previewPage));
@@ -1174,7 +1201,7 @@ async function showCleanupPreview() {
 /* The line beside Convert: what is still missing, or what the conversion will make. */
 const FORMAT_NAMES = { matchafile: ".matcha", matcha: "folder", epub: "EPUB", pdf: "PDF", xtc: "XTC", xtch: "XTCH" };
 function updateRunSummary() {
-  const files = $("manga-file").files;
+  const files = chosenFiles();
   const formats = [...selectedFormats()];
   const res = $("manga-res");
   const missing = [];
@@ -1200,7 +1227,8 @@ function updateRunSummary() {
     return;
   }
   const books = splitIntoBooks(files).length;
-  const what = books > 1 ? `${books} books` : files.length === 1 ? files[0].name : `${files.length} images`;
+  const folder = files[0].webkitRelativePath ? files[0].webkitRelativePath.split("/")[0] : "";
+  const what = books > 1 ? `${books} books` : files.length === 1 ? files[0].name : folder || `${files.length} images`;
   const device = res.selectedOptions[0] ? res.selectedOptions[0].textContent.replace(/ — .*/, "") : "";
   el.textContent = `Ready: ${what} → ${formats.map((f) => FORMAT_NAMES[f] || f).join(" + ")}, ${device}.`;
 }
@@ -1213,27 +1241,79 @@ function fileNameMeta(files) {
 
 /* Show what the file name suggests as the placeholder of each empty metadata field. */
 function showFileNameMeta() {
-  const files = $("manga-file").files;
+  const files = chosenFiles();
   const m = splitIntoBooks(files).length > 1 ? { title: "", series: "", seriesIndex: null } : fileNameMeta(files);
   $("manga-title").placeholder = m.title ? `from file: ${m.title}` : "auto";
   $("manga-series").placeholder = m.series ? `from file: ${m.series}` : "auto";
   $("manga-series-index").placeholder = m.seriesIndex !== null ? `from file: ${m.seriesIndex}` : "auto";
 }
 
-/* Several archives (CBZ, ZIP, EPUB, PDF) are one book each; anything else -- one archive, or a
- * set of page images -- is a single book. */
+/* Several archives (CBZ, ZIP, EPUB, PDF) are one book each; so is each Mokuro volume in a folder
+ * pick (its .mokuro file and the images in its own folder). Anything else -- one archive, or a set
+ * of page images -- is a single book. A Mokuro series archive is split into its volumes later, by
+ * expandMokuroArchives(), as that needs the archive read. */
 function splitIntoBooks(files) {
   const list = [...files];
+  const byPath = (a, b) => compareNaturalKeys(naturalSortKey(a.webkitRelativePath || a.name), naturalSortKey(b.webkitRelativePath || b.name));
+  const mokuros = list.filter((f) => isMokuroName(f.name)).sort(byPath);
+  const isArchive = (f) => [".zip", ".cbz"].includes(mangaFileExt(f.name));
+  const folderPick = list.some((f) => f.webkitRelativePath);
+  // A Mokuro library: series folders of volumes, and series archives (split into volumes later).
+  if (mokuros.length > 1 || (folderPick && mokuros.length && list.some(isArchive))) {
+    const volumes = mokuros.map((mf) => {
+      const here = pathDirname(pathNorm(mf.webkitRelativePath || mf.name));
+      const dirs = mokuroImageDirs(baseName(mf.name).replace(/\.mokuro$/i, "")).map((d) => pathJoinNorm(here, d) + "/");
+      return [mf, ...list.filter((f) => isImageName(f.name) && dirs.some((d) => pathNorm(f.webkitRelativePath || "").startsWith(d)))];
+    });
+    return volumes.concat(list.filter(isArchive).sort(byPath).map((f) => [f]))
+      .sort((a, b) => byPath(a[0], b[0]));
+  }
+  if (mokuros.length === 1) return [list];
+  // A folder of series archives: one book each (Mokuro ones split into volumes later).
+  if (folderPick && list.filter(isArchive).length > 1) return list.filter(isArchive).sort(byPath).map((f) => [f]);
   const archives = list.filter((f) => !isImageName(f.name));
   if (list.length > 1 && archives.length === list.length) {
-    return archives.sort((a, b) => compareNaturalKeys(naturalSortKey(a.name), naturalSortKey(b.name))).map((f) => [f]);
+    return archives.sort(byPath).map((f) => [f]);
   }
+  // A folder of images may hold other files too (a ComicInfo.xml, thumbnails' .db): one book.
+  if (list.length > 1 && archives.length && list.some((f) => f.webkitRelativePath)) return [list.filter((f) => isImageName(f.name))];
   return [list];
 }
 
+/* One book per volume of each Mokuro series archive among the books; other books stay as they are.
+ * Reads each archive that names a .mokuro file to list its volumes. */
+async function expandMokuroArchives(books) {
+  const out = [];
+  for (const book of books) {
+    const f = book[0];
+    if (book.length !== 1 || ![".zip", ".cbz"].includes(mangaFileExt(f.name)) || !(await selectionIsMokuro([f]))) {
+      out.push(book);
+      continue;
+    }
+    const volumes = mokuroVolumesInZip(new ZipReader(await readFileBytes(f)));
+    if (volumes.length < 2) { out.push(book); continue; }
+    logLine(`${f.name} holds ${volumes.length} Mokuro volumes; each becomes its own book.`);
+    for (const v of volumes) {
+      const vb = [f];
+      vb.member = v.name;
+      out.push(vb);
+    }
+  }
+  return out;
+}
+
+/* How a book is named in the log: its file, and the volume for one of a series archive. */
+function bookLabel(book) {
+  return book.member ? `${book[0].name}: ${baseName(book.member).replace(/\.mokuro$/i, "")}` : (book[0].webkitRelativePath || book[0].name);
+}
+
+/* The files of the last pick, from the file picker or the folder picker. */
+function chosenFiles() {
+  return mangaState.files || $("manga-file").files;
+}
+
 async function runMangaConversion() {
-  const fileInput = $("manga-file");
-  const files = fileInput.files;
+  const files = chosenFiles();
   if (!files || !files.length) {
     logValidation("Choose a .cbz/.zip/.epub file or a set of page images first.");
     return;
@@ -1383,8 +1463,14 @@ async function runMangaConversion() {
   const wakeLock = new WakeLock();
   await wakeLock.acquire();
 
-  // Several archives at once are separate books, converted and downloaded one after another.
-  const books = splitIntoBooks(files);
+  // Several archives at once are separate books, converted and downloaded one after another; so are
+  // the volumes of a Mokuro library or series archive.
+  let books = splitIntoBooks(files);
+  try {
+    books = await expandMokuroArchives(books);
+  } catch (e) {
+    logLine(`Could not list the volumes in ${books[0][0].name} (${e.message}); converting it as one book.`, "warn");
+  }
   const batch = books.length > 1;
   // In a batch, the fields that describe one book do not apply: each book takes its own.
   const bookField = (id) => (batch ? "" : $(id).value);
@@ -1893,18 +1979,18 @@ async function runMangaConversion() {
 
   try {
     if (!batch) {
-      await convertBook(files);
+      await convertBook(books[0]);
     } else {
       let done = 0, failed = 0;
       for (let i = 0; i < books.length && !mangaState.cancelled; i++) {
-        logLine(`── Book ${i + 1} of ${books.length}: ${books[i][0].name}`);
+        logLine(`── Book ${i + 1} of ${books.length}: ${bookLabel(books[i])}`);
         announce(`Converting book ${i + 1} of ${books.length}`);
         try {
           await convertBook(books[i]);
           done++;
         } catch (e) {
           failed++;
-          logLine(`Error in ${books[i][0].name}: ${e.message}`, "error");
+          logLine(`Error in ${bookLabel(books[i])}: ${e.message}`, "error");
           console.error(e);
         }
       }
@@ -2090,7 +2176,7 @@ function renderPanelGrid() {
 }
 
 async function runPanelCheck() {
-  const files = $("manga-file").files;
+  const files = chosenFiles();
   if (!files || !files.length) { logValidation("Choose a manga first."); return; }
   if (splitIntoBooks(files).length > 1) { logValidation("The panel check works on one book at a time."); return; }
   const btn = $("panel-check-btn");
@@ -2101,7 +2187,7 @@ async function runPanelCheck() {
     if (!opts) return;
     if (panelCheck.files !== files) panelEdits.clear();
     releasePanelCheckSource();
-    const collected = await collectPagesFromInput(files);
+    const collected = await collectPagesFromInput(splitIntoBooks(files)[0]);
     panelCheck.release = collected.cleanup || null;
     let pages = collected.pages;
     // The same pages the conversion will see, so a fix lands on the page it was made on.
@@ -2626,7 +2712,7 @@ function renderTextGrid() {
 }
 
 async function runTextCheck() {
-  const files = $("manga-file").files;
+  const files = chosenFiles();
   if (!files || !files.length) { logValidation("Choose a manga first."); return; }
   if (splitIntoBooks(files).length > 1) { logValidation("The text check works on one book at a time."); return; }
   const btn = $("text-check-btn");
@@ -2636,7 +2722,7 @@ async function runTextCheck() {
     if (!opts || !opts.ppocr) return;
     if (textCheck.files !== files) textEdits.clear();
     releaseTextCheckSource();
-    const collected = await collectPagesFromInput(files);
+    const collected = await collectPagesFromInput(splitIntoBooks(files)[0]);
     textCheck.release = collected.cleanup || null;
     let pages = collected.pages;
     // The same pages the conversion will see, so a fix lands on the page it was made on.
@@ -3439,20 +3525,29 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
   applyResChoiceUi();
   $("manga-run").addEventListener("click", runMangaConversion);
   $("manga-cancel").addEventListener("click", () => { mangaState.cancelled = true; });
-  $("manga-file").addEventListener("change", () => {
-    const files = $("manga-file").files;
+  // Either picker: the file picker (archives, a .mokuro file and its images, page images) or the
+  // folder picker (a Mokuro volume or library, a folder of page images). The last pick counts.
+  const onFilesChosen = (input) => {
+    const files = input.files;
+    if (!files.length) return;
+    mangaState.files = files;
     mangaState.mokuroInput = false;
     applyFormatVisibility();
-    if (files.length) {
+    {
       selectionIsMokuro(files).then((isMokuro) => {
-        if ($("manga-file").files !== files) return;  // a newer pick replaced this one
+        if (mangaState.files !== files) return;  // a newer pick replaced this one
         mangaState.mokuroInput = isMokuro;
         applyFormatVisibility();
         applyTextCheckUi();
+        updateRunSummary();
       }).catch(() => {});
-      const bookCount = splitIntoBooks(files).length;
-      $("manga-file-label").textContent = files.length === 1 ? files[0].name
-        : bookCount > 1 ? `${bookCount} books selected, converted one after another` : `${files.length} files selected`;
+      const books = splitIntoBooks(files);
+      const volumes = books.length > 1 && books.every((b) => isMokuroName(b[0].name));
+      const folder = files[0].webkitRelativePath ? files[0].webkitRelativePath.split("/")[0] : "";
+      $("manga-file-label").textContent = volumes ? `${books.length} Mokuro volumes${folder ? ` in ${folder}` : ""}, converted one after another`
+        : books.length > 1 ? `${books.length} books selected, converted one after another`
+        : folder ? `Folder ${folder}: ${books[0].length} file${books[0].length === 1 ? "" : "s"}`
+        : files.length === 1 ? files[0].name : `${files.length} files selected`;
       showFileNameMeta();
       panelEdits.clear();
       releasePanelCheckSource();
@@ -3464,8 +3559,12 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
       $("text-check").hidden = true;
       $("text-check-btn").textContent = "Check text";
       clearValidationWarnings();
+      updateRunSummary();
     }
-  });
+  };
+  $("manga-file").addEventListener("change", () => onFilesChosen($("manga-file")));
+  $("manga-folder").addEventListener("change", () => onFilesChosen($("manga-folder")));
+  $("manga-folder-btn").addEventListener("click", () => $("manga-folder").click());
   // The API-key warning is fixed by either supplying a key or skipping text recognition.
   $("manga-key").addEventListener("input", clearValidationWarnings);
   $("manga-ocr-engine").addEventListener("change", clearValidationWarnings);
