@@ -1721,6 +1721,15 @@ function testPpocr() {
   const noBoxes = { box: [0, 0, 10, 10], text: "ゴゴゴ", lines: [], vertical: true };
   check("text check: a block without line boxes is edited as one line",
     manga.textBlockLines(noBoxes).length === 1 && manga.textBlockFromLines(noBoxes, [{ text: "ゴゴ\nゴ", box: noBoxes.box, conf: 1 }]).text === "ゴゴゴ");
+  const added = manga.textBlockFromBox([100, 50, 160, 250], "ここに\n\n何かが\nある ", true);
+  check("text check: an added vertical bubble has one column per line, right to left",
+    added.text === "ここに\n何かが\nある" && added.added === true && added.vertical
+    && JSON.stringify(added.lines) === "[[140,50,160,250],[120,50,140,250],[100,50,120,250]]"
+    && JSON.stringify(added.conf) === "[1,1,1]", JSON.stringify(added));
+  const across = manga.textBlockFromBox([0, 0, 300, 90], "HELLO\nTHERE", false);
+  check("text check: an added horizontal bubble has one row per line, top to bottom",
+    JSON.stringify(across.lines) === "[[0,0,300,45],[0,45,300,90]]", JSON.stringify(across));
+  check("text check: an added bubble with no text has no lines", manga.textBlockFromBox([0, 0, 10, 10], " \n ", true).text === "");
   const scaled = manga.scaleTextBlocks([tb], 400, 1200, 200, 600)[0];
   check("text check: fixed text follows the page to another size",
     JSON.stringify(scaled.box) === JSON.stringify(tb.box.map((v) => Math.round(v / 2)))

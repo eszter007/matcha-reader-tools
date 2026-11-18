@@ -2524,13 +2524,31 @@ function drawTextBlocksOn(ctx, page, blocks, scale, selected = -1) {
   ctx.font = `bold ${Math.max(10, Math.round(22 * scale))}px system-ui, sans-serif`;
   blocks.forEach((b, i) => {
     const [x1, y1, x2, y2] = b.box;
-    const color = textBlockLines(b).some((l) => isUnsureLine(l.conf)) ? "#d9480f" : "#1971c2";
+    // Unsure bubbles are dashed as well as orange, so the colour is not the only sign; added ones green.
+    const unsure = textBlockLines(b).some((l) => isUnsureLine(l.conf));
+    const color = b.added ? "#2f9e44" : unsure ? "#d9480f" : "#1971c2";
     if (i === selected) {
       ctx.fillStyle = "rgba(25,113,194,0.16)";
       ctx.fillRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
     }
     ctx.strokeStyle = color;
+    ctx.setLineDash(unsure ? [Math.max(3, 7 * scale), Math.max(2, 4 * scale)] : []);
+    ctx.lineWidth = Math.max(1.5, 2.5 * scale) * (i === selected ? 1.6 : 1);
     ctx.strokeRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale);
+    ctx.setLineDash([]);
+    // An added bubble shows how its box is shared out among its lines.
+    if (b.added && b.lines.length > 1) {
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1;
+      for (const [lx1, ly1, lx2, ly2] of b.lines.slice(1)) {
+        ctx.beginPath();
+        if (b.vertical) { ctx.moveTo(lx2 * scale, ly1 * scale); ctx.lineTo(lx2 * scale, ly2 * scale); }
+        else { ctx.moveTo(lx1 * scale, ly1 * scale); ctx.lineTo(lx2 * scale, ly1 * scale); }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
     const label = String(i + 1);
     const tw = ctx.measureText(label).width + 8 * Math.max(0.5, scale);
     const th = Math.max(13, Math.round(28 * scale));
@@ -2655,10 +2673,15 @@ async function runTextCheck() {
  * The page on one side, its bubbles on the other: each bubble enlarged, with one field per line.
  * The line being edited is outlined on the page and in the enlarged bubble. Enter keeps the line as
  * it stands (fixed or not) and moves on to the next unsure line, across pages, so a book can be
- * reviewed line by line without touching the mouse. */
+ * reviewed line by line without touching the mouse. Text the reader missed gets a bubble drawn over
+ * it by hand (or placed with the keyboard) and typed in. */
 
-// line: [block, line] being edited, or null. cursor: the last line visited, where "next unsure" goes on from.
-const te = { page: null, blocks: [], sel: -1, line: null, cursor: null, scale: 1 };
+// line: [block, line] being edited, or null. cursor: the last line visited, where "next unsure" goes on
+// from. draw: the next drag on the page draws a bubble. drag: a bubble being drawn, moved or resized.
+// pending: the first corner of a bubble being drawn with two clicks.
+const te = { page: null, blocks: [], sel: -1, line: null, cursor: null, scale: 1, draw: false, drag: null, pending: null };
+const TE_MIN_SIDE = 12;      // smallest bubble that can be drawn, in page pixels
+const TE_HANDLE_PX = 14;     // corner grab size of an added bubble, in screen pixels
 
 /* Every unsure line of the book, in reading order: [page, block, line]. */
 function unsureLines() {
@@ -2689,6 +2712,7 @@ async function openTextEditor(i, focus = null) {
     console.error(e);
     return;
   }
+  const changedPage = textCheck.editIndex !== i || !$("text-editor").open;
   textCheck.editIndex = i;
   prep.bitmap.close && prep.bitmap.close();
   te.page = prep.canvas;
@@ -2696,6 +2720,8 @@ async function openTextEditor(i, focus = null) {
   te.sel = -1;
   te.line = null;
   te.cursor = null;
+  te.drag = null;
+  setTextDrawMode(false);
   $("te-title").textContent = `Page ${i + 1} of ${textCheck.pages.length}`;
   $("te-prev").disabled = i === 0;
   $("te-next").disabled = i === textCheck.pages.length - 1;
@@ -2703,14 +2729,16 @@ async function openTextEditor(i, focus = null) {
   if (!dlg.open) dlg.showModal();
   layoutTextEditor();
   renderTextBlockList();
+  const unsure = unsureLineCount(te.blocks);
+  const summary = `Page ${i + 1} of ${textCheck.pages.length}: ${te.blocks.length} bubble${te.blocks.length === 1 ? "" : "s"}` +
+    (unsure ? `, ${unsure} unsure line${unsure === 1 ? "" : "s"}.` : ".");
   if (focus) {
+    if (changedPage) teAnnounce(`Page ${i + 1} of ${textCheck.pages.length}.`);
     focusTextLine(focus[0], focus[1]);
   } else {
-    const unsure = unsureLineCount(te.blocks);
-    teAnnounce(`${te.blocks.length} bubble${te.blocks.length === 1 ? "" : "s"} on this page` +
-      (unsure ? `, ${unsure} unsure line${unsure === 1 ? "" : "s"}.` : "."));
-    const first = $("te-blocks").querySelector(".te-line.unsure input") || $("te-blocks").querySelector("input");
-    (first || $("te-close")).focus();
+    teAnnounce(summary);
+    const first = $("te-blocks").querySelector(".te-line.unsure input") || $("te-blocks").querySelector("input, textarea");
+    (first || $("te-add")).focus();
   }
 }
 
@@ -2748,7 +2776,7 @@ function dropUnsureLines() {
   commitTextEdits();
   renderTextBlockList();
   teAnnounce(`Removed ${before} unsure line${before === 1 ? "" : "s"}. Reset page brings them back.`);
-  ($("te-blocks").querySelector("input") || $("te-close")).focus();
+  ($("te-blocks").querySelector("input, textarea") || $("te-add")).focus();
 }
 
 function layoutTextEditor() {
@@ -2774,6 +2802,18 @@ function outlineLine(ctx, box, scale, ox = 0, oy = 0) {
   ctx.restore();
 }
 
+function teNormBox([x1, y1, x2, y2]) {
+  return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+}
+
+/* A bubble box kept on the page and at least TE_MIN_SIDE on each side. */
+function teClampBox([x1, y1, x2, y2]) {
+  const W = te.page.width, H = te.page.height;
+  const w = Math.min(W, Math.max(TE_MIN_SIDE, x2 - x1)), h = Math.min(H, Math.max(TE_MIN_SIDE, y2 - y1));
+  const nx = Math.min(W - w, Math.max(0, x1)), ny = Math.min(H - h, Math.max(0, y1));
+  return [Math.round(nx), Math.round(ny), Math.round(nx + w), Math.round(ny + h)];
+}
+
 function drawTextEditor() {
   const c = $("te-canvas");
   const ctx = c.getContext("2d");
@@ -2783,7 +2823,27 @@ function drawTextEditor() {
     const l = textBlockLines(te.blocks[te.line[0]])[te.line[1]];
     if (l) outlineLine(ctx, l.box, te.scale);
   }
-  c.setAttribute("aria-label", `The page, ${te.blocks.length} text bubble${te.blocks.length === 1 ? "" : "s"}` +
+  // The selected added bubble's resize handle.
+  const sel = te.blocks[te.sel];
+  if (sel && sel.added) {
+    const [, , x2, y2] = sel.box;
+    ctx.fillStyle = "#1971c2";
+    ctx.fillRect(x2 * te.scale - TE_HANDLE_PX, y2 * te.scale - TE_HANDLE_PX, TE_HANDLE_PX, TE_HANDLE_PX);
+  }
+  if (te.pending) {
+    ctx.fillStyle = "#1971c2";
+    ctx.beginPath(); ctx.arc(te.pending[0] * te.scale, te.pending[1] * te.scale, 5, 0, Math.PI * 2); ctx.fill();
+  }
+  if (te.drag && te.drag.mode === "new") {
+    const [x1, y1, x2, y2] = teNormBox(te.drag.box);
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#1971c2";
+    ctx.strokeRect(x1 * te.scale, y1 * te.scale, (x2 - x1) * te.scale, (y2 - y1) * te.scale);
+    ctx.restore();
+  }
+  c.setAttribute("aria-label", `Page with ${te.blocks.length} text bubble${te.blocks.length === 1 ? "" : "s"}` +
     (te.sel >= 0 ? `, bubble ${te.sel + 1} selected` : ""));
 }
 
@@ -2799,7 +2859,7 @@ function drawTextBlockZoom(canvas, block, line) {
   const [x1, y1, x2, y2] = block.box;
   const pad = Math.round(Math.max(x2 - x1, y2 - y1) * 0.08) + 4;
   const sx = Math.max(0, x1 - pad), sy = Math.max(0, y1 - pad);
-  const sw = Math.min(te.page.width, x2 + pad) - sx, sh = Math.min(te.page.height, y2 + pad) - sy;
+  const sw = Math.max(1, Math.min(te.page.width, x2 + pad) - sx), sh = Math.max(1, Math.min(te.page.height, y2 + pad) - sy);
   const scale = Math.min(TE_ZOOM_W / sw, TE_ZOOM_H / sh, 3);
   canvas.width = Math.max(1, Math.round(sw * scale));
   canvas.height = Math.max(1, Math.round(sh * scale));
@@ -2809,11 +2869,12 @@ function drawTextBlockZoom(canvas, block, line) {
   if (line) outlineLine(ctx, line.box, scale, sx, sy);
 }
 
-/* Save the editor's blocks for this page and refresh what shows them. */
+/* Save the editor's blocks for this page and refresh what shows them. An added bubble still waiting
+ * for its text is not saved. */
 function commitTextEdits() {
   const p = textCheck.pages[textCheck.editIndex];
   textEdits.set(p.name, { w: te.page.width, h: te.page.height, trim: !!textCheck.opts.trimMargins,
-    blocks: te.blocks.map((b) => ({ ...b })) });
+    blocks: te.blocks.filter((b) => b.text.trim()).map((b) => ({ ...b })) });
   p.thumb = textCheckThumb(te.page, te.blocks);
   drawTextEditor();
   updateUnsureCounter();
@@ -2833,23 +2894,289 @@ function applyTextLine(i, j, { text, confirm }) {
   return !!rebuilt;
 }
 
-function selectTextBlock(i, scroll) {
+function selectTextBlock(i, focusField) {
   te.sel = i;
   if (!te.line || te.line[0] !== i) te.line = null;
   drawTextEditor();
   for (const li of $("te-blocks").children) li.classList.toggle("selected", Number(li.dataset.i) === i);
-  if (scroll && i >= 0) {
-    const li = $("te-blocks").querySelector(`li[data-i="${i}"]`);
-    if (li) { li.scrollIntoView({ block: "nearest" }); const input = li.querySelector("input"); if (input) input.focus(); }
+  const li = i >= 0 ? $("te-blocks").querySelector(`li[data-i="${i}"]`) : null;
+  if (li) {
+    li.scrollIntoView({ block: "nearest" });
+    if (focusField) { const field = li.querySelector("input, textarea"); if (field) field.focus(); }
   }
 }
 
 function focusTextLine(i, j) {
-  const input = $("te-blocks").querySelectorAll(`li[data-i="${i}"] .te-line input`)[j];
-  if (!input) return;
-  input.focus();
-  input.select();
-  input.closest("li").scrollIntoView({ block: "nearest" });
+  const field = $("te-blocks").querySelectorAll(`li[data-i="${i}"] .te-line input`)[j]
+    || $("te-blocks").querySelector(`li[data-i="${i}"] textarea`);
+  if (!field) return;
+  field.focus();
+  if (field.select) field.select();
+  field.closest("li").scrollIntoView({ block: "nearest" });
+}
+
+/* One sentence a screen reader says about a bubble when it is picked on the page. */
+function describeTextBlock(i) {
+  const b = te.blocks[i];
+  const text = b.text.replace(/\n/g, " ").trim();
+  const unsure = textBlockLines(b).filter((l) => isUnsureLine(l.conf)).length;
+  return `Bubble ${i + 1} of ${te.blocks.length}` + (b.added ? ", added by hand" : "") +
+    (unsure ? `, ${unsure} unsure line${unsure === 1 ? "" : "s"}` : "") + (text ? `: ${text}` : ", no text yet");
+}
+
+/* ── Adding bubbles ── */
+
+function setTextDrawMode(on) {
+  te.draw = on;
+  if (!on) te.pending = null;
+  $("te-add").setAttribute("aria-pressed", on ? "true" : "false");
+  $("te-canvas").classList.toggle("drawing", on);
+  $("te-draw-help").hidden = !on;
+  if (te.page) drawTextEditor();
+}
+
+/* A new, empty bubble over `box`, selected and waiting for its text. Vertical when taller than wide. */
+function addTextBubble(box, focusText = true) {
+  const b = teClampBox(teNormBox(box));
+  const vertical = b[3] - b[1] >= b[2] - b[0];
+  te.blocks.push({ ...textBlockFromBox(b, "", vertical) });
+  te.sel = te.blocks.length - 1;
+  te.line = null;
+  setTextDrawMode(false);
+  renderTextBlockList();
+  if (focusText) {
+    const area = $("te-blocks").querySelector(`li[data-i="${te.sel}"] textarea`);
+    if (area) { area.focus(); area.closest("li").scrollIntoView({ block: "nearest" }); }
+    teAnnounce(`Bubble ${te.sel + 1} added. Type its text, one line per printed line.`);
+  }
+}
+
+/* Move or resize an added bubble; its lines are shared out over the new box. */
+function setAddedBox(i, box) {
+  const b = te.blocks[i];
+  te.blocks[i] = { ...textBlockFromBox(teClampBox(box), b.text, b.vertical) };
+}
+
+function tePoint(ev) {
+  const r = $("te-canvas").getBoundingClientRect();
+  return [(ev.clientX - r.left) / te.scale, (ev.clientY - r.top) / te.scale];
+}
+
+/* The smallest bubble under a point, so one inside a larger one can still be picked; for an added
+ * bubble, whether the point is on its resize corner. */
+function teHit([x, y]) {
+  const grab = TE_HANDLE_PX / te.scale;
+  let hit = null, area = Infinity;
+  te.blocks.forEach((b, i) => {
+    const [x1, y1, x2, y2] = b.box;
+    if (b.added && Math.abs(x - x2) <= grab && Math.abs(y - y2) <= grab) { hit = { i, corner: true }; area = -1; return; }
+    const a = (x2 - x1) * (y2 - y1);
+    if (x >= x1 && x <= x2 && y >= y1 && y <= y2 && a < area) { hit = { i, corner: false }; area = a; }
+  });
+  return hit;
+}
+
+/* ── The bubble list ── */
+
+function textBlockCard(block, i, list) {
+  const lines = textBlockLines(block);
+  const li = document.createElement("li");
+  li.dataset.i = String(i);
+  li.className = "te-block" + (i === te.sel ? " selected" : "") + (block.added ? " added" : "");
+  const headId = `te-block-${i}`;
+  li.setAttribute("aria-labelledby", headId);
+  const head = document.createElement("div");
+  head.className = "te-block-head";
+  const name = document.createElement("span");
+  name.className = "te-block-name";
+  name.id = headId;
+  name.innerHTML = `<span aria-hidden="true">${i + 1}</span><span class="sr-only">Bubble ${i + 1}</span>`;
+  const unsure = lines.filter((l) => isUnsureLine(l.conf)).length;
+  const tag = document.createElement("span");
+  tag.className = "te-block-tag";
+  tag.textContent = block.added ? "Added by hand" : unsure ? `${unsure} unsure` : "";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "tool-btn danger te-remove";
+  remove.innerHTML = '<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l16 0"/><path d="M10 11l0 6"/><path d="M14 11l0 6"/><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12"/><path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3"/></svg>' +
+    `<span>${block.added ? "Remove" : "Not text"}</span>`;
+  remove.title = block.added ? "Remove this bubble" : "Remove this bubble: it isn't text";
+  remove.setAttribute("aria-label", block.added ? `Remove bubble ${i + 1}` : `Remove bubble ${i + 1}: it isn't text`);
+  remove.addEventListener("click", () => removeTextBubble(i));
+  head.append(name, tag, remove);
+  const zoom = document.createElement("canvas");
+  zoom.className = "te-zoom";
+  zoom.setAttribute("aria-hidden", "true");
+  drawTextBlockZoom(zoom, block, null);
+  li.append(head, zoom);
+  if (block.added) addedBubbleFields(li, block, i, zoom);
+  else lines.forEach((line, j) => li.append(textLineRow(li, block, lines, line, i, j, zoom, tag, list)));
+  li.addEventListener("click", (ev) => { if (ev.target === li || ev.target === zoom) selectTextBlock(i, true); });
+  return li;
+}
+
+function removeTextBubble(i) {
+  const added = te.blocks[i].added;
+  te.blocks.splice(i, 1);
+  te.sel = -1;
+  te.line = null;
+  commitTextEdits();
+  renderTextBlockList();
+  teAnnounce(`Bubble ${i + 1} removed. ${te.blocks.length} left.` + (added ? "" : " Reset page brings it back."));
+  const next = $("te-blocks").querySelector(`li[data-i="${Math.min(i, te.blocks.length - 1)}"] input, li[data-i="${Math.min(i, te.blocks.length - 1)}"] textarea`);
+  (next || $("te-add")).focus();
+}
+
+/* An added bubble: its text as typed, one printed line per row, and which way it is written. */
+function addedBubbleFields(li, block, i, zoom) {
+  const lang = $("manga-language").value.trim() || "ja";
+  const areaId = `te-added-${i}`;
+  const label = document.createElement("label");
+  label.className = "te-added-label";
+  label.htmlFor = areaId;
+  label.textContent = block.vertical ? "Text, one column per line, right to left" : "Text, one line per row";
+  const area = document.createElement("textarea");
+  area.id = areaId;
+  area.lang = lang;
+  area.spellcheck = false;
+  area.rows = Math.max(2, block.text.split("\n").length + 1);
+  area.value = block.text;
+  area.placeholder = "Type the text in this bubble";
+  area.setAttribute("aria-describedby", "te-added-help");
+  const vertical = document.createElement("label");
+  vertical.className = "te-vertical";
+  const vbox = document.createElement("input");
+  vbox.type = "checkbox";
+  vbox.checked = block.vertical;
+  vertical.append(vbox, document.createTextNode(" Vertical text"));
+  const rebuild = () => {
+    te.blocks[i] = { ...textBlockFromBox(te.blocks[i].box, area.value, vbox.checked) };
+    label.textContent = vbox.checked ? "Text, one column per line, right to left" : "Text, one line per row";
+  };
+  area.addEventListener("focus", () => {
+    te.sel = i;
+    te.line = null;
+    for (const other of li.parentElement.children) other.classList.toggle("selected", other === li);
+    drawTextEditor();
+  });
+  area.addEventListener("input", () => { rebuild(); area.rows = Math.max(2, area.value.split("\n").length + 1); drawTextEditor(); });
+  area.addEventListener("change", () => {
+    if (!area.isConnected) return;
+    rebuild();
+    commitTextEdits();
+    drawTextBlockZoom(zoom, te.blocks[i], null);
+    teAnnounce(te.blocks[i].text ? "Bubble saved." : "This bubble has no text yet, so it is not kept.");
+  });
+  // Ctrl+Enter (Cmd+Enter on a Mac) saves and moves on, as Enter does in a single line.
+  area.addEventListener("keydown", async (ev) => {
+    if (ev.key !== "Enter" || !(ev.ctrlKey || ev.metaKey) || ev.isComposing) return;
+    ev.preventDefault();
+    rebuild();
+    commitTextEdits();
+    te.cursor = [i, Infinity];
+    if (unsureLines().length) await goToNextUnsure();
+    else { teAnnounce("Bubble saved."); $("te-add").focus(); }
+  });
+  vbox.addEventListener("change", () => {
+    rebuild();
+    commitTextEdits();
+    teAnnounce(vbox.checked ? "Vertical: lines are columns, right to left." : "Horizontal: lines are rows.");
+  });
+  li.append(label, area, vertical);
+}
+
+function textLineRow(li, block, lines, line, i, j, zoom, tag, list) {
+  const row = document.createElement("div");
+  const isUnsure = isUnsureLine(line.conf);
+  row.className = "te-line" + (isUnsure ? " unsure" : "");
+  const flag = document.createElement("span");
+  flag.className = "te-flag";
+  flag.setAttribute("aria-hidden", "true");
+  flag.title = "Hard to read";
+  flag.innerHTML = '<svg class="ui-icon" viewBox="0 0 24 24"><path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/></svg>';
+  const input = document.createElement("input");
+  input.type = "text";
+  input.lang = $("manga-language").value.trim() || "ja";
+  input.value = line.text;
+  input.spellcheck = false;
+  input.autocomplete = "off";
+  input.enterKeyHint = "next";
+  const labelFor = (unsure) => `Bubble ${i + 1}, line ${j + 1} of ${lines.length}` + (unsure ? ", unsure" : "");
+  input.setAttribute("aria-label", labelFor(isUnsure));
+  if (isUnsure) input.setAttribute("aria-describedby", "te-unsure-help");
+  const current = () => textBlockLines(te.blocks[i])[j];
+  // The row as it is now that the line was saved or marked right: no longer unsure.
+  const settle = () => {
+    row.classList.remove("unsure");
+    const okBtn = row.querySelector(".te-ok");
+    if (okBtn) okBtn.remove();
+    input.setAttribute("aria-label", labelFor(false));
+    input.removeAttribute("aria-describedby");
+    const left = textBlockLines(te.blocks[i]).filter((l) => isUnsureLine(l.conf)).length;
+    tag.textContent = left ? `${left} unsure` : "";
+  };
+  // Saves the field. The list is only rebuilt when a line or bubble went away, so focus and
+  // scrolling stay where they are while typing through a bubble.
+  const save = (confirm) => {
+    const count = lines.length;
+    const changed = input.value.trim() !== current().text;
+    if (!changed && !(confirm && isUnsureLine(current().conf))) return "same";
+    const kept = applyTextLine(i, j, { text: input.value, confirm });
+    if (kept && textBlockLines(te.blocks[i]).length === count) { settle(); return "saved"; }
+    renderTextBlockList();
+    return kept ? "line-removed" : "bubble-removed";
+  };
+  input.addEventListener("focus", () => {
+    te.sel = i;
+    te.line = [i, j];
+    te.cursor = [i, j];
+    for (const other of list.children) other.classList.toggle("selected", other === li);
+    drawTextEditor();
+    drawTextBlockZoom(zoom, te.blocks[i], current());
+  });
+  input.addEventListener("blur", () => {
+    if (!input.isConnected) return;
+    drawTextBlockZoom(zoom, te.blocks[i], null);
+    if (te.line && te.line[0] === i && te.line[1] === j) { te.line = null; drawTextEditor(); }
+  });
+  // Typing saves on leaving the field; Enter saves too and moves on.
+  input.addEventListener("change", () => {
+    if (!input.isConnected) return;
+    const r = save(false);
+    if (r === "saved") teAnnounce("Line saved.");
+    else if (r === "line-removed") teAnnounce("Line removed.");
+    else if (r === "bubble-removed") teAnnounce(`Bubble ${i + 1} is empty and was removed.`);
+  });
+  input.addEventListener("keydown", async (ev) => {
+    if (ev.key !== "Enter" || ev.isComposing) return;
+    ev.preventDefault();
+    const r = save(true);
+    const rebuilt = r === "line-removed" || r === "bubble-removed";
+    // Where to look on from: the lines and bubbles after this one moved up when it went.
+    te.cursor = r === "bubble-removed" ? [i - 1, Infinity] : [i, r === "line-removed" ? j - 1 : j];
+    if (unsureLines().length) { await goToNextUnsure(); return; }
+    teAnnounce("No unsure lines left.");
+    const fields = [...list.querySelectorAll(".te-line input")];
+    const at = rebuilt ? -1 : fields.indexOf(input);
+    const next = at >= 0 ? fields[at + 1] : list.querySelector(`li[data-i="${i}"] input`);
+    (next || $("te-close")).focus();
+  });
+  row.append(flag, input);
+  if (isUnsure) {
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "tool-btn te-ok";
+    ok.innerHTML = '<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5l10 -10"/></svg>';
+    ok.title = "Looks right (Enter)";
+    ok.setAttribute("aria-label", `Line ${j + 1} of bubble ${i + 1} looks right`);
+    ok.addEventListener("click", () => {
+      const r = save(true);
+      teAnnounce(r === "saved" ? "Marked as right." : "Line saved.");
+      if (r === "saved") input.focus();
+    });
+    row.append(ok);
+  }
+  return row;
 }
 
 function renderTextBlockList() {
@@ -2857,149 +3184,130 @@ function renderTextBlockList() {
   list.textContent = "";
   $("te-empty").hidden = te.blocks.length > 0;
   updateUnsureCounter();
-  te.blocks.forEach((block, i) => {
-    const lines = textBlockLines(block);
-    const li = document.createElement("li");
-    li.dataset.i = String(i);
-    li.className = "te-block" + (i === te.sel ? " selected" : "");
-    const head = document.createElement("div");
-    head.className = "te-block-head";
-    const name = document.createElement("span");
-    name.className = "te-block-name";
-    name.textContent = `${i + 1}`;
-    name.setAttribute("aria-label", `Bubble ${i + 1}`);
-    const unsure = lines.filter((l) => isUnsureLine(l.conf)).length;
-    const tag = document.createElement("span");
-    tag.className = "te-block-tag";
-    tag.textContent = unsure ? `${unsure} unsure` : "";
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "tool-btn danger te-remove";
-    remove.innerHTML = '<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l16 0"/><path d="M10 11l0 6"/><path d="M14 11l0 6"/><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12"/><path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3"/></svg><span>Not text</span>';
-    remove.title = "Remove this bubble: it isn't text";
-    remove.setAttribute("aria-label", `Remove bubble ${i + 1}: it isn't text`);
-    remove.addEventListener("click", () => {
-      te.blocks.splice(i, 1);
-      te.sel = -1;
-      te.line = null;
-      commitTextEdits();
-      renderTextBlockList();
-      teAnnounce(`Bubble ${i + 1} removed. ${te.blocks.length} left.`);
-      const next = list.querySelector(`li[data-i="${Math.min(i, te.blocks.length - 1)}"] input`);
-      (next || $("te-close")).focus();
-    });
-    head.append(name, tag, remove);
-    const zoom = document.createElement("canvas");
-    zoom.className = "te-zoom";
-    zoom.setAttribute("aria-hidden", "true");
-    drawTextBlockZoom(zoom, block, null);
-    li.append(head, zoom);
-
-    lines.forEach((line, j) => {
-      const row = document.createElement("div");
-      const isUnsure = isUnsureLine(line.conf);
-      row.className = "te-line" + (isUnsure ? " unsure" : "");
-      const input = document.createElement("input");
-      input.type = "text";
-      input.lang = $("manga-language").value.trim() || "ja";
-      input.value = line.text;
-      input.spellcheck = false;
-      input.enterKeyHint = "next";
-      input.setAttribute("aria-label", `Bubble ${i + 1}, line ${j + 1} of ${lines.length}` +
-        (isUnsure ? ", unsure: Enter keeps it and moves to the next unsure line" : ""));
-      const current = () => textBlockLines(te.blocks[i])[j];
-      // The row as it is now that the line was saved or marked right: no longer unsure.
-      const settle = () => {
-        row.classList.remove("unsure");
-        const okBtn = row.querySelector(".te-ok");
-        if (okBtn) okBtn.remove();
-        input.setAttribute("aria-label", `Bubble ${i + 1}, line ${j + 1} of ${lines.length}`);
-        const left = textBlockLines(te.blocks[i]).filter((l) => isUnsureLine(l.conf)).length;
-        tag.textContent = left ? `${left} unsure` : "";
-      };
-      // Saves the field. The list is only rebuilt when a line or bubble went away, so focus and
-      // scrolling stay where they are while typing through a bubble.
-      const save = (confirm) => {
-        const count = lines.length;
-        const changed = input.value.trim() !== current().text;
-        if (!changed && !(confirm && isUnsureLine(current().conf))) return "same";
-        const kept = applyTextLine(i, j, { text: input.value, confirm });
-        if (kept && textBlockLines(te.blocks[i]).length === count) { settle(); return "saved"; }
-        renderTextBlockList();
-        return kept ? "line-removed" : "bubble-removed";
-      };
-      input.addEventListener("focus", () => {
-        te.sel = i;
-        te.line = [i, j];
-        te.cursor = [i, j];
-        for (const other of list.children) other.classList.toggle("selected", other === li);
-        drawTextEditor();
-        drawTextBlockZoom(zoom, te.blocks[i], current());
-      });
-      input.addEventListener("blur", () => {
-        if (!input.isConnected) return;
-        drawTextBlockZoom(zoom, te.blocks[i], null);
-        if (te.line && te.line[0] === i && te.line[1] === j) { te.line = null; drawTextEditor(); }
-      });
-      // Typing saves on leaving the field; Enter saves too and moves on.
-      input.addEventListener("change", () => {
-        if (!input.isConnected) return;
-        const r = save(false);
-        if (r === "saved") teAnnounce("Line saved.");
-        else if (r === "line-removed") teAnnounce("Line removed.");
-        else if (r === "bubble-removed") teAnnounce(`Bubble ${i + 1} is empty and was removed.`);
-      });
-      input.addEventListener("keydown", async (ev) => {
-        if (ev.key !== "Enter" || ev.isComposing) return;
-        ev.preventDefault();
-        const r = save(true);
-        const rebuilt = r === "line-removed" || r === "bubble-removed";
-        // Where to look on from: the lines and bubbles after this one moved up when it went.
-        te.cursor = r === "bubble-removed" ? [i - 1, Infinity] : [i, r === "line-removed" ? j - 1 : j];
-        if (unsureLines().length) { await goToNextUnsure(); return; }
-        teAnnounce("No unsure lines left.");
-        const inputs = [...list.querySelectorAll(".te-line input")];
-        const at = rebuilt ? null : inputs.indexOf(input);
-        const nextInput = at !== null && at >= 0 ? inputs[at + 1] : list.querySelector(`li[data-i="${i}"] input`);
-        (nextInput || $("te-close")).focus();
-      });
-      row.append(input);
-      if (isUnsure) {
-        const ok = document.createElement("button");
-        ok.type = "button";
-        ok.className = "tool-btn te-ok";
-        ok.innerHTML = '<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5l10 -10"/></svg>';
-        ok.title = "Looks right (Enter)";
-        ok.setAttribute("aria-label", `Bubble ${i + 1}, line ${j + 1} looks right`);
-        ok.addEventListener("click", () => {
-          const r = save(true);
-          teAnnounce(r === "saved" ? "Marked as right." : "Line saved.");
-          if (r === "saved") input.focus();
-        });
-        row.append(ok);
-      }
-      li.append(row);
-    });
-    li.addEventListener("click", (ev) => { if (ev.target === li || ev.target === zoom) selectTextBlock(i, true); });
-    list.append(li);
-  });
+  te.blocks.forEach((block, i) => list.append(textBlockCard(block, i, list)));
   drawTextEditor();
 }
 
 function wireTextEditor() {
   const c = $("te-canvas");
-  c.addEventListener("click", (ev) => {
-    const r = c.getBoundingClientRect();
-    const x = (ev.clientX - r.left) / te.scale, y = (ev.clientY - r.top) / te.scale;
-    // The smallest bubble under the click, so one inside a larger one can still be picked.
-    let hit = -1, area = Infinity;
-    te.blocks.forEach((b, i) => {
-      const [x1, y1, x2, y2] = b.box;
-      const a = (x2 - x1) * (y2 - y1);
-      if (x >= x1 && x <= x2 && y >= y1 && y <= y2 && a < area) { hit = i; area = a; }
-    });
-    selectTextBlock(hit, true);
+  // Pointer: in draw mode a drag (or two clicks) draws a bubble; otherwise a click picks one, and an
+  // added bubble can be dragged or resized from its corner.
+  c.addEventListener("pointerdown", (ev) => {
+    const pt = tePoint(ev);
+    const hit = te.draw ? null : teHit(pt);
+    if (te.draw) {
+      c.setPointerCapture(ev.pointerId);
+      te.drag = { mode: "new", box: [pt[0], pt[1], pt[0], pt[1]] };
+    } else if (hit && te.blocks[hit.i].added) {
+      c.setPointerCapture(ev.pointerId);
+      te.sel = hit.i;
+      te.drag = { mode: hit.corner ? "resize" : "move", start: pt, orig: te.blocks[hit.i].box.slice(), moved: false };
+    } else {
+      // A click on a bubble goes straight to its text.
+      te.drag = null;
+      selectTextBlock(hit ? hit.i : -1, !!hit);
+      return;
+    }
+    drawTextEditor();
   });
+  c.addEventListener("pointermove", (ev) => {
+    const d = te.drag;
+    if (!d) return;
+    const [x, y] = tePoint(ev);
+    if (d.mode === "new") {
+      d.box[2] = x; d.box[3] = y;
+    } else {
+      const dx = x - d.start[0], dy = y - d.start[1];
+      if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
+      const [x1, y1, x2, y2] = d.orig;
+      setAddedBox(te.sel, d.mode === "move" ? [x1 + dx, y1 + dy, x2 + dx, y2 + dy]
+        : [x1, y1, Math.max(x1 + TE_MIN_SIDE, x2 + dx), Math.max(y1 + TE_MIN_SIDE, y2 + dy)]);
+    }
+    drawTextEditor();
+  });
+  const end = () => {
+    const d = te.drag;
+    if (!d) return;
+    te.drag = null;
+    if (d.mode !== "new") {
+      if (d.moved) { commitTextEdits(); renderTextBlockList(); }
+      selectTextBlock(te.sel, !d.moved);
+      return;
+    }
+    const b = teNormBox(d.box);
+    if (b[2] - b[0] < 4 && b[3] - b[1] < 4) {
+      // A click without a drag: the first sets a corner, the second the opposite one.
+      if (!te.pending) {
+        te.pending = [b[0], b[1]];
+        teAnnounce("Corner set. Click the opposite corner.");
+        drawTextEditor();
+        return;
+      }
+      const box = teNormBox([te.pending[0], te.pending[1], b[0], b[1]]);
+      te.pending = null;
+      if (box[2] - box[0] < TE_MIN_SIDE || box[3] - box[1] < TE_MIN_SIDE) { teAnnounce("Too small for a bubble."); drawTextEditor(); return; }
+      addTextBubble(box);
+      return;
+    }
+    te.pending = null;
+    if (b[2] - b[0] < TE_MIN_SIDE || b[3] - b[1] < TE_MIN_SIDE) { teAnnounce("Too small for a bubble."); drawTextEditor(); return; }
+    addTextBubble(b);
+  };
+  c.addEventListener("pointerup", end);
+  c.addEventListener("pointercancel", () => { te.drag = null; drawTextEditor(); });
+
+  // Keyboard on the page: [ and ] pick a bubble, Enter edits its text, Delete removes it, A adds
+  // one in the middle, and arrows move an added bubble (Shift resizes it).
+  c.addEventListener("keydown", (ev) => {
+    const n = te.blocks.length;
+    let handled = true;
+    if (ev.key === "]" || ev.key === "[") {
+      if (n) {
+        te.sel = ev.key === "]" ? (te.sel + 1) % n : (te.sel - 1 + n) % n;
+        selectTextBlock(te.sel, false);
+        teAnnounce(describeTextBlock(te.sel));
+      } else teAnnounce("No bubbles on this page. Press A to add one.");
+    } else if (ev.key === "Enter" && te.sel >= 0) {
+      selectTextBlock(te.sel, true);
+    } else if ((ev.key === "Delete" || ev.key === "Backspace") && te.sel >= 0) {
+      removeTextBubble(te.sel);
+    } else if (ev.key === "a" || ev.key === "A") {
+      placeBubbleInMiddle();
+    } else if (ev.key === "Escape" && (te.draw || te.pending)) {
+      setTextDrawMode(false);
+      teAnnounce("Adding cancelled.");
+    } else if (ev.key.startsWith("Arrow") && te.sel >= 0) {
+      const b = te.blocks[te.sel];
+      if (!b.added) { teAnnounce("Only bubbles you added can be moved."); }
+      else {
+        const step = Math.max(2, Math.round(10 / te.scale));
+        const dx = ev.key === "ArrowLeft" ? -step : ev.key === "ArrowRight" ? step : 0;
+        const dy = ev.key === "ArrowUp" ? -step : ev.key === "ArrowDown" ? step : 0;
+        const [x1, y1, x2, y2] = b.box;
+        setAddedBox(te.sel, ev.shiftKey ? [x1, y1, x2 + dx, y2 + dy] : [x1 + dx, y1 + dy, x2 + dx, y2 + dy]);
+        commitTextEdits();
+        const zoom = $("te-blocks").querySelector(`li[data-i="${te.sel}"] .te-zoom`);
+        if (zoom) drawTextBlockZoom(zoom, te.blocks[te.sel], null);
+        clearTimeout(te.moveNote);
+        te.moveNote = setTimeout(() => teAnnounce(ev.shiftKey ? "Bubble resized." : "Bubble moved."), 400);
+      }
+    } else {
+      handled = false;
+    }
+    if (handled) ev.preventDefault();
+  });
+  // Escape while drawing cancels the drawing, not the whole editor.
+  $("text-editor").addEventListener("cancel", (ev) => {
+    if (te.draw || te.pending || te.drag) { ev.preventDefault(); te.drag = null; setTextDrawMode(false); teAnnounce("Adding cancelled."); }
+  });
+  $("te-add").addEventListener("click", (ev) => {
+    if (te.draw) { setTextDrawMode(false); teAnnounce("Adding cancelled."); return; }
+    // From the keyboard there is nothing to drag: a bubble is placed in the middle to move into place.
+    if (ev.detail === 0) { placeBubbleInMiddle(); return; }
+    setTextDrawMode(true);
+    teAnnounce("Drag over the text on the page, or click two opposite corners. Escape cancels.");
+  });
+
   $("te-reset").addEventListener("click", () => {
     const p = textCheck.pages[textCheck.editIndex];
     textEdits.delete(p.name);
@@ -3019,7 +3327,8 @@ function wireTextEditor() {
   $("text-editor").addEventListener("close", () => {
     // A field still being typed in is saved, as leaving it would.
     const a = document.activeElement;
-    if (a && a.tagName === "INPUT" && $("te-blocks").contains(a)) a.dispatchEvent(new Event("change"));
+    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA") && $("te-blocks").contains(a)) a.dispatchEvent(new Event("change"));
+    setTextDrawMode(false);
     renderTextGrid();
     const thumbs = [...document.querySelectorAll("#text-grid .panel-thumb")];
     const back = thumbs.find((t) => t.getAttribute("aria-label").startsWith(`Page ${textCheck.editIndex + 1},`));
@@ -3028,6 +3337,16 @@ function wireTextEditor() {
   window.addEventListener("resize", () => { if ($("text-editor").open) layoutTextEditor(); });
   $("text-check-btn").addEventListener("click", runTextCheck);
   $("text-check-flagged").addEventListener("change", renderTextGrid);
+}
+
+/* A bubble in the middle of the page, selected on the page so the arrow keys move it into place. */
+function placeBubbleInMiddle() {
+  const W = te.page.width, H = te.page.height;
+  const w = Math.round(W / 8), h = Math.round(H / 5);
+  addTextBubble([(W - w) / 2, (H - h) / 2, (W + w) / 2, (H + h) / 2], false);
+  $("te-canvas").focus();
+  teAnnounce(`Bubble ${te.sel + 1} added in the middle of the page. Move it over the text with the arrow keys, ` +
+    "resize it with Shift and the arrows, then press Enter to type its text.");
 }
 
 /* The text check is for built-in recognition, which is the only one read before converting. */

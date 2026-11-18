@@ -1949,6 +1949,20 @@ function scaleTextBlocks(blocks, w, h, tw, th) {
   return blocks.map((b) => ({ ...b, box: map(b.box), lines: b.lines.map(map), ...(b.conf ? { conf: b.conf.slice() } : {}) }));
 }
 
+/* A bubble added by hand: a box drawn on the page and its text, one printed line per text line. The
+ * box is shared out evenly among the lines -- columns right to left when vertical, rows top to
+ * bottom otherwise -- so each line has a box for word lookup. Empty lines are dropped; the block
+ * keeps `added` so its box can still be moved and its text edited as a whole. */
+function textBlockFromBox(box, text, vertical) {
+  const texts = String(text).split(/\r?\n/).map((t) => t.trim()).filter(Boolean).slice(0, 255);
+  const [x1, y1, x2, y2] = box.map(Math.round);
+  const n = Math.max(1, texts.length);
+  const lines = texts.map((_, k) => (vertical
+    ? [Math.round(x2 - ((k + 1) * (x2 - x1)) / n), y1, Math.round(x2 - (k * (x2 - x1)) / n), y2]
+    : [x1, Math.round(y1 + (k * (y2 - y1)) / n), x2, Math.round(y1 + ((k + 1) * (y2 - y1)) / n)]));
+  return { box: [x1, y1, x2, y2], text: texts.join("\n"), lines, vertical: !!vertical, conf: texts.map(() => 1), added: true };
+}
+
 /* A block's lines as [{text, box, conf}]: one per line box, or the whole text as one line when the
  * block has no line boxes. */
 function textBlockLines(block) {
@@ -2021,6 +2035,6 @@ if (typeof module !== "undefined") {
     epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo, comicInfoBookmarks, chaptersFromFolders,
     xmlUnescape,
     epubTocFromNav, epubTocFromNcx, epubNavHref, epubNcxHref, parseTocText,
-    parseMokuroVolume, mokuroMeta, mokuroTextBlocks, assignBlocksToPanels, scaleTextBlocks, textBlockLines, textBlockFromLines,
+    parseMokuroVolume, mokuroMeta, mokuroTextBlocks, assignBlocksToPanels, scaleTextBlocks, textBlockLines, textBlockFromLines, textBlockFromBox,
   };
 }

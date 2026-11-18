@@ -707,6 +707,23 @@ async function testMangaTextCheck(page, base) {
   }
   const after = await page.$$eval("#te-blocks > li", (lis) => lis.length);
   check("a bubble marked not text is removed", before === 1 || after === before - 1, `${before} -> ${after}`);
+  // Text the reader missed: a bubble added from the keyboard, moved into place, then typed in.
+  await page.focus("#te-canvas");
+  await page.keyboard.press("a");
+  check("A on the page adds a bubble, selected on the page", await page.evaluate(() =>
+    document.activeElement.id === "te-canvas" && te.blocks[te.sel] && te.blocks[te.sel].added));
+  const placed = await page.evaluate(() => te.blocks[te.sel].box.slice());
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+ArrowDown");
+  const moved = await page.evaluate(() => te.blocks[te.sel].box.slice());
+  check("arrow keys move an added bubble, Shift resizes it",
+    moved[0] > placed[0] && moved[3] - moved[1] > placed[3] - placed[1], `${placed} -> ${moved}`);
+  await page.keyboard.press("Enter");
+  check("Enter goes to the added bubble's text", await page.evaluate(() => document.activeElement.tagName === "TEXTAREA"));
+  await page.keyboard.type("ふたつの");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("ことば");
+  await page.keyboard.press("Tab");
   await page.click("#te-close");
   // The dialog's close event, which redraws the grid, comes a moment after the click.
   const fixed = await page.waitForFunction(() => /Fixed|Check/.test(document.querySelector("#text-grid .panel-thumb").textContent),
@@ -723,6 +740,9 @@ async function testMangaTextCheck(page, base) {
     JSON.stringify(texts.map((t) => t.text)));
   check("the removed bubble is not", !removedText || !texts.some((t) => t.text.replace(/\n/g, "") === removedText),
     JSON.stringify(texts.map((t) => t.text)));
+  const added = texts.find((t) => t.text === "ふたつの\nことば");
+  check("the added bubble is in the book, one box per line, right to left",
+    added && added.vertical && added.lines.length === 2 && added.lines[0][0] > added.lines[1][0], JSON.stringify(added));
 }
 
 async function testMangaPanelsOnly(page, base) {
