@@ -818,6 +818,57 @@ with zipfile.ZipFile(sys.argv[2], "w") as z:
   check("the archive's volumes are announced", log.includes("Zip Series.cbz holds 2 Mokuro volumes"), log.slice(0, 400));
 }
 
+/* The text check on a Mokuro volume: no text recognition to choose, Mokuro's text shown as read,
+ * and a fixed line and an added bubble end up in the book instead of Mokuro's. */
+async function testMangaMokuroTextCheck(page, base) {
+  console.log("manga.html text check on a Mokuro volume:");
+  const pagesDir = path.join(OUT, "mokuro_pages");
+  unzipTo(path.join(FIXTURES, "manga.cbz"), pagesDir);
+  const vol = path.join(OUT, "mokuro_single");
+  fs.rmSync(vol, { recursive: true, force: true });
+  fs.mkdirSync(path.join(vol, "vol1"), { recursive: true });
+  for (const img of ["page01.png", "page02.png"]) fs.copyFileSync(path.join(pagesDir, img), path.join(vol, "vol1", img));
+  fs.writeFileSync(path.join(vol, "vol1.mokuro"), JSON.stringify({ title: "Checked Mokuro", volume: "vol1", pages: ["page01.png", "page02.png"].map((img) => ({
+    img_path: img, img_width: 0, img_height: 0,
+    blocks: [{ box: [40, 40, 80, 200], vertical: true, lines: ["まちがい"], lines_coords: [[[40, 40], [80, 40], [80, 200], [40, 200]]] }],
+  })) }));
+
+  await gotoManga(page, base);
+  await page.setInputFiles("#manga-folder", vol);
+  await page.uncheck("#manga-yolo");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
+  await page.waitForFunction(() => !document.querySelector("#text-check-row").hidden, null, { timeout: 10000 }).catch(() => {});
+  check("the text check is offered for a Mokuro volume, without choosing a recogniser",
+    await page.isVisible("#text-check-btn") && !(await page.isVisible("#ocr-engine-part")) && await page.isVisible("#ocr-hint-mokuro"));
+  await page.click("#text-check-btn");
+  await page.waitForFunction(() => /from Mokuro/.test(document.querySelector("#text-check-summary").textContent), null, { timeout: 60000 });
+  check("the grid counts Mokuro's bubbles", (await page.textContent("#text-check-summary")).startsWith("2 bubbles from Mokuro on 2 pages"),
+    await page.textContent("#text-check-summary"));
+  await (await page.$$("#text-grid .panel-thumb"))[0].click();
+  await page.waitForSelector("#text-editor[open] #te-blocks input");
+  check("Mokuro's text is shown as read, with no unsure queue",
+    await page.inputValue("#te-blocks input") === "まちがい" && !(await page.isVisible(".te-queue")));
+  await page.fill("#te-blocks input", "なおした");
+  await page.keyboard.press("Tab");
+  await page.focus("#te-canvas");
+  await page.keyboard.press("a");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("たした");
+  await page.keyboard.press("Tab");
+  await page.click("#te-close");
+
+  const zipFile = await downloadFromPage(page, () => page.click("#manga-run"));
+  const dest = path.join(OUT, "mokuro_text_check");
+  unzipTo(zipFile, dest);
+  const folder = fs.readdirSync(dest).find((n) => fs.existsSync(path.join(dest, n, "panels.dat")));
+  const pages = parsePanelsDat(path.join(dest, folder));
+  const first = pages[0].panels.flatMap((p) => p.texts.map((t) => t.text));
+  const second = pages[1].panels.flatMap((p) => p.texts.map((t) => t.text));
+  check("the fixed line and the added bubble replace Mokuro's text on that page",
+    first.includes("なおした") && first.includes("たした") && !first.includes("まちがい"), JSON.stringify(first));
+  check("the other page keeps Mokuro's text", JSON.stringify(second) === '["まちがい"]', JSON.stringify(second));
+}
+
 async function testMangaPanelsOnly(page, base) {
   console.log("manga.html end-to-end (panels-only, borderless pages, XTC + EPUB):");
   const cbz = path.join(FIXTURES, "manga_fullbleed.cbz");
@@ -1151,6 +1202,7 @@ async function testRuby(page, base) {
     await testMangaPpocr(page, base);
     await testMangaTextCheck(page, base);
     await testMangaMokuroLibrary(page, base);
+    await testMangaMokuroTextCheck(page, base);
     await testMangaNoOffscreenCanvas(browser, base);
     await testDict(page, base);
     await testDictMdx(page, base);

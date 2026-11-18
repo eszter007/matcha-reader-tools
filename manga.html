@@ -280,6 +280,9 @@
 
   <div class="card" id="card-ocr">
     <h3>4. Text recognition</h3>
+    <p class="hint" id="ocr-hint-mokuro" hidden>This Mokuro volume brings its own text, so nothing is read again.
+    Check it to fix lines, remove what isn't text, or add bubbles Mokuro missed.</p>
+    <div id="ocr-engine-part">
     <p class="hint">Reading the text is what makes dictionary lookup work on the device.</p>
     <div class="pills" role="radiogroup" aria-label="Text recognition" data-for="manga-ocr-engine"><label class="pill"><input type="radio" name="ocr-engine-pill" value="ppocr"><span>Built-in</span></label><label class="pill"><input type="radio" name="ocr-engine-pill" value="gemini"><span>Gemini</span></label><label class="pill"><input type="radio" name="ocr-engine-pill" value="none"><span>Skip</span></label></div>
     <select id="manga-ocr-engine" hidden aria-hidden="true" tabindex="-1">
@@ -293,6 +296,7 @@
     after that it takes 2–3 seconds a page. No translations.</p>
     <p class="hint" id="ocr-hint-none" hidden>Finds the panels but doesn't read the text. Fastest, but dictionary
     lookup and translations on the device are off.</p>
+    </div>
 
     <div id="text-check-row" hidden>
       <div class="callout panel-check-row">
@@ -515,7 +519,7 @@
       aria-describedby="te-canvas-help"></canvas></div>
     <div class="te-side">
       <div class="te-side-bar">
-        <p class="hint te-help">Lines marked <span class="te-flag-inline" aria-hidden="true">⚠</span> were hard to read. Fix
+        <p class="hint te-help" id="te-help">Lines marked <span class="te-flag-inline" aria-hidden="true">⚠</span> were hard to read. Fix
         the text, or press <kbd>Enter</kbd> to keep it and go to the next one. Clear a line to remove it.</p>
         <button type="button" class="secondary te-add" id="te-add" aria-pressed="false"
           aria-describedby="te-add-help"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5l0 14"/><path d="M5 12l14 0"/></svg>Add a bubble</button>
