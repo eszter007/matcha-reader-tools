@@ -426,6 +426,7 @@ details { margin-top: 0.8rem; }
 .pe-foot-actions { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
 .link-btn { padding: 0; border: 0; background: none; color: var(--matcha-dark); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .link-btn:hover { text-decoration: underline; }
+.link-btn.inline { font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .pe-keys { margin: 0; }
 .pe-keys summary { font-size: 13px; font-weight: 500; }
 .pe-keys[open] { flex-basis: 100%; }

@@ -745,6 +745,79 @@ async function testMangaTextCheck(page, base) {
     added && added.vertical && added.lines.length === 2 && added.lines[0][0] > added.lines[1][0], JSON.stringify(added));
 }
 
+/* A Mokuro library picked as a folder: a series folder with two volumes (one named .mo.mokuro) and
+ * a series archive with two more. Every volume becomes its own book, with Mokuro's text. */
+async function testMangaMokuroLibrary(page, base) {
+  console.log("manga.html Mokuro library (folder pick, one book per volume):");
+  const pagesDir = path.join(OUT, "mokuro_pages");
+  unzipTo(path.join(FIXTURES, "manga.cbz"), pagesDir);
+  const lib = path.join(OUT, "mokuro_library");
+  fs.rmSync(lib, { recursive: true, force: true });
+  const volumeJson = (title, volume, images) => JSON.stringify({ title, volume, pages: images.map((img) => ({
+    img_path: img, img_width: 0, img_height: 0,
+    blocks: [{ box: [40, 40, 80, 200], vertical: true, lines: [`${volume}の${img}`], lines_coords: [[[40, 40], [80, 40], [80, 200], [40, 200]]] }],
+  })) });
+  const put = (rel, data) => { fs.mkdirSync(path.dirname(path.join(lib, rel)), { recursive: true }); fs.writeFileSync(path.join(lib, rel), data); };
+  const img = (name) => fs.readFileSync(path.join(pagesDir, name));
+  put("Folder Series/vol1.mokuro", volumeJson("Folder Series", "vol1", ["page01.png", "page02.png"]));
+  put("Folder Series/vol1/page01.png", img("page01.png"));
+  put("Folder Series/vol1/page02.png", img("page02.png"));
+  put("Folder Series/vol2.mo.mokuro", volumeJson("Folder Series", "vol2", ["page03.png"]));
+  put("Folder Series/vol2/page03.png", img("page03.png"));
+  const zipSrc = path.join(OUT, "mokuro_zip_src");
+  fs.rmSync(zipSrc, { recursive: true, force: true });
+  for (const [rel, data] of [["vol1.mokuro", volumeJson("Zip Series", "vol1", ["page01.png"])], ["vol1/page01.png", img("page01.png")],
+    ["vol2.mokuro", volumeJson("Zip Series", "vol2", ["page02.png", "page03.png"])], ["vol2/page02.png", img("page02.png")],
+    ["vol2/page03.png", img("page03.png")], ["__MACOSX/._vol1.mokuro", "junk"]]) {
+    fs.mkdirSync(path.dirname(path.join(zipSrc, rel)), { recursive: true });
+    fs.writeFileSync(path.join(zipSrc, rel), data);
+  }
+  execFileSync("python3", ["-c", `
+import os, sys, zipfile
+with zipfile.ZipFile(sys.argv[2], "w") as z:
+    for root, _, files in os.walk(sys.argv[1]):
+        for f in sorted(files):
+            p = os.path.join(root, f)
+            z.write(p, os.path.relpath(p, sys.argv[1]))
+`, zipSrc, path.join(lib, "Zip Series.cbz")]);
+
+  await gotoManga(page, base);
+  await page.setInputFiles("#manga-folder", lib);
+  await page.uncheck("#manga-yolo");
+  await setMangaForm(page, { formats: ["matcha"], res: "full" });
+  check("the folder pick names its volumes", /2 Mokuro volumes|books selected/.test(await page.textContent("#manga-file-label")),
+    await page.textContent("#manga-file-label"));
+  const want = 4;
+  const downloads = [];
+  const saved = new Promise((resolve) => {
+    page.on("download", async (d) => {
+      const target = path.join(OUT, "mokuro_lib_" + d.suggestedFilename());
+      await d.saveAs(target);
+      downloads.push(target);
+      if (downloads.length === want) resolve();
+    });
+  });
+  await page.click("#manga-run");
+  await Promise.race([saved, page.waitForTimeout(240000)]);
+  page.removeAllListeners("download");
+  check("one book per volume", downloads.length === want, `${downloads.length} downloads`);
+  const books = {};
+  for (const z of downloads) {
+    const dest = z.replace(/\.zip$/, "");
+    unzipTo(z, dest);
+    const folder = fs.readdirSync(dest).find((n) => fs.existsSync(path.join(dest, n, "panels.dat")));
+    if (folder) books[folder] = parsePanelsDat(path.join(dest, folder));
+  }
+  const pageCounts = Object.fromEntries(Object.entries(books).map(([k, v]) => [k, v.length]));
+  check("each book has its own volume's pages", JSON.stringify(pageCounts) === JSON.stringify({
+    "Folder Series vol1": 2, "Folder Series vol2": 1, "Zip Series vol1": 1, "Zip Series vol2": 2 }), JSON.stringify(pageCounts));
+  const texts = Object.values(books).flatMap((pages) => pages.flatMap((pg) => pg.panels.flatMap((p) => p.texts.map((t) => t.text))));
+  check("Mokuro's text is in the books, the .mo.mokuro volume's too",
+    texts.includes("vol1のpage02.png") && texts.includes("vol2のpage03.png"), JSON.stringify(texts));
+  const log = await page.textContent("#log");
+  check("the archive's volumes are announced", log.includes("Zip Series.cbz holds 2 Mokuro volumes"), log.slice(0, 400));
+}
+
 async function testMangaPanelsOnly(page, base) {
   console.log("manga.html end-to-end (panels-only, borderless pages, XTC + EPUB):");
   const cbz = path.join(FIXTURES, "manga_fullbleed.cbz");
@@ -1077,6 +1150,7 @@ async function testRuby(page, base) {
     await testMangaGeminiOcr(page, base);
     await testMangaPpocr(page, base);
     await testMangaTextCheck(page, base);
+    await testMangaMokuroLibrary(page, base);
     await testMangaNoOffscreenCanvas(browser, base);
     await testDict(page, base);
     await testDictMdx(page, base);

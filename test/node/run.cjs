@@ -1597,6 +1597,11 @@ function testMangaMokuro() {
     title: "うちの猫", volume: "vol2", pages: [{ img_path: "001.webp", img_width: 800, img_height: 1200, blocks: [block] }, { img_width: 1 }],
   }), "Series/vol2.mokuro");
   check("mokuro volume: image folder named after the file", vol.folder === "vol2");
+  const mo = manga.parseMokuroVolume(JSON.stringify({ title: "S", pages: [{ img_path: "1.jpg" }] }), "S/vol3.mo.mokuro");
+  check("mokuro volume: a .mo.mokuro file also finds its images in vol3/", JSON.stringify(mo.folders) === '["vol3.mo","vol3"]'
+    && mo.volume === "vol3", JSON.stringify(mo));
+  check("mokuro: macOS litter in an archive is not a volume",
+    manga.isMokuroMember("S/vol1.mokuro") && !manga.isMokuroMember("__MACOSX/S/._vol1.mokuro") && !manga.isMokuroMember("S/._vol1.mokuro"));
   check("mokuro volume: pages without an image are dropped", vol.pages.length === 1 && vol.pages[0].imgPath === "001.webp");
   const meta = manga.mokuroMeta(vol);
   check("mokuro meta", meta.title === "うちの猫 vol2" && meta.series === "うちの猫" && meta.seriesIndex === 2 && meta.language === "ja");

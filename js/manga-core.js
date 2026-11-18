@@ -1883,16 +1883,30 @@ function parseTocText(text) {
  * image's pixels: a block box, a vertical flag, and one quad and one string per printed line.
  * Matches convert_manga.py's load_mokuro / mokuro_text_blocks / assign_blocks_to_panels. */
 
+/* Folder names a volume's images may sit in: the .mokuro file's stem, and for "<volume>.mo.mokuro"
+ * (as some mokuro setups name it) also "<volume>". As convert_mokuro_library.py:image_dirs. */
+function mokuroImageDirs(stem) {
+  return /\.mo$/i.test(stem) ? [stem, stem.slice(0, -3)] : [stem];
+}
+
+/* Whether an archive member is a volume's .mokuro file, not macOS litter beside one. */
+function isMokuroMember(name) {
+  const parts = String(name).replace(/\\/g, "/").split("/");
+  return /\.mokuro$/i.test(name) && !parts.includes("__MACOSX") && !parts[parts.length - 1].startsWith("._");
+}
+
 function parseMokuroVolume(jsonText, fileName) {
   const data = JSON.parse(jsonText);
   const pages = Array.isArray(data.pages) ? data.pages : [];
   if (!pages.length) throw new Error(`${fileName} lists no pages`);
   const stem = baseName(fileName).replace(/\.mokuro$/i, "");
+  const folders = mokuroImageDirs(stem);
   return {
     title: String(data.title || ""),
-    volume: String(data.volume || stem),
-    // The image folder is named after the .mokuro file.
+    volume: String(data.volume || folders[folders.length - 1]),
+    // The image folder is named after the .mokuro file (folders: every name it may have).
     folder: stem,
+    folders,
     pages: pages.map((p) => ({
       imgPath: String(p.img_path || ""),
       width: Number(p.img_width) || 0,
@@ -2035,6 +2049,6 @@ if (typeof module !== "undefined") {
     epubOpfPath, epubParseOpf, epubMetadataFromOpf, cbzMetadataFromComicInfo, comicInfoBookmarks, chaptersFromFolders,
     xmlUnescape,
     epubTocFromNav, epubTocFromNcx, epubNavHref, epubNcxHref, parseTocText,
-    parseMokuroVolume, mokuroMeta, mokuroTextBlocks, assignBlocksToPanels, scaleTextBlocks, textBlockLines, textBlockFromLines, textBlockFromBox,
+    parseMokuroVolume, mokuroImageDirs, isMokuroMember, mokuroMeta, mokuroTextBlocks, assignBlocksToPanels, scaleTextBlocks, textBlockLines, textBlockFromLines, textBlockFromBox,
   };
 }
