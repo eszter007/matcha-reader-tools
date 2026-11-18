@@ -1638,6 +1638,34 @@ function testPpocr() {
     blocks.length === 2 && blocks.some((b) => b.lines.join("|") === "それじゃあ|お別れだ")
     && blocks.some((b) => b.lines.join("|") === "漢字の読み"), JSON.stringify(blocks.map((b) => b.lines)));
   check("ppocr: blocks carry mokuro line quads", blocks.every((b) => b.lines_coords.length === b.lines.length));
+  // A column the detector split at a mark (〝穴〟の下の, crop 01 of manga-ocr's examples) is one line.
+  const joined = ppocr.ppocrBubbles([
+    { text: "立川で見た", box: [131, 15, 173, 201], vertical: true },
+    { text: "穴", box: [80, 19, 114, 97], vertical: true },
+    { text: "の下の", box: [78, 82, 113, 197], vertical: true },
+    { text: "巨大な眼は…", box: [22, 17, 64, 242], vertical: true },
+  ]);
+  check("ppocr: pieces of one column joined, top to bottom",
+    JSON.stringify(joined.map((b) => b.lines)) === JSON.stringify([["立川で見た", "穴の下の", "巨大な眼は…"]]),
+    JSON.stringify(joined.map((b) => b.lines)));
+  const stacked = ppocr.ppocrBubbles([
+    { text: "上の吹き出し", box: [100, 10, 120, 130], vertical: true },
+    { text: "下の吹き出し", box: [100, 170, 120, 290], vertical: true },
+  ]);
+  check("ppocr: columns a bubble apart stay separate", stacked.length === 2);
+  // Two bubbles side by side (crop 04): the right one first, the left one first with rtl off.
+  const pair = [
+    { text: "退治してよ!!", box: [15, 9, 31, 113], vertical: true },
+    { text: "早くあいつを", box: [36, 9, 53, 112], vertical: true },
+    { text: "よかったじゃ", box: [174, 10, 191, 110], vertical: true },
+    { text: "ないわよ!!", box: [151, 10, 168, 96], vertical: true },
+  ];
+  check("ppocr: bubbles in a row read right to left",
+    ppocr.ppocrBubbles(pair).map((b) => b.lines[0]).join("|") === "よかったじゃ|早くあいつを");
+  check("ppocr: left to right with rtl off",
+    ppocr.ppocrBubbles(pair, false).map((b) => b.lines[0]).join("|") === "早くあいつを|よかったじゃ");
+  const rows = ppocr.ppocrReadingOrder([{ box: [0, 300, 50, 400] }, { box: [200, 0, 250, 100] }, { box: [0, 10, 50, 90] }]);
+  check("ppocr: rows top to bottom", rows.map((b) => b.box[1]).join(",") === "0,10,300");
   // float16 round trips, as the FP16 models take and return them.
   const halves = [[0, 0x0000], [1, 0x3c00], [-2, 0xc000], [0.5, 0x3800], [65504, 0x7bff], [1e6, 0x7c00],
     [2 ** -24, 0x0001], [1 / 3, 0x3555], [-0.485 / 0.229, 0xc03c]];
