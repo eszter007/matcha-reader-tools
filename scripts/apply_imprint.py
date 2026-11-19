@@ -3,7 +3,8 @@
 
 Values come from environment variables of the same name, falling back to a
 gitignored imprint.config.json (copy imprint.example.json to start). The
-deploy workflow passes them from repository secrets, so the operator's
+deploy workflow passes them from GitHub repository variables. Unset values
+fall back to generic placeholders, so the operator's
 details are never committed.
 
   python3 scripts/apply_imprint.py              # writes legal.local.html for preview
@@ -17,10 +18,12 @@ config = root / "imprint.config.json"
 values = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
 values.update({k: os.environ[k] for k in KEYS if os.environ.get(k)})
 
-missing = [k for k in KEYS if not values.get(k)]
-if missing:
-    sys.exit(f"Missing imprint values: {', '.join(missing)}. Set them as environment "
-             "variables or in imprint.config.json (see imprint.example.json).")
+FALLBACK = {"IMPRINT_NAME": "Name", "IMPRINT_STREET": "Address",
+            "IMPRINT_CITY": "Postcode and city", "IMPRINT_EMAIL": "email@example.com"}
+for k in KEYS:
+    if not values.get(k):
+        print(f"{k} not set, using placeholder '{FALLBACK[k]}'")
+        values[k] = FALLBACK[k]
 
 src = root / "legal.html"
 out = re.sub(r"\{\{(IMPRINT_[A-Z]+)\}\}", lambda m: html.escape(values[m.group(1)]),

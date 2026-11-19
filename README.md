@@ -257,7 +257,7 @@ Icons: [Tabler Icons](https://tabler.io/icons) by Paweł Kuna, MIT License.
 ## Imprint
 
 `legal.html` holds `{{IMPRINT_*}}` placeholders instead of the operator's details. The deploy
-workflow fills them from the repository secrets `IMPRINT_NAME`, `IMPRINT_STREET`,
-`IMPRINT_CITY` and `IMPRINT_EMAIL`, and fails if any is missing. If you host a fork, set your
+workflow fills them from the repository variables `IMPRINT_NAME`, `IMPRINT_STREET`,
+`IMPRINT_CITY` and `IMPRINT_EMAIL`. Unset ones show as "Name", "Address" and so on. If you host a fork, set your
 own. To preview locally, copy `imprint.example.json` to `imprint.config.json` (gitignored) and
 run `python3 scripts/apply_imprint.py`, which writes `legal.local.html`.
