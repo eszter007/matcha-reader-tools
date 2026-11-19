@@ -267,5 +267,4 @@ run `python3 scripts/apply_imprint.py`, which writes `legal.local.html`.
 If you fork these tools and host them:
 
 - Keep the Buy Me a Coffee buttons and `.github/FUNDING.yml` as they are.
-- Do not publish my imprint or privacy details. Set your own `IMPRINT_*` variables or remove
-  the legal page.
+- Do not publish my imprint or privacy details.
