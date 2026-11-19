@@ -30,6 +30,14 @@ jobs:
       # control on the page dead. Stamping is done here rather than committed so the URLs
       # cannot go stale by someone forgetting to bump them, and local development keeps
       # serving plain paths.
+      # The imprint details live in repository secrets, not in the repo.
+      - name: Fill in the imprint
+        env:
+          IMPRINT_NAME: ${{ secrets.IMPRINT_NAME }}
+          IMPRINT_STREET: ${{ secrets.IMPRINT_STREET }}
+          IMPRINT_CITY: ${{ secrets.IMPRINT_CITY }}
+          IMPRINT_EMAIL: ${{ secrets.IMPRINT_EMAIL }}
+        run: python3 scripts/apply_imprint.py --in-place
       - name: Stamp asset URLs with the commit SHA
         run: |
           python3 - <<'PY'

@@ -2,3 +2,6 @@ node_modules/
 test/fixtures/
 __pycache__/
 *.pyc
+imprint.config.json
+legal.local.html
+.env
