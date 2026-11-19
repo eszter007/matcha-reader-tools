@@ -261,3 +261,11 @@ workflow fills them from the repository variables `IMPRINT_NAME`, `IMPRINT_STREE
 `IMPRINT_CITY` and `IMPRINT_EMAIL`. Unset ones show as "Name", "Address" and so on. If you host a fork, set your
 own. To preview locally, copy `imprint.example.json` to `imprint.config.json` (gitignored) and
 run `python3 scripts/apply_imprint.py`, which writes `legal.local.html`.
+
+## Forks
+
+If you fork these tools and host them:
+
+- Keep the Buy Me a Coffee buttons and `.github/FUNDING.yml` as they are.
+- Do not publish my imprint or privacy details. Set your own `IMPRINT_*` variables or remove
+  the legal page.
