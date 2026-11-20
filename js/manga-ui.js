@@ -1010,125 +1010,134 @@ function scaleBoxes(boxes, w, h, tw, th) {
  * and detect: false for the page image alone. Panel boxes are in the downscaled page's space
  * (imgW x imgH). `sourceCanvas` is the full-resolution page on white when the AI detector needed
  * it, else null. The caller closes `bitmap`. */
+function closeBitmap(bitmap) {
+  if (bitmap && bitmap.close) bitmap.close();
+}
+
 async function preparePage(page, o) {
   const srcBytes = await page.read();
   let ext = mangaFileExt(page.name);
   let bitmap = await decodeImage(srcBytes, ext);
-  const srcW = bitmap.width, srcH = bitmap.height;
-  let trimX = 0, trimY = 0;
+  try {
+    const srcW = bitmap.width, srcH = bitmap.height;
+    let trimX = 0, trimY = 0;
 
-  // Crop the blank paper border (and the page number sitting in it) before anything
-  // else, so every coordinate downstream lives in the trimmed page's space. It fills
-  // the screen, and it measurably improves detection: a page whose margin is gone
-  // gives the detector nothing but artwork to look at.
-  let wasTrimmed = false;
-  if (o.trimMargins) {
-    const probe = makeCanvas(bitmap.width, bitmap.height);
-    const pctx = probe.getContext("2d", { willReadFrequently: true });
-    pctx.drawImage(bitmap, 0, 0);
-    const gray = grayFromRGBA(pctx.getImageData(0, 0, bitmap.width, bitmap.height).data,
-      bitmap.width, bitmap.height);
-    const box = trimMarginsBox(gray, bitmap.width, bitmap.height);
-    if (box) {
-      const [tx1, ty1, tx2, ty2] = box;
-      trimX = tx1; trimY = ty1;
-      const cropped = makeCanvas(tx2 - tx1, ty2 - ty1);
-      const cctx = cropped.getContext("2d");
-      cctx.fillStyle = "#ffffff";
-      cctx.fillRect(0, 0, tx2 - tx1, ty2 - ty1);
-      cctx.drawImage(probe, tx1, ty1, tx2 - tx1, ty2 - ty1, 0, 0, tx2 - tx1, ty2 - ty1);
-      bitmap.close && bitmap.close();
-      bitmap = await createImageBitmap(cropped);
-      wasTrimmed = true;
-    }
-  }
-
-  // Downscale FIRST, before panel detection, so every downstream coordinate
-  // (panel boxes, crop rects, OCR text boxes, the page dims in panels.idx)
-  // lives in the resized space and matches the files actually written. When
-  // no device is selected fit.resized is false and this is a 1:1 draw, so the
-  // default output is unchanged. (White-fill for transparent sources differs
-  // per canvas — see the detection/page and full-res source canvases below.)
-  const origW = bitmap.width, origH = bitmap.height;
-  const fit = fitToDeviceSize(origW, origH, o.deviceTarget);
-  const imgW = fit.w, imgH = fit.h;
-  const wasResized = fit.resized;
-
-  // Page canvas (downscaled), which the gutter grid also runs on. White-fill only when actually
-  // resizing, so panels.idx and the default (Original) output are unchanged.
-  const canvas = makeCanvas(imgW, imgH);
-  const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
-  if (wasResized) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, imgW, imgH); }
-  ctx.drawImage(bitmap, 0, 0, origW, origH, 0, 0, imgW, imgH);
-  // Image clean-up: one tone curve per page, from the page itself, reused for its crops.
-  const tone = o.cleanupOn ? cleanPage(ctx, imgW, imgH, o.cleanup) : null;
-  const tuned = !!tone || o.cleanup.sharpen;
-  // The source bitmap stays open until after detection: the full-resolution
-  // panel-crop canvas is only built for pages that actually have a panel to
-  // crop (see below), so a cover / full-page spread never allocates it.
-
-  const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
-
-  // A Mokuro page's text, in its source image's pixels: undo the trim, then scale to the page.
-  let pageText = null;
-  // Text fixed by hand in the text check is used as it is, not read again. It only fits the page it
-  // was made on: trimming the border moves every coordinate.
-  const fixed = o.detect !== false && (page.mokuro || o.ppocr) ? textEdits.get(page.name) : null;
-  if (fixed && fixed.trim === !!o.trimMargins) {
-    pageText = scaleTextBlocks(fixed.blocks, fixed.w, fixed.h, imgW, imgH);
-  } else if (page.mokuro) {
-    const kx = page.mokuro.width ? srcW / page.mokuro.width : 1;
-    const ky = page.mokuro.height ? srcH / page.mokuro.height : 1;
-    const sx = imgW / origW, sy = imgH / origH;
-    const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
-    pageText = mokuroTextBlocks(page.mokuro.blocks,
-      (x, y) => [clamp((x * kx - trimX) * sx, imgW), clamp((y * ky - trimY) * sy, imgH)]);
-  } else if (o.ppocr && o.detect !== false) {
-    // Read on the trimmed page at full resolution, then scaled to the stored page like Mokuro's.
-    const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH, o.rtl && !o.isWebtoon);
-    const sx = imgW / origW, sy = imgH / origH;
-    const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
-    pageText = mokuroTextBlocks(record.blocks, (x, y) => [clamp(x * sx, imgW), clamp(y * sy, imgH)]);
-  }
-
-  let boxes = null;
-  let sourceCanvas = null;
-  if (o.detect === false || o.panels === false) {
-    // The panel editor only needs the page image, the text check only its text.
-  } else if (o.isWebtoon) {
-    // Already one top-to-bottom column, cut at its own gutters. The manga detector
-    // looks for bordered rectangles in a grid and a webtoon has none, and reordering
-    // a single column can only move boxes away from what the cut established.
-    boxes = detectWebtoonPanels(grayFromRGBA(rgba, imgW, imgH), imgW, imgH);
-  } else {
-    // The model looks at the full-resolution page, before it is reduced to the screen, so thin
-    // gutters are not lost; its boxes come back in the stored page's pixels. The gutter grid runs
-    // on the stored page. As convert_manga.py:detect_panels(source_img, img).
-    const stored = { gray: grayFromRGBA(rgba, imgW, imgH), w: imgW, h: imgH };
-    let detected = null, full = null;
-    if (o.yolo) {
-      try {
-        sourceCanvas = fullResolutionCanvas(bitmap, origW, origH);
-        const fullRgba = sourceCanvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, origW, origH).data;
-        full = { gray: grayFromRGBA(fullRgba, origW, origH), w: origW, h: origH };
-        detected = await detectPanelsYolo(o.yolo.session, o.yolo.ort, fullRgba, origW, origH, undefined, full.gray);
-      } catch (e) {
-        detected = null;
-        logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
+    // Crop the blank paper border (and the page number sitting in it) before anything
+    // else, so every coordinate downstream lives in the trimmed page's space. It fills
+    // the screen, and it measurably improves detection: a page whose margin is gone
+    // gives the detector nothing but artwork to look at.
+    let wasTrimmed = false;
+    if (o.trimMargins) {
+      const probe = makeCanvas(bitmap.width, bitmap.height);
+      const pctx = probe.getContext("2d", { willReadFrequently: true });
+      pctx.drawImage(bitmap, 0, 0);
+      const gray = grayFromRGBA(pctx.getImageData(0, 0, bitmap.width, bitmap.height).data,
+        bitmap.width, bitmap.height);
+      const box = trimMarginsBox(gray, bitmap.width, bitmap.height);
+      if (box) {
+        const [tx1, ty1, tx2, ty2] = box;
+        trimX = tx1; trimY = ty1;
+        const cropped = makeCanvas(tx2 - tx1, ty2 - ty1);
+        const cctx = cropped.getContext("2d");
+        cctx.fillStyle = "#ffffff";
+        cctx.fillRect(0, 0, tx2 - tx1, ty2 - ty1);
+        cctx.drawImage(probe, tx1, ty1, tx2 - tx1, ty2 - ty1, 0, 0, tx2 - tx1, ty2 - ty1);
+        bitmap.close && bitmap.close();
+        bitmap = await createImageBitmap(cropped);
+        wasTrimmed = true;
       }
     }
-    // The grid heuristic has no text detection, so nothing grows over bubbles there.
-    const found = detectPanels(detected, full, stored);
-    let frames = found.frames.length ? found.frames : [[0, 0, imgW, imgH]];
-    // Mokuro's blocks mark the bubbles too, so panel crops grow over them.
-    const textBoxes = pageText ? found.texts.concat(pageText.map((b) => b.box)) : found.texts;
-    // Order on the frames as drawn -- growing a box moves its centre, which the ordering works
-    // on -- then grow the crops over the bubbles. yoloExpandPanelsOverText() is index-preserving,
-    // so the order survives.
-    frames = orderPanels(frames, imgW, o.rtl, o.columnMajor, o.yonkomaDetect !== false);
-    boxes = yoloExpandPanelsOverText(frames, textBoxes, imgW, imgH);
+
+    // Downscale FIRST, before panel detection, so every downstream coordinate
+    // (panel boxes, crop rects, OCR text boxes, the page dims in panels.idx)
+    // lives in the resized space and matches the files actually written. When
+    // no device is selected fit.resized is false and this is a 1:1 draw, so the
+    // default output is unchanged. (White-fill for transparent sources differs
+    // per canvas — see the detection/page and full-res source canvases below.)
+    const origW = bitmap.width, origH = bitmap.height;
+    const fit = fitToDeviceSize(origW, origH, o.deviceTarget);
+    const imgW = fit.w, imgH = fit.h;
+    const wasResized = fit.resized;
+
+    // Page canvas (downscaled), which the gutter grid also runs on. White-fill only when actually
+    // resizing, so panels.idx and the default (Original) output are unchanged.
+    const canvas = makeCanvas(imgW, imgH);
+    const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
+    if (wasResized) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, imgW, imgH); }
+    ctx.drawImage(bitmap, 0, 0, origW, origH, 0, 0, imgW, imgH);
+    // Image clean-up: one tone curve per page, from the page itself, reused for its crops.
+    const tone = o.cleanupOn ? cleanPage(ctx, imgW, imgH, o.cleanup) : null;
+    const tuned = !!tone || o.cleanup.sharpen;
+    // The source bitmap stays open until after detection: the full-resolution
+    // panel-crop canvas is only built for pages that actually have a panel to
+    // crop (see below), so a cover / full-page spread never allocates it.
+
+    const rgba = ctx.getImageData(0, 0, imgW, imgH).data;
+
+    // A Mokuro page's text, in its source image's pixels: undo the trim, then scale to the page.
+    let pageText = null;
+    // Text fixed by hand in the text check is used as it is, not read again. It only fits the page it
+    // was made on: trimming the border moves every coordinate.
+    const fixed = o.detect !== false && (page.mokuro || o.ppocr) ? textEdits.get(page.name) : null;
+    if (fixed && fixed.trim === !!o.trimMargins) {
+      pageText = scaleTextBlocks(fixed.blocks, fixed.w, fixed.h, imgW, imgH);
+    } else if (page.mokuro) {
+      const kx = page.mokuro.width ? srcW / page.mokuro.width : 1;
+      const ky = page.mokuro.height ? srcH / page.mokuro.height : 1;
+      const sx = imgW / origW, sy = imgH / origH;
+      const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
+      pageText = mokuroTextBlocks(page.mokuro.blocks,
+        (x, y) => [clamp((x * kx - trimX) * sx, imgW), clamp((y * ky - trimY) * sy, imgH)]);
+    } else if (o.ppocr && o.detect !== false) {
+      // Read on the trimmed page at full resolution, then scaled to the stored page like Mokuro's.
+      const record = await ppocrReadPage(o.ppocr, bitmap, origW, origH, o.rtl && !o.isWebtoon);
+      const sx = imgW / origW, sy = imgH / origH;
+      const clamp = (v, hi) => Math.trunc(Math.min(Math.max(v, 0), hi));
+      pageText = mokuroTextBlocks(record.blocks, (x, y) => [clamp(x * sx, imgW), clamp(y * sy, imgH)]);
+    }
+
+    let boxes = null;
+    let sourceCanvas = null;
+    if (o.detect === false || o.panels === false) {
+      // The panel editor only needs the page image, the text check only its text.
+    } else if (o.isWebtoon) {
+      // Already one top-to-bottom column, cut at its own gutters. The manga detector
+      // looks for bordered rectangles in a grid and a webtoon has none, and reordering
+      // a single column can only move boxes away from what the cut established.
+      boxes = detectWebtoonPanels(grayFromRGBA(rgba, imgW, imgH), imgW, imgH);
+    } else {
+      // The model looks at the full-resolution page, before it is reduced to the screen, so thin
+      // gutters are not lost; its boxes come back in the stored page's pixels. The gutter grid runs
+      // on the stored page. As convert_manga.py:detect_panels(source_img, img).
+      const stored = { gray: grayFromRGBA(rgba, imgW, imgH), w: imgW, h: imgH };
+      let detected = null, full = null;
+      if (o.yolo) {
+        try {
+          sourceCanvas = fullResolutionCanvas(bitmap, origW, origH);
+          const fullRgba = sourceCanvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, origW, origH).data;
+          full = { gray: grayFromRGBA(fullRgba, origW, origH), w: origW, h: origH };
+          detected = await detectPanelsYolo(o.yolo.session, o.yolo.ort, fullRgba, origW, origH, undefined, full.gray);
+        } catch (e) {
+          detected = null;
+          logLine(`AI detection failed on this page (${e.message}); using the grid heuristic.`, "warn");
+        }
+      }
+      // The grid heuristic has no text detection, so nothing grows over bubbles there.
+      const found = detectPanels(detected, full, stored);
+      let frames = found.frames.length ? found.frames : [[0, 0, imgW, imgH]];
+      // Mokuro's blocks mark the bubbles too, so panel crops grow over them.
+      const textBoxes = pageText ? found.texts.concat(pageText.map((b) => b.box)) : found.texts;
+      // Order on the frames as drawn -- growing a box moves its centre, which the ordering works
+      // on -- then grow the crops over the bubbles. yoloExpandPanelsOverText() is index-preserving,
+      // so the order survives.
+      frames = orderPanels(frames, imgW, o.rtl, o.columnMajor, o.yonkomaDetect !== false);
+      boxes = yoloExpandPanelsOverText(frames, textBoxes, imgW, imgH);
+    }
+    return { srcBytes, ext, bitmap, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba, boxes, pageText, sourceCanvas };
+  } catch (e) {
+    closeBitmap(bitmap);   // the caller only gets it, to close, on success
+    throw e;
   }
-  return { srcBytes, ext, bitmap, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba, boxes, pageText, sourceCanvas };
 }
 
 /* ── Image clean-up ───────────────────────────────────────────────── */
@@ -2224,7 +2233,7 @@ async function runPanelCheck() {
     for (let i = 0; i < pages.length; i++) {
       setProgress(i, pages.length, `Checking panels: page ${i + 1} / ${pages.length}`);
       const prep = await preparePage(pages[i], opts);
-      prep.bitmap.close && prep.bitmap.close();
+      closeBitmap(prep.bitmap);
       if (stale()) return;
       panelCheck.pages.push({
         name: pages[i].name, w: prep.imgW, h: prep.imgH, boxes: prep.boxes,
@@ -2268,7 +2277,7 @@ async function openPanelEditor(i) {
     return;
   }
   panelCheck.editIndex = i;
-  prep.bitmap.close && prep.bitmap.close();
+  closeBitmap(prep.bitmap);
   pe.page = prep.canvas;
   pe.boxes = panelCheckBoxes(p).map((b) => b.slice());
   pe.manual = !!(panelEdits.get(p.name) || {}).manual;
@@ -2772,7 +2781,7 @@ async function runTextCheck() {
       const fixed = textEdits.get(pages[i].name);
       textEdits.delete(pages[i].name);
       const prep = await preparePage(pages[i], opts);
-      prep.bitmap.close && prep.bitmap.close();
+      closeBitmap(prep.bitmap);
       if (stale()) return;
       if (fixed) textEdits.set(pages[i].name, fixed);
       const p = { name: pages[i].name, w: prep.imgW, h: prep.imgH, blocks: prep.pageText || [], thumb: "" };
@@ -2839,7 +2848,7 @@ async function openTextEditor(i, focus = null) {
   }
   const changedPage = textCheck.editIndex !== i || !$("text-editor").open;
   textCheck.editIndex = i;
-  prep.bitmap.close && prep.bitmap.close();
+  closeBitmap(prep.bitmap);
   te.page = prep.canvas;
   te.blocks = textCheckBlocks(p).map((b) => ({ ...b }));
   te.sel = -1;
