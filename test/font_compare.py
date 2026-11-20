@@ -100,6 +100,9 @@ def main():
             if cp in DEFAULT_IGNORABLE:
                 continue
             delta = max(abs(gv - rv) for rv, gv in [(rw, gw), (rh, gh), (rl, gl), (rt, gt)])
+            # Combining marks are a few dots; Chromium and FreeType round them up to 3 px apart.
+            if 0x0300 <= cp <= 0x036F:
+                delta = max(0, delta - 1)
             wh_max = max(wh_max, delta)
             if delta > 2:
                 worst.append((delta, cp, (rw, rh, rl, rt), (gw, gh, gl, gt)))
