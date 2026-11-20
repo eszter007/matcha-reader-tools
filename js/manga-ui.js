@@ -2205,57 +2205,75 @@ function renderPanelGrid() {
     " Click a page to fix its panels.";
 }
 
-async function runPanelCheck() {
+/* Runs a page check: collects the chosen book's pages as the conversion would, then hands each prepared page to
+ * c.addPage. A new file chosen mid-run makes the run stale, and it stops at its next await. */
+async function runCheck(state, c) {
   const files = chosenFiles();
   if (!files || !files.length) { logValidation("Choose a manga first."); return; }
-  if (splitIntoBooks(files).length > 1) { logValidation("The panel check works on one book at a time."); return; }
-  const btn = $("panel-check-btn");
+  if (splitIntoBooks(files).length > 1) { logValidation(`The ${c.name} check works on one book at a time.`); return; }
+  const btn = $(c.button);
   btn.disabled = true;
-  panelCheck.running = true;
-  const gen = ++panelCheck.gen;
-  const stale = () => panelCheck.gen !== gen;
+  state.running = true;
+  const gen = ++state.gen;
+  const stale = () => state.gen !== gen;
   try {
-    const opts = await panelCheckSettings();
-    if (!opts || stale()) return;
-    if (panelCheck.files !== files) panelEdits.clear();
-    closeCheckSource(panelCheck);
+    const opts = await panelCheckSettings(c.forText);
+    if (!opts || !c.canRun(opts) || stale()) return;
+    if (state.files !== files) c.edits.clear();
+    closeCheckSource(state);
     const collected = await collectPagesFromInput(splitIntoBooks(files)[0]);
-    panelCheck.release = collected.cleanup || null;
+    state.release = collected.cleanup || null;
     if (stale()) return;
     let pages = collected.pages;
     // The same pages the conversion will see, so a fix lands on the page it was made on.
-    if (opts.splitSpreads && !collected.mokuro) pages = (await splitSpreadPages(pages, opts.rtl)).pages;
+    if (opts.splitSpreads && !(c.keepMokuroSpreads && collected.mokuro)) pages = (await splitSpreadPages(pages, opts.rtl)).pages;
     if (stale()) return;
     const maxPages = parseInt($("manga-max-pages").value, 10);
     if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
-    Object.assign(panelCheck, { files, opts, source: pages, pages: [] });
-    $("panel-check").hidden = false;
+    Object.assign(state, { files, opts, source: pages, pages: [] }, c.extraState ? c.extraState(collected) : {});
+    $(c.section).hidden = false;
     for (let i = 0; i < pages.length; i++) {
-      setProgress(i, pages.length, `Checking panels: page ${i + 1} / ${pages.length}`);
-      const prep = await preparePage(pages[i], opts);
-      closeBitmap(prep.bitmap);
-      if (stale()) return;
-      panelCheck.pages.push({
-        name: pages[i].name, w: prep.imgW, h: prep.imgH, boxes: prep.boxes,
-        reason: panelCheckReason(prep.boxes, prep.rgba, prep.imgW, prep.imgH),
-        thumb: "",
-      });
-      const p = panelCheck.pages[i];
-      p.thumb = panelCheckThumb(prep.canvas, panelCheckBoxes(p));
-      if (i % 4 === 3 || i === pages.length - 1) renderPanelGrid();
+      setProgress(i, pages.length, `${c.progress}: page ${i + 1} / ${pages.length}`);
+      if (!(await c.addPage(pages[i], opts, stale))) return;
+      if (i % 4 === 3 || i === pages.length - 1) c.render();
     }
-    setProgress(pages.length, pages.length, "Panel check done");
+    setProgress(pages.length, pages.length, `${c.title} check done`);
     btn.textContent = "Check again";
-    announce($("panel-check-summary").textContent);
+    announce($(c.summary).textContent);
   } catch (e) {
     if (!stale()) {
-      logLine("Panel check failed: " + e.message, "error");
+      logLine(`${c.title} check failed: ` + e.message, "error");
       console.error(e);
     }
   } finally {
-    endCheckRun(panelCheck);
+    endCheckRun(state);
     btn.disabled = false;
   }
+}
+
+/* Prepares a page for a check. Returns null when the run went stale meanwhile. */
+async function prepareCheckPage(page, opts, stale) {
+  const prep = await preparePage(page, opts);
+  closeBitmap(prep.bitmap);
+  return stale() ? null : prep;
+}
+
+function runPanelCheck() {
+  return runCheck(panelCheck, {
+    name: "panel", title: "Panel", button: "panel-check-btn", section: "panel-check", summary: "panel-check-summary",
+    progress: "Checking panels", edits: panelEdits, keepMokuroSpreads: true, canRun: () => true, render: renderPanelGrid,
+    async addPage(page, opts, stale) {
+      const prep = await prepareCheckPage(page, opts, stale);
+      if (!prep) return false;
+      const p = {
+        name: page.name, w: prep.imgW, h: prep.imgH, boxes: prep.boxes,
+        reason: panelCheckReason(prep.boxes, prep.rgba, prep.imgW, prep.imgH), thumb: "",
+      };
+      panelCheck.pages.push(p);
+      p.thumb = panelCheckThumb(prep.canvas, panelCheckBoxes(p));
+      return true;
+    },
+  });
 }
 
 /* ── Panel editor ── */
@@ -2750,57 +2768,25 @@ function renderTextGrid() {
     : `No unsure lines on ${textCheck.pages.length} pages.`) + " Click a page to see its text.";
 }
 
-async function runTextCheck() {
-  const files = chosenFiles();
-  if (!files || !files.length) { logValidation("Choose a manga first."); return; }
-  if (splitIntoBooks(files).length > 1) { logValidation("The text check works on one book at a time."); return; }
-  const btn = $("text-check-btn");
-  btn.disabled = true;
-  textCheck.running = true;
-  const gen = ++textCheck.gen;
-  const stale = () => textCheck.gen !== gen;
-  try {
-    const opts = await panelCheckSettings(true);
-    if (!opts || (!opts.ppocr && !mangaState.mokuroInput) || stale()) return;
-    if (textCheck.files !== files) textEdits.clear();
-    closeCheckSource(textCheck);
-    const collected = await collectPagesFromInput(splitIntoBooks(files)[0]);
-    textCheck.release = collected.cleanup || null;
-    if (stale()) return;
-    let pages = collected.pages;
-    // The same pages the conversion will see, so a fix lands on the page it was made on.
-    if (opts.splitSpreads) pages = (await splitSpreadPages(pages, opts.rtl)).pages;
-    if (stale()) return;
-    const maxPages = parseInt($("manga-max-pages").value, 10);
-    if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
-    Object.assign(textCheck, { files, opts, source: pages, pages: [], mokuro: !!collected.mokuro });
-    $("text-check").hidden = false;
-    for (let i = 0; i < pages.length; i++) {
-      setProgress(i, pages.length, `Reading text: page ${i + 1} / ${pages.length}`);
+function runTextCheck() {
+  return runCheck(textCheck, {
+    name: "text", title: "Text", button: "text-check-btn", section: "text-check", summary: "text-check-summary",
+    progress: "Reading text", edits: textEdits, forText: true, render: renderTextGrid,
+    canRun: (opts) => opts.ppocr || mangaState.mokuroInput,
+    extraState: (collected) => ({ mokuro: !!collected.mokuro }),
+    async addPage(page, opts, stale) {
       // Read fresh: a fix made earlier is kept in textEdits and shown over this.
-      const fixed = textEdits.get(pages[i].name);
-      textEdits.delete(pages[i].name);
-      const prep = await preparePage(pages[i], opts);
-      closeBitmap(prep.bitmap);
-      if (stale()) return;
-      if (fixed) textEdits.set(pages[i].name, fixed);
-      const p = { name: pages[i].name, w: prep.imgW, h: prep.imgH, blocks: prep.pageText || [], thumb: "" };
+      const fixed = textEdits.get(page.name);
+      textEdits.delete(page.name);
+      const prep = await prepareCheckPage(page, opts, stale);
+      if (!prep) return false;
+      if (fixed) textEdits.set(page.name, fixed);
+      const p = { name: page.name, w: prep.imgW, h: prep.imgH, blocks: prep.pageText || [], thumb: "" };
       p.thumb = textCheckThumb(prep.canvas, textCheckBlocks(p));
       textCheck.pages.push(p);
-      if (i % 4 === 3 || i === pages.length - 1) renderTextGrid();
-    }
-    setProgress(pages.length, pages.length, "Text check done");
-    btn.textContent = "Check again";
-    announce($("text-check-summary").textContent);
-  } catch (e) {
-    if (!stale()) {
-      logLine("Text check failed: " + e.message, "error");
-      console.error(e);
-    }
-  } finally {
-    endCheckRun(textCheck);
-    btn.disabled = false;
-  }
+      return true;
+    },
+  });
 }
 
 /* ── Text editor ──
