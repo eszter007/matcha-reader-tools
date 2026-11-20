@@ -101,6 +101,10 @@ It's a static site with no build step. Any static host works:
   The included workflow (`.github/workflows/pages.yml`) deploys on every push to `main`.
 - **Locally**: `python3 -m http.server` in the repo root, then open `http://localhost:8000`.
 
+Every page carries its own copy of the shared header and the end of the footer, so pages work
+without JavaScript. To change them, edit `partials/header.html` or `partials/footer-end.html`, then
+run `python3 scripts/sync_layout.py`. CI fails when a page differs from `partials/`.
+
 The deploy workflow stamps every `css/` and `js/` URL with the commit SHA
 (`js/manga-ui.js?v=42dd0bbd`). Pages caches each file for ten minutes, so without this a browser
 can pair a fresh page with a stale script. That happened once and killed every control on the
