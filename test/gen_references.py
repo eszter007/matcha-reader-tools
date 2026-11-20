@@ -35,7 +35,8 @@ import zipfile
 
 from PIL import Image, ImageDraw
 
-FIRMWARE = os.environ.get("MATCHA_READER", os.path.join(os.path.dirname(__file__), "..", "..", "matcha-reader"))
+# Absolute: some firmware scripts run with their own folder as the working directory.
+FIRMWARE = os.path.abspath(os.environ.get("MATCHA_READER", os.path.join(os.path.dirname(__file__), "..", "..", "matcha-reader")))
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
 

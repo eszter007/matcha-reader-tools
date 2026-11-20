@@ -28,9 +28,15 @@ jobs:
           node-version: "20"
       - name: Install Python packages
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq liblzo2-dev
+          sudo apt-get update -qq && sudo apt-get install -y -qq liblzo2-dev fonts-dejavu-core fonts-noto-cjk
           pip install -r test/requirements.txt
+      # Versions last verified locally; the YOLO check and the browser suite need them.
+      - name: Install Node packages
+        run: |
+          npm install --no-save playwright@1.65.1 onnxruntime-web@1.31.1
+          npx playwright install --with-deps chromium
       - name: Build fixtures and references
         run: MATCHA_READER=matcha-reader python3 test/gen_references.py
       - run: node test/node/run.cjs
       - run: node test/node/anki.cjs
+      - run: node test/browser/e2e.mjs
