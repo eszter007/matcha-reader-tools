@@ -2355,17 +2355,60 @@ function normBox([x1, y1, x2, y2]) {
   return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
 }
 
-function clampBox([x1, y1, x2, y2]) {
-  const W = pe.page.width, H = pe.page.height;
-  const w = Math.min(W, Math.max(PE_MIN_SIDE, x2 - x1)), h = Math.min(H, Math.max(PE_MIN_SIDE, y2 - y1));
+/* A box kept on the page and at least minSide on each side. */
+function clampBoxTo([x1, y1, x2, y2], page, minSide) {
+  const W = page.width, H = page.height;
+  const w = Math.min(W, Math.max(minSide, x2 - x1)), h = Math.min(H, Math.max(minSide, y2 - y1));
   const nx = Math.min(W - w, Math.max(0, x1)), ny = Math.min(H - h, Math.max(0, y1));
   return [Math.round(nx), Math.round(ny), Math.round(nx + w), Math.round(ny + h)];
 }
 
-function peAnnounce(text) {
-  const s = $("pe-status");
+function clampBox(box) { return clampBoxTo(box, pe.page, PE_MIN_SIDE); }
+
+/* Clears the live region first so a repeated message is read again. */
+function announceIn(id, text) {
+  const s = $(id);
   s.textContent = "";
   setTimeout(() => { s.textContent = text; }, 50);
+}
+
+function peAnnounce(text) { announceIn("pe-status", text); }
+
+/* A pointer position in page pixels. */
+function canvasPoint(id, scale, ev) {
+  const r = $(id).getBoundingClientRect();
+  return [(ev.clientX - r.left) / scale, (ev.clientY - r.top) / scale];
+}
+
+/* The box of a move or resize drag at page point [x, y]; resizing keeps minSide. */
+function draggedBox(d, [x, y], minSide) {
+  const dx = x - d.start[0], dy = y - d.start[1];
+  const [x1, y1, x2, y2] = d.orig;
+  return d.mode === "move" ? [x1 + dx, y1 + dy, x2 + dx, y2 + dy]
+    : [x1, y1, Math.max(x1 + minSide, x2 + dx), Math.max(y1 + minSide, y2 + dy)];
+}
+
+/* A drawn box when a "new" drag ends, or null while waiting for a second click. A click without a drag
+ * sets one corner, and the next click the opposite one, so a box can be drawn without dragging. */
+function endDrawnBox(ed, d, announce) {
+  const b = normBox(d.box);
+  if (b[2] - b[0] < 4 && b[3] - b[1] < 4) {
+    if (!ed.pending) {
+      ed.pending = [b[0], b[1]];
+      announce("Corner set. Click the opposite corner.");
+      return null;
+    }
+    const box = normBox([ed.pending[0], ed.pending[1], b[0], b[1]]);
+    ed.pending = null;
+    return box;
+  }
+  ed.pending = null;
+  return b;
+}
+
+function isClick(d) {
+  const b = normBox(d.box);
+  return b[2] - b[0] < 4 && b[3] - b[1] < 4;
 }
 
 /* Reading order for panels changed by hand: the conversion's own order, except that 4-koma strip
@@ -2387,10 +2430,7 @@ function commitPanelEdits() {
   drawPanelEditor();
 }
 
-function pePoint(ev) {
-  const r = $("pe-canvas").getBoundingClientRect();
-  return [(ev.clientX - r.left) / pe.scale, (ev.clientY - r.top) / pe.scale];
-}
+function pePoint(ev) { return canvasPoint("pe-canvas", pe.scale, ev); }
 
 function peHit([x, y]) {
   const grab = PE_HANDLE_PX / pe.scale;
@@ -2427,10 +2467,7 @@ function wirePanelEditor() {
     if (d.mode === "new") {
       d.box[2] = x; d.box[3] = y;
     } else {
-      const dx = x - d.start[0], dy = y - d.start[1];
-      const [x1, y1, x2, y2] = d.orig;
-      pe.boxes[pe.sel] = d.mode === "move" ? clampBox([x1 + dx, y1 + dy, x2 + dx, y2 + dy])
-        : clampBox([x1, y1, Math.max(x1 + PE_MIN_SIDE, x2 + dx), Math.max(y1 + PE_MIN_SIDE, y2 + dy)]);
+      pe.boxes[pe.sel] = clampBox(draggedBox(d, [x, y], PE_MIN_SIDE));
     }
     drawPanelEditor();
   });
@@ -2439,48 +2476,24 @@ function wirePanelEditor() {
     if (!d) return;
     pe.drag = null;
     if (d.mode === "new") {
-      const b = normBox(d.box);
-      // A click without a drag: the first sets a corner, the second the opposite one -- so a
-      // panel can be drawn without dragging.
-      if (b[2] - b[0] < 4 && b[3] - b[1] < 4) {
-        if (!pe.draw) { drawPanelEditor(); return; }  // Select tool: a click on empty space deselects
-        if (!pe.pending) {
-          pe.pending = [b[0], b[1]];
-          peAnnounce("Corner set. Click the opposite corner.");
-          drawPanelEditor();
-          return;
-        }
-        d.box = [pe.pending[0], pe.pending[1], b[0], b[1]];
-        pe.pending = null;
-        return finishNewBox(normBox(d.box));
-      }
-      pe.pending = null;
+      // Select tool: a click on empty space deselects.
+      if (!pe.draw && isClick(d)) { drawPanelEditor(); return; }
+      const b = endDrawnBox(pe, d, peAnnounce);
+      if (!b) { drawPanelEditor(); return; }
       if (b[2] - b[0] >= PE_MIN_SIDE && b[3] - b[1] >= PE_MIN_SIDE) {
         pe.boxes.push(clampBox(b));
         pe.sel = pe.boxes.length - 1;
         setDrawMode(false);
         commitPanelEdits();
         peAnnounce(`Panel added as number ${pe.sel + 1} of ${pe.boxes.length}.`);
-        return;
+      } else {
+        peAnnounce("Too small for a panel.");
+        drawPanelEditor();
       }
-      drawPanelEditor();
       return;
     }
     commitPanelEdits();
   };
-  // A finished two-click (or drag) box: added when big enough.
-  function finishNewBox(b) {
-    if (b[2] - b[0] >= PE_MIN_SIDE && b[3] - b[1] >= PE_MIN_SIDE) {
-      pe.boxes.push(clampBox(b));
-      pe.sel = pe.boxes.length - 1;
-      setDrawMode(false);
-      commitPanelEdits();
-      peAnnounce(`Panel added as number ${pe.sel + 1} of ${pe.boxes.length}.`);
-    } else {
-      peAnnounce("Too small for a panel.");
-      drawPanelEditor();
-    }
-  }
   c.addEventListener("pointerup", end);
   c.addEventListener("pointercancel", end);
 
@@ -2928,17 +2941,7 @@ function outlineLine(ctx, box, scale, ox = 0, oy = 0) {
   ctx.restore();
 }
 
-function teNormBox([x1, y1, x2, y2]) {
-  return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
-}
-
-/* A bubble box kept on the page and at least TE_MIN_SIDE on each side. */
-function teClampBox([x1, y1, x2, y2]) {
-  const W = te.page.width, H = te.page.height;
-  const w = Math.min(W, Math.max(TE_MIN_SIDE, x2 - x1)), h = Math.min(H, Math.max(TE_MIN_SIDE, y2 - y1));
-  const nx = Math.min(W - w, Math.max(0, x1)), ny = Math.min(H - h, Math.max(0, y1));
-  return [Math.round(nx), Math.round(ny), Math.round(nx + w), Math.round(ny + h)];
-}
+function teClampBox(box) { return clampBoxTo(box, te.page, TE_MIN_SIDE); }
 
 function drawTextEditor() {
   const c = $("te-canvas");
@@ -2961,7 +2964,7 @@ function drawTextEditor() {
     ctx.beginPath(); ctx.arc(te.pending[0] * te.scale, te.pending[1] * te.scale, 5, 0, Math.PI * 2); ctx.fill();
   }
   if (te.drag && te.drag.mode === "new") {
-    const [x1, y1, x2, y2] = teNormBox(te.drag.box);
+    const [x1, y1, x2, y2] = normBox(te.drag.box);
     ctx.save();
     ctx.setLineDash([6, 4]);
     ctx.lineWidth = 2;
@@ -2973,11 +2976,7 @@ function drawTextEditor() {
     (te.sel >= 0 ? `, bubble ${te.sel + 1} selected` : ""));
 }
 
-function teAnnounce(text) {
-  const s = $("te-status");
-  s.textContent = "";
-  setTimeout(() => { s.textContent = text; }, 50);
-}
+function teAnnounce(text) { announceIn("te-status", text); }
 
 /* A bubble's part of the page, enlarged so its lettering can be read beside its text; `line` is
  * outlined. */
@@ -3063,7 +3062,7 @@ function setTextDrawMode(on) {
 
 /* A new, empty bubble over `box`, selected and waiting for its text. Vertical when taller than wide. */
 function addTextBubble(box, focusText = true) {
-  const b = teClampBox(teNormBox(box));
+  const b = teClampBox(normBox(box));
   const vertical = b[3] - b[1] >= b[2] - b[0];
   te.blocks.push({ ...textBlockFromBox(b, "", vertical) });
   te.sel = te.blocks.length - 1;
@@ -3083,10 +3082,7 @@ function setAddedBox(i, box) {
   te.blocks[i] = { ...textBlockFromBox(teClampBox(box), b.text, b.vertical) };
 }
 
-function tePoint(ev) {
-  const r = $("te-canvas").getBoundingClientRect();
-  return [(ev.clientX - r.left) / te.scale, (ev.clientY - r.top) / te.scale];
-}
+function tePoint(ev) { return canvasPoint("te-canvas", te.scale, ev); }
 
 /* The smallest bubble under a point, so one inside a larger one can still be picked; for an added
  * bubble, whether the point is on its resize corner. */
@@ -3343,11 +3339,8 @@ function wireTextEditor() {
     if (d.mode === "new") {
       d.box[2] = x; d.box[3] = y;
     } else {
-      const dx = x - d.start[0], dy = y - d.start[1];
-      if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
-      const [x1, y1, x2, y2] = d.orig;
-      setAddedBox(te.sel, d.mode === "move" ? [x1 + dx, y1 + dy, x2 + dx, y2 + dy]
-        : [x1, y1, Math.max(x1 + TE_MIN_SIDE, x2 + dx), Math.max(y1 + TE_MIN_SIDE, y2 + dy)]);
+      if (Math.abs(x - d.start[0]) + Math.abs(y - d.start[1]) > 2) d.moved = true;
+      setAddedBox(te.sel, draggedBox(d, [x, y], TE_MIN_SIDE));
     }
     drawTextEditor();
   });
@@ -3360,22 +3353,8 @@ function wireTextEditor() {
       selectTextBlock(te.sel, !d.moved);
       return;
     }
-    const b = teNormBox(d.box);
-    if (b[2] - b[0] < 4 && b[3] - b[1] < 4) {
-      // A click without a drag: the first sets a corner, the second the opposite one.
-      if (!te.pending) {
-        te.pending = [b[0], b[1]];
-        teAnnounce("Corner set. Click the opposite corner.");
-        drawTextEditor();
-        return;
-      }
-      const box = teNormBox([te.pending[0], te.pending[1], b[0], b[1]]);
-      te.pending = null;
-      if (box[2] - box[0] < TE_MIN_SIDE || box[3] - box[1] < TE_MIN_SIDE) { teAnnounce("Too small for a bubble."); drawTextEditor(); return; }
-      addTextBubble(box);
-      return;
-    }
-    te.pending = null;
+    const b = endDrawnBox(te, d, teAnnounce);
+    if (!b) { drawTextEditor(); return; }
     if (b[2] - b[0] < TE_MIN_SIDE || b[3] - b[1] < TE_MIN_SIDE) { teAnnounce("Too small for a bubble."); drawTextEditor(); return; }
     addTextBubble(b);
   };
