@@ -25,6 +25,7 @@ global.pinyinSyllableToMarks = zh.pinyinSyllableToMarks;
 global.pinyinSyllableToZhuyin = zh.pinyinSyllableToZhuyin;
 global.ZipReader = zip.ZipReader;
 global.ZipWriter = zip.ZipWriter;
+Object.assign(global, require("../../js/gemini.js"));
 const rubyCommon = require("../../js/ruby-common.js");
 Object.assign(global, rubyCommon);
 const ruby = require("../../js/pinyin-ruby.js");

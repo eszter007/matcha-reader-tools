@@ -5,7 +5,7 @@
  * every function here works on code-point arrays for the same reason. */
 "use strict";
 
-const RUBY_GEMINI_MODEL = "gemini-3.8-flash";
+const RUBY_GEMINI_MODEL = GEMINI_DEFAULT_MODEL;
 
 // Text that must not be touched: tags, existing ruby, scripts/styles, and the <head>.
 const RUBY_SKIP_BLOCK = /(<(ruby|rt|rp|script|style|head|title)\b[\s\S]*?<\/\2\s*>)/i;
@@ -108,31 +108,20 @@ function numberedPassages(passages) {
 async function geminiJson(prompt, apiKey, model = RUBY_GEMINI_MODEL, retries = 3, onWarn = null) {
   // No temperature: Gemini 3.8 drops the sampling parameters, and a reading is checked against
   // the word anyway, so a varied answer cannot put a wrong one into the book.
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { responseMimeType: "application/json" },
-  };
   for (let attempt = 0; attempt < retries; attempt++) {
-    let response;
-    try {
-      const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-        { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          body: JSON.stringify(payload) });
-      response = await resp.json();
-    } catch (e) {
+    const answer = await geminiGenerate([{ text: prompt }], apiKey, model);
+    if (answer === null) {
       await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
       continue;  // network failure or a malformed body
     }
-    if (response.error) {
-      if (onWarn) onWarn(`Gemini: ${String(response.error.message || response.error.status || "").substring(0, 160)}`);
-      const status = response.error.status || "";
-      if (["UNAUTHENTICATED", "PERMISSION_DENIED", "INVALID_ARGUMENT", "NOT_FOUND"].includes(status)) return null;
+    if (answer.error !== undefined) {
+      if (onWarn) onWarn(`Gemini: ${answer.error.substring(0, 160)}`);
+      if (["UNAUTHENTICATED", "PERMISSION_DENIED", "INVALID_ARGUMENT", "NOT_FOUND"].includes(answer.status)) return null;
       await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
       continue;
     }
     try {
-      return JSON.parse(response.candidates[0].content.parts[0].text);
+      return JSON.parse(answer.text ?? "");
     } catch (e) {
       continue;
     }

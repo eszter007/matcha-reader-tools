@@ -3,7 +3,6 @@
  * input, image decoding, Gemini OCR calls, and the output zip. */
 "use strict";
 
-const GEMINI_DEFAULT_MODEL = "gemini-3.8-flash";
 
 /* Book types, mirroring the flags convert_manga.py takes. The type decides panel
  * reading order, whether printed margins are trimmed, and whether the page is a
@@ -88,48 +87,19 @@ function bytesToBase64(bytes) {
 
 async function geminiOcrOnce(jpegBytes, apiKey, model, prompt) {
   const imageB64 = await bytesToBase64(jpegBytes);
-  const payload = {
-    contents: [{
-      parts: [
-        { text: prompt },
-        { inline_data: { mime_type: "image/jpeg", data: imageB64 } },
-      ],
-    }],
-    generationConfig: { responseMimeType: "application/json" },
-  };
-
-  let resp;
-  try {
-    resp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify(payload),
-      });
-  } catch (e) {
-    return null; // network-level failure — retry
-  }
-
-  let response;
-  try {
-    response = await resp.json();
-  } catch (e) {
-    return null; // malformed response — retry
-  }
-
-  if (response.error) {
-    const status = response.error.status || "";
-    if (["UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED", "INTERNAL"].includes(status)) {
-      return null; // transient API error — retry
+  const answer = await geminiGenerate(
+    [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: imageB64 } }], apiKey, model);
+  if (answer === null) return null;  // network failure or malformed response -- retry
+  if (answer.error !== undefined) {
+    if (["UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED", "INTERNAL"].includes(answer.status)) {
+      return null; // transient API error -- retry
     }
-    logLine(`  Warning: Gemini error: ${String(response.error.message || status).substring(0, 200)}`, "warn");
-    return { blocks: [], translation: "" }; // non-transient — give up on this panel
+    logLine(`  Warning: Gemini error: ${answer.error.substring(0, 200)}`, "warn");
+    return { blocks: [], translation: "" }; // non-transient -- give up on this panel
   }
 
   try {
-    const textOut = response.candidates[0].content.parts[0].text;
-    const parsed = JSON.parse(textOut);
+    const parsed = JSON.parse(answer.text ?? "");
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return { blocks: [], translation: "" };
     }
