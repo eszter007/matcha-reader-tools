@@ -42,6 +42,13 @@ async function gunzip(bytes) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+/* A truncated or damaged zip points past its end; say so instead of reading a short slice. */
+function zipCheckRange(d, offset, length, what) {
+  if (offset < 0 || length < 0 || offset + length > d.length) {
+    throw new Error(`Damaged or incomplete zip file: ${what} runs past the end of the file`);
+  }
+}
+
 class ZipReader {
   /* data: Uint8Array of the whole zip file. */
   constructor(data) {
@@ -69,21 +76,24 @@ class ZipReader {
     const decoder = new TextDecoder("utf-8");
     const entries = [];
     for (let i = 0; i < count; i++) {
+      zipCheckRange(d, offset, 46, "the file list");
       if (view.getUint32(offset, true) !== 0x02014b50) {
         throw new Error("Corrupt zip central directory");
       }
       const flags = view.getUint16(offset + 8, true);
       const method = view.getUint16(offset + 10, true);
+      const crc = view.getUint32(offset + 16, true);
       const compressedSize = view.getUint32(offset + 20, true);
       const size = view.getUint32(offset + 24, true);
       const nameLen = view.getUint16(offset + 28, true);
       const extraLen = view.getUint16(offset + 30, true);
       const commentLen = view.getUint16(offset + 32, true);
       const localOffset = view.getUint32(offset + 42, true);
+      zipCheckRange(d, offset + 46, nameLen, "the file list");
       const nameBytes = d.subarray(offset + 46, offset + 46 + nameLen);
       const name = (flags & ZIP_UTF8_FLAG) ? decoder.decode(nameBytes) : decodeCp437(nameBytes);
       entries.push({
-        name, method, size, compressedSize, localOffset,
+        name, method, crc, size, compressedSize, localOffset,
         isDir: name.endsWith("/"),
       });
       offset += 46 + nameLen + extraLen + commentLen;
@@ -99,14 +109,21 @@ class ZipReader {
     const d = this.data;
     const view = new DataView(d.buffer, d.byteOffset, d.byteLength);
     const lo = entry.localOffset;
+    zipCheckRange(d, lo, 30, entry.name);
     if (view.getUint32(lo, true) !== 0x04034b50) throw new Error(`Corrupt zip local header for ${entry.name}`);
     const nameLen = view.getUint16(lo + 26, true);
     const extraLen = view.getUint16(lo + 28, true);
     const start = lo + 30 + nameLen + extraLen;
+    zipCheckRange(d, start, entry.compressedSize, entry.name);
     const raw = d.subarray(start, start + entry.compressedSize);
-    if (entry.method === 0) return raw.slice();
-    if (entry.method === 8) return await inflateRaw(raw);
-    throw new Error(`Unsupported zip compression method ${entry.method} for ${entry.name}`);
+    let out;
+    if (entry.method === 0) out = raw.slice();
+    else if (entry.method === 8) out = await inflateRaw(raw);
+    else throw new Error(`Unsupported zip compression method ${entry.method} for ${entry.name}`);
+    if (out.length !== entry.size || crc32(out) !== entry.crc) {
+      throw new Error(`Damaged zip file: ${entry.name} does not match its checksum`);
+    }
+    return out;
   }
 
   async readEntryByName(name) {

@@ -1508,6 +1508,25 @@ async function testZipRoundTrip() {
   check("payload B", binary.bytesEqual(b, payloadB));
 }
 
+async function testZipDamaged() {
+  console.log("zip reader, damaged files:");
+  const zw = new zip.ZipWriter();
+  const payload = new TextEncoder().encode("hello matcha");
+  zw.addFile("a.txt", payload);
+  const good = new Uint8Array(await zw.toBlob().arrayBuffer());
+  const errorOf = async (bytes) => {
+    try { await new zip.ZipReader(bytes).readEntryByName("a.txt"); return ""; } catch (e) { return e.message; }
+  };
+  const flipped = good.slice();
+  flipped[good.indexOf(payload[0], 30)] ^= 0xff;   // first byte of the stored data
+  check("changed data fails its checksum", /checksum/.test(await errorOf(flipped)));
+  const view = new DataView(good.buffer.slice(0));
+  const cd = view.getUint32(good.length - 22 + 16, true);
+  view.setUint32(cd + 20, 0xffffff, true);          // compressed size past the end
+  check("a size past the end is reported", /runs past the end/.test(await errorOf(new Uint8Array(view.buffer))));
+  check("an intact file still reads", (await errorOf(good)) === "");
+}
+
 
 /* ── XTC / XTCH page format ──────────────────────────────────── */
 
@@ -1819,6 +1838,7 @@ function testPpocr() {
   await testPinyinRuby();
   await testRubyAi();
   await testZipRoundTrip();
+  await testZipDamaged();
   testMangaMokuro();
   testPpocr();
   if (failures) {
