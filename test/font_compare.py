@@ -93,15 +93,20 @@ def main():
             expect(abs(got[name] - ref[name]) <= tol, f"style {sid}: {name} {got[name]} vs {ref[name]}")
 
         adv_max = wh_max = 0
+        worst = []   # (delta, codepoint, ref metrics, got metrics), printed when over tolerance
         for cp, (rw, rh, radv, rl, rt, rlen, roff), (gw, gh, gadv, gl, gt, glen, goff) in zip(
                 ref["codepoints"], ref["glyphs"], got["glyphs"]):
             adv_max = max(adv_max, abs(gadv - radv))
             if cp in DEFAULT_IGNORABLE:
                 continue
-            for rv, gv in [(rw, gw), (rh, gh), (rl, gl), (rt, gt)]:
-                wh_max = max(wh_max, abs(gv - rv))
+            delta = max(abs(gv - rv) for rv, gv in [(rw, gw), (rh, gh), (rl, gl), (rt, gt)])
+            wh_max = max(wh_max, delta)
+            if delta > 2:
+                worst.append((delta, cp, (rw, rh, rl, rt), (gw, gh, gl, gt)))
         expect(adv_max <= 1, f"style {sid}: advanceX max delta {adv_max} > 1")
         expect(wh_max <= 2, f"style {sid}: bitmap metric max delta {wh_max} > 2")
+        for delta, cp, r, g in sorted(worst, reverse=True)[:10]:
+            print(f"  U+{cp:04X}: w,h,left,top {r} -> {g}")
         print(f"style {sid}: {len(got['glyphs'])} glyphs, advanceX max delta {adv_max}/16 px, "
               f"bitmap metric max delta {wh_max} px, bitmaps {got['bitmap_size']} vs {ref['bitmap_size']} bytes")
 
