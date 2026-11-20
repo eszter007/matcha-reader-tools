@@ -31,11 +31,6 @@ async function mdxInflate(bytes) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/* Python str.strip() (unicode whitespace incl. \x1c-\x1f, \x85). */
-function pyStrip(s) {
-  return s.replace(/^[\s\u001c-\u001f\u0085]+/, "").replace(/[\s\u001c-\u001f\u0085]+$/, "");
-}
-
 /* Python str.strip('\x00') — NULs at the ends only. */
 function stripNulls(s) {
   let a = 0, b = s.length;

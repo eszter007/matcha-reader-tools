@@ -14,6 +14,7 @@ const binary = require("../../js/binary.js");
 global.ByteWriter = binary.ByteWriter;
 global.compareBytes = binary.compareBytes;
 global.bytesEqual = binary.bytesEqual;
+global.pyStrip = binary.pyStrip;
 const zip = require("../../js/zip.js");
 const dict = require("../../js/dict.js");
 const zh = require("../../js/dict-zh.js");

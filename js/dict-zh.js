@@ -137,7 +137,6 @@ function codePoints(s) { return Array.from(s); }
 function cpLength(s) { return codePoints(s).length; }
 
 /* Python's str.strip(): whitespace, which JS trim() also takes as Unicode White_Space. */
-function pyStrip(s) { return s.trim(); }
 function stripQuotes(s) { return s.replace(/^"+/, "").replace(/"+$/, ""); }
 /* Python float(): the number formats a count column can hold. */
 function pyFloat(s) {

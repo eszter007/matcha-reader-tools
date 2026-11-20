@@ -48,6 +48,12 @@ function bytesEqual(a, b) {
   return true;
 }
 
+/* Python str.strip(): the characters str.isspace() accepts. JS \s adds U+FEFF and lacks
+ * U+001C-U+001F and U+0085, so it is spelled out. */
+const PY_SPACE = "[\\t-\\r\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
+const PY_STRIP_RE = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, "g");
+function pyStrip(s) { return s.replace(PY_STRIP_RE, ""); }
+
 if (typeof module !== "undefined") {
-  module.exports = { ByteWriter, compareBytes, bytesEqual };
+  module.exports = { ByteWriter, compareBytes, bytesEqual, pyStrip };
 }
