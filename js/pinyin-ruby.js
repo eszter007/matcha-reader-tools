@@ -74,40 +74,24 @@ function loadCedictReadings(text, charReadings = null) {
  * null. A sentence whose answer has the wrong number of syllables is dropped whole: once the
  * count is off there is no telling which syllable belongs to which character. */
 async function contextualReadings(passages, charReadings, ask, onBatch) {
-  const sentences = new Map();  // sentence -> [[passage, start], ...]
-  for (const passage of new Set(passages)) {
-    for (const [start, sentence] of splitSentences(Array.from(passage))) {
-      if (PINYIN_HAN.test(sentence)) {
-        if (!sentences.has(sentence)) sentences.set(sentence, []);
-        sentences.get(sentence).push([passage, start]);
-      }
-    }
-  }
   const out = new Map();
-  const groups = rubyBatches([...sentences.keys()], (t) => (t.match(PINYIN_HAN_G) || []).length, PINYIN_AI_BATCH_HANZI);
-  for (let g = 0; g < groups.length; g++) {
-    const batch = groups[g];
-    const answer = await ask(batch);
-    if (onBatch) onBatch(g + 1, groups.length, answer !== null);
-    if (answer === null) continue;
-    for (let b = 0; b < Math.min(batch.length, answer.length); b++) {
-      const sentence = Array.from(batch[b]);
-      const syllables = answer[b];
+  await askBySentence(passages, (t) => PINYIN_HAN.test(t), (t) => (t.match(PINYIN_HAN_G) || []).length,
+    PINYIN_AI_BATCH_HANZI, ask, onBatch, (text, syllables, places) => {
+      const sentence = Array.from(text);
       const positions = [];
       sentence.forEach((ch, i) => { if (PINYIN_HAN.test(ch)) positions.push(i); });
-      if (syllables.length !== positions.length) continue;
+      if (syllables.length !== positions.length) return;
       positions.forEach((pos, k) => {
         const syl = normalizeSyllable(String(syllables[k]));
         const known = charReadings.get(sentence[pos]);
         if (known && known.has(syl)) {
-          for (const [passage, start] of sentences.get(batch[b])) {
+          for (const [passage, start] of places) {
             if (!out.has(passage)) out.set(passage, new Map());
             out.get(passage).set(start + pos, syl);
           }
         }
       });
-    }
-  }
+    });
   return out;
 }
 
@@ -176,7 +160,7 @@ function rubyFor(chunk, syllables, zhuyin) {
     }
     groups.push([chars[i], reading]);
   }
-  return groups.map(([c, r]) => `<ruby>${htmlEscape(c)}<rt>${htmlEscape(r)}</rt></ruby>`).join("");
+  return groups.map(([c, r]) => rubyMarkup(c, r)).join("");
 }
 
 // Tags that stay inside a phrase: the tone of 不 in 不<em>是</em> depends on the next word all the same.

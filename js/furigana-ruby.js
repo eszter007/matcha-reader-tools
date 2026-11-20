@@ -105,30 +105,15 @@ function dictionaryFurigana(passages, tokenize) {
 /* Map(passage -> [[start, end, kana], ...] in order), from a model's [word, reading] pairs.
  * ask(sentences) -> Promise of one list of pairs per sentence, or null. */
 async function contextualFurigana(passages, ask, onBatch) {
-  const sentences = new Map();  // sentence -> [[passage, start], ...]
-  for (const passage of new Set(passages)) {
-    for (const [start, sentence] of splitSentences(Array.from(passage))) {
-      if (FURIGANA_KANJI.test(sentence)) {
-        if (!sentences.has(sentence)) sentences.set(sentence, []);
-        sentences.get(sentence).push([passage, start]);
-      }
-    }
-  }
   const out = new Map();
-  const groups = rubyBatches([...sentences.keys()], (t) => Array.from(t).length, FURIGANA_AI_BATCH_CHARS);
-  for (let g = 0; g < groups.length; g++) {
-    const batch = groups[g];
-    const answer = await ask(batch);
-    if (onBatch) onBatch(g + 1, groups.length, answer !== null);
-    if (answer === null) continue;
-    for (let b = 0; b < Math.min(batch.length, answer.length); b++) {
-      const spans = spansFromPairs(Array.from(batch[b]), answer[b]);
-      for (const [passage, start] of sentences.get(batch[b])) {
+  await askBySentence(passages, (t) => FURIGANA_KANJI.test(t), (t) => Array.from(t).length, FURIGANA_AI_BATCH_CHARS,
+    ask, onBatch, (sentence, pairs, places) => {
+      const spans = spansFromPairs(Array.from(sentence), pairs);
+      for (const [passage, start] of places) {
         if (!out.has(passage)) out.set(passage, []);
         for (const [s, e, kana] of spans) out.get(passage).push([start + s, start + e, kana]);
       }
-    }
-  }
+    });
   for (const spans of out.values()) {
     spans.sort((x, y) => x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : x[2] > y[2] ? 1 : 0));
   }
@@ -150,7 +135,7 @@ function annotateFurigana(doc, furigana) {
     for (const [start, end, kana] of spans) {
       if (start < pos) continue;  // overlaps the previous span: keep the first
       built.push(htmlEscape(chars.slice(pos, start).join(""), false));
-      built.push(`<ruby>${htmlEscape(chars.slice(start, end).join(""))}<rt>${htmlEscape(kana)}</rt></ruby>`);
+      built.push(rubyMarkup(chars.slice(start, end).join(""), kana));
       pos = end;
     }
     built.push(htmlEscape(chars.slice(pos).join(""), false));

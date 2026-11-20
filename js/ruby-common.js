@@ -72,6 +72,34 @@ function rubyBatches(items, weight, limit) {
   return out;
 }
 
+/* Asks a model about every distinct sentence of passages that wants(sentence), in batches whose
+ * weight(sentence) sums to at most limit. ask(sentences) -> Promise of one answer per sentence, or
+ * null. use(sentence, answer, places) runs per answered sentence; places lists [passage, start] for
+ * each place the sentence appears, start being its first code point in that passage. */
+async function askBySentence(passages, wants, weight, limit, ask, onBatch, use) {
+  const sentences = new Map();  // sentence -> [[passage, start], ...]
+  for (const passage of new Set(passages)) {
+    for (const [start, sentence] of splitSentences(Array.from(passage))) {
+      if (wants(sentence)) {
+        if (!sentences.has(sentence)) sentences.set(sentence, []);
+        sentences.get(sentence).push([passage, start]);
+      }
+    }
+  }
+  const groups = rubyBatches([...sentences.keys()], weight, limit);
+  for (let g = 0; g < groups.length; g++) {
+    const batch = groups[g];
+    const answer = await ask(batch);
+    if (onBatch) onBatch(g + 1, groups.length, answer !== null);
+    if (answer === null) continue;
+    for (let b = 0; b < Math.min(batch.length, answer.length); b++) use(batch[b], answer[b], sentences.get(batch[b]));
+  }
+}
+
+function rubyMarkup(base, reading) {
+  return `<ruby>${htmlEscape(base)}<rt>${htmlEscape(reading)}</rt></ruby>`;
+}
+
 function numberedPassages(passages) {
   return passages.map((p, i) => `${i + 1}. ${p}`).join("\n");
 }
@@ -178,7 +206,7 @@ async function rewriteEpub(epubBytes, annotate, onProgress) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    RUBY_GEMINI_MODEL, textPieces, splitSentences, rubyBatches, numberedPassages, geminiJson, askPerPassage,
+    RUBY_GEMINI_MODEL, textPieces, splitSentences, rubyBatches, askBySentence, rubyMarkup, numberedPassages, geminiJson, askPerPassage,
     htmlEscape, htmlUnescape, documentPassages, rewriteEpub,
   };
 }
