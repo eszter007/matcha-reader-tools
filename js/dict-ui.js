@@ -72,14 +72,14 @@ async function convertJapaneseFile(file, readingRecords) {
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     if (!bankEntries.length) throw new Error("No term_bank_N.json files found in zip — is this a Yomitan dictionary?");
     logLine(`  Found ${bankEntries.length} term bank files`);
-    const termBanks = [];
+    const converter = createYomitanConverter(readingRecords);
     for (let i = 0; i < bankEntries.length; i++) {
       setProgress(i, bankEntries.length, `Reading term banks: ${i + 1}/${bankEntries.length}`);
-      termBanks.push(JSON.parse(decoder.decode(await zip.readEntry(bankEntries[i]))));
+      converter.addBank(JSON.parse(decoder.decode(await zip.readEntry(bankEntries[i]))));
       await sleep(0); // keep the UI alive between large JSON parses
     }
     setProgress(0, 1, "Converting entries…");
-    const result = convertYomitanRecords(termBanks, (done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`), readingRecords);
+    const result = converter.finish((done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`));
     logLine(`Processed ${result.entryCount} Yomitan entries → ${result.records.length} index records`);
     return { records: result.records, title };
   }

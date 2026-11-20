@@ -353,83 +353,96 @@ function yomitanPriority(score) {
 /* termBanks: array of parsed term_bank JSON arrays, in lexicographic
  * filename order. Returns {records, entryCount}. readingRecords=false skips the extra record
  * per reading: Chinese dictionaries carry pinyin there, which no page text ever matches. */
-function convertYomitanRecords(termBanks, onProgress, readingRecords = true) {
-  // Pass 1: collect entries; canonical headword → best definition for
-  // non-redirect entries so variant/redirect entries can be resolved.
+/* Converts Yomitan term banks one at a time: addBank() formats each entry while its bank is
+ * loaded and keeps only the strings, so a bank's parsed JSON can be dropped before the next
+ * is read. finish() resolves redirects, which can point into any bank, and emits records. */
+function createYomitanConverter(readingRecords = true) {
+  // [headword, reading, priority, definition, redirect, rules, readingDefinition]
   const allEntries = [];
-  const canonicalDefs = new Map(); // headword → [definition, priority]
-  for (const entries of termBanks) {
-    for (const entry of entries) {
-      if (!Array.isArray(entry) || entry.length < 6) continue;
-      const headword = entry[0];
-      if (!headword || typeof headword !== "string") continue;
-      const reading = entry.length > 1 ? entry[1] : "";
-      const rules = (entry.length > 3 && typeof entry[3] === "string") ? entry[3] : "";
-      const score = entry.length > 4 ? entry[4] : 0;
-      const definitions = entry.length > 5 ? entry[5] : [];
-      const redirect = findRedirectTarget(definitions);
-      allEntries.push([headword, reading, score, definitions, redirect, rules]);
-      if (!redirect) {
-        const definition = formatDefinitionYomitan(headword, reading, definitions);
-        if (definition) {
-          const priority = yomitanPriority(score);
-          const prev = canonicalDefs.get(headword);
-          if (prev === undefined || priority > prev[1]) {
-            canonicalDefs.set(headword, [definition, priority]);
+  const canonicalDefs = new Map(); // headword → [definition, priority], for redirects
+  return {
+    addBank(entries) {
+      for (const entry of entries) {
+        if (!Array.isArray(entry) || entry.length < 6) continue;
+        const headword = entry[0];
+        if (!headword || typeof headword !== "string") continue;
+        const reading = entry.length > 1 ? entry[1] : "";
+        const rules = (entry.length > 3 && typeof entry[3] === "string") ? entry[3] : "";
+        const score = entry.length > 4 ? entry[4] : 0;
+        const definitions = entry.length > 5 ? entry[5] : [];
+        const redirect = findRedirectTarget(definitions);
+        const priority = yomitanPriority(score);
+        let definition = "", readingDefinition = "";
+        if (!redirect) {
+          definition = formatDefinitionYomitan(headword, reading, definitions);
+          if (definition) {
+            const prev = canonicalDefs.get(headword);
+            if (prev === undefined || priority > prev[1]) canonicalDefs.set(headword, [definition, priority]);
+            if (readingRecords && reading && reading !== headword) {
+              readingDefinition = formatDefinitionYomitan(reading, reading, definitions);
+            }
           }
         }
+        allEntries.push([headword, reading, priority, definition, redirect, rules, readingDefinition]);
       }
-    }
-  }
+    },
 
-  // Pass 2: emit records, resolving redirects to the target's definition.
-  const records = [];
-  let entryCount = 0;
-  for (let ei = 0; ei < allEntries.length; ei++) {
-    const [headword, reading, score, definitions, redirect, rules] = allEntries[ei];
-    let definition, priority;
-    if (redirect) {
-      const target = canonicalDefs.get(redirect);
-      if (!target) continue; // dangling redirect
-      definition = `= ${redirect}\n${target[0]}`;
-      priority = target[1];
-    } else {
-      definition = formatDefinitionYomitan(headword, reading, definitions);
-      if (!definition) continue;
-      priority = yomitanPriority(score);
-    }
-
-    const defBytes = dictEncoder.encode(definition);
-    // Yomitan spec: empty rules = "word is not inflected" — that IS positive POS
-    // data (a non-conjugating word), so stamp POS_OTHER rather than fail-open 0.
-    const posFlags = rules.trim() ? posFlagsFromTags(rules.trim().split(/\s+/)) : POS_OTHER;
-    const seen = new Set();
-    const hwBytes = dictEncoder.encode(headword);
-    if (hwBytes.length < HEADWORD_SIZE) {
-      seen.add(headword);
-      records.push({ hw: hwBytes, def: defBytes, priority, posFlags, word: headword });
-    }
-
-    if (readingRecords && reading && reading !== headword && !redirect) {
-      const rBytes = dictEncoder.encode(reading);
-      if (rBytes.length < HEADWORD_SIZE && !seen.has(reading)) {
-        const rDef = formatDefinitionYomitan(reading, reading, definitions);
-        if (rDef) {
-          // reading != headword: kana reading of a kanji headword → flag it.
-          records.push({ hw: rBytes, def: dictEncoder.encode(rDef), priority, posFlags: posFlags | POS_READING, word: reading });
+    finish(onProgress) {
+      const records = [];
+      let entryCount = 0;
+      for (let ei = 0; ei < allEntries.length; ei++) {
+        const [headword, reading, ownPriority, ownDefinition, redirect, rules, readingDefinition] = allEntries[ei];
+        allEntries[ei] = null;   // its strings are no longer needed once its records exist
+        let definition, priority;
+        if (redirect) {
+          const target = canonicalDefs.get(redirect);
+          if (!target) continue; // dangling redirect
+          definition = `= ${redirect}\n${target[0]}`;
+          priority = target[1];
+        } else {
+          if (!ownDefinition) continue;
+          definition = ownDefinition;
+          priority = ownPriority;
         }
+
+        const defBytes = dictEncoder.encode(definition);
+        // Yomitan spec: empty rules = "word is not inflected" — that IS positive POS
+        // data (a non-conjugating word), so stamp POS_OTHER rather than fail-open 0.
+        const posFlags = rules.trim() ? posFlagsFromTags(rules.trim().split(/\s+/)) : POS_OTHER;
+        const seen = new Set();
+        const hwBytes = dictEncoder.encode(headword);
+        if (hwBytes.length < HEADWORD_SIZE) {
+          seen.add(headword);
+          records.push({ hw: hwBytes, def: defBytes, priority, posFlags, word: headword });
+        }
+
+        if (readingDefinition) {
+          const rBytes = dictEncoder.encode(reading);
+          if (rBytes.length < HEADWORD_SIZE && !seen.has(reading)) {
+            // reading != headword: kana reading of a kanji headword → flag it.
+            records.push({ hw: rBytes, def: dictEncoder.encode(readingDefinition), priority, posFlags: posFlags | POS_READING, word: reading });
+          }
+        }
+        entryCount++;
+        if (onProgress && ei % 20000 === 0) onProgress(ei, allEntries.length);
       }
-    }
-    entryCount++;
-    if (onProgress && ei % 20000 === 0) onProgress(ei, allEntries.length);
-  }
-  return { records, entryCount };
+      allEntries.length = 0;
+      canonicalDefs.clear();
+      return { records, entryCount };
+    },
+  };
+}
+
+function convertYomitanRecords(termBanks, onProgress, readingRecords = true) {
+  const converter = createYomitanConverter(readingRecords);
+  for (const entries of termBanks) converter.addBank(entries);
+  return converter.finish(onProgress);
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
     dictWriteBinary, dictGenSpx,
-    convertJmdictRecords, convertYomitanRecords,
+    convertJmdictRecords, convertYomitanRecords, createYomitanConverter,
     formatDefinitionJmdict, formatDefinitionYomitan,
     flattenStructuredContent, findRedirectTarget,
     posFlagsFromTags, posFlagsJmdict,
