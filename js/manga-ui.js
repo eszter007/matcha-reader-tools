@@ -1217,7 +1217,7 @@ function updateRunSummary() {
   if (!validResChoice(res.value)) missing.push("a device");
   // The panel check needs a single book and its reading order; say so instead of failing on click.
   const checkBtn = $("panel-check-btn");
-  if (!panelCheckRunning) {
+  if (!panelCheck.running) {
     const bt = validBookType($("manga-booktype").value);
     const why = !files || !files.length ? "Choose a manga and how it reads first."
       : !bt ? "Choose how it reads first."
@@ -2023,12 +2023,27 @@ const PE_HANDLE_PX = 14;      // corner grab size, in screen pixels
 const PE_MIN_SIDE = 16;       // smallest panel kept, in page pixels
 
 // release: frees the page source (an open PDF); the editor re-reads pages until then.
-const panelCheck = { files: null, opts: null, pages: [], editIndex: -1, release: null };
-let panelCheckRunning = false;
+// gen: bumped when the source is dropped, so a run still in progress stops at its next await.
+const panelCheck = { files: null, opts: null, source: [], pages: [], editIndex: -1, release: null, running: false, gen: 0, releaseAfterRun: false };
 
-function releasePanelCheckSource() {
-  if (panelCheck.release) panelCheck.release();
-  panelCheck.release = null;
+function closeCheckSource(state) {
+  if (state.release) state.release();
+  state.release = null;
+}
+
+/* Drops a check's source when a new file is chosen. A run still reading it closes it when it stops. */
+function dropCheckSource(state) {
+  state.gen++;
+  if (state.running) state.releaseAfterRun = true;
+  else closeCheckSource(state);
+}
+
+function endCheckRun(state) {
+  state.running = false;
+  if (state.releaseAfterRun) {
+    state.releaseAfterRun = false;
+    closeCheckSource(state);
+  }
 }
 
 /* The page settings the conversion would use, or null (with a message) when one is missing. */
@@ -2187,17 +2202,21 @@ async function runPanelCheck() {
   if (splitIntoBooks(files).length > 1) { logValidation("The panel check works on one book at a time."); return; }
   const btn = $("panel-check-btn");
   btn.disabled = true;
-  panelCheckRunning = true;
+  panelCheck.running = true;
+  const gen = ++panelCheck.gen;
+  const stale = () => panelCheck.gen !== gen;
   try {
     const opts = await panelCheckSettings();
-    if (!opts) return;
+    if (!opts || stale()) return;
     if (panelCheck.files !== files) panelEdits.clear();
-    releasePanelCheckSource();
+    closeCheckSource(panelCheck);
     const collected = await collectPagesFromInput(splitIntoBooks(files)[0]);
     panelCheck.release = collected.cleanup || null;
+    if (stale()) return;
     let pages = collected.pages;
     // The same pages the conversion will see, so a fix lands on the page it was made on.
     if (opts.splitSpreads && !collected.mokuro) pages = (await splitSpreadPages(pages, opts.rtl)).pages;
+    if (stale()) return;
     const maxPages = parseInt($("manga-max-pages").value, 10);
     if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
     Object.assign(panelCheck, { files, opts, source: pages, pages: [] });
@@ -2206,6 +2225,7 @@ async function runPanelCheck() {
       setProgress(i, pages.length, `Checking panels: page ${i + 1} / ${pages.length}`);
       const prep = await preparePage(pages[i], opts);
       prep.bitmap.close && prep.bitmap.close();
+      if (stale()) return;
       panelCheck.pages.push({
         name: pages[i].name, w: prep.imgW, h: prep.imgH, boxes: prep.boxes,
         reason: panelCheckReason(prep.boxes, prep.rgba, prep.imgW, prep.imgH),
@@ -2219,10 +2239,12 @@ async function runPanelCheck() {
     btn.textContent = "Check again";
     announce($("panel-check-summary").textContent);
   } catch (e) {
-    logLine("Panel check failed: " + e.message, "error");
-    console.error(e);
+    if (!stale()) {
+      logLine("Panel check failed: " + e.message, "error");
+      console.error(e);
+    }
   } finally {
-    panelCheckRunning = false;
+    endCheckRun(panelCheck);
     btn.disabled = false;
   }
 }
@@ -2590,13 +2612,8 @@ function deleteSelectedPanel() {
  * Lines the recogniser was unsure of are marked; nothing is removed unless the user removes it.
  * Fixes land in textEdits, which the conversion uses instead of reading the page again. */
 
-const textCheck = { files: null, opts: null, source: [], pages: [], editIndex: -1, release: null };
+const textCheck = { files: null, opts: null, source: [], pages: [], editIndex: -1, release: null, running: false, gen: 0, releaseAfterRun: false };
 const TE_ZOOM_W = 260, TE_ZOOM_H = 180;   // largest bubble preview, in screen pixels
-
-function releaseTextCheckSource() {
-  if (textCheck.release) textCheck.release();
-  textCheck.release = null;
-}
 
 function isUnsureLine(conf) { return conf < PPOCR_UNSURE_CONF; }
 function unsureLineCount(blocks) {
@@ -2730,16 +2747,21 @@ async function runTextCheck() {
   if (splitIntoBooks(files).length > 1) { logValidation("The text check works on one book at a time."); return; }
   const btn = $("text-check-btn");
   btn.disabled = true;
+  textCheck.running = true;
+  const gen = ++textCheck.gen;
+  const stale = () => textCheck.gen !== gen;
   try {
     const opts = await panelCheckSettings(true);
-    if (!opts || (!opts.ppocr && !mangaState.mokuroInput)) return;
+    if (!opts || (!opts.ppocr && !mangaState.mokuroInput) || stale()) return;
     if (textCheck.files !== files) textEdits.clear();
-    releaseTextCheckSource();
+    closeCheckSource(textCheck);
     const collected = await collectPagesFromInput(splitIntoBooks(files)[0]);
     textCheck.release = collected.cleanup || null;
+    if (stale()) return;
     let pages = collected.pages;
     // The same pages the conversion will see, so a fix lands on the page it was made on.
     if (opts.splitSpreads) pages = (await splitSpreadPages(pages, opts.rtl)).pages;
+    if (stale()) return;
     const maxPages = parseInt($("manga-max-pages").value, 10);
     if (Number.isInteger(maxPages) && maxPages > 0) pages = pages.slice(0, maxPages);
     Object.assign(textCheck, { files, opts, source: pages, pages: [], mokuro: !!collected.mokuro });
@@ -2750,8 +2772,9 @@ async function runTextCheck() {
       const fixed = textEdits.get(pages[i].name);
       textEdits.delete(pages[i].name);
       const prep = await preparePage(pages[i], opts);
-      if (fixed) textEdits.set(pages[i].name, fixed);
       prep.bitmap.close && prep.bitmap.close();
+      if (stale()) return;
+      if (fixed) textEdits.set(pages[i].name, fixed);
       const p = { name: pages[i].name, w: prep.imgW, h: prep.imgH, blocks: prep.pageText || [], thumb: "" };
       p.thumb = textCheckThumb(prep.canvas, textCheckBlocks(p));
       textCheck.pages.push(p);
@@ -2761,9 +2784,12 @@ async function runTextCheck() {
     btn.textContent = "Check again";
     announce($("text-check-summary").textContent);
   } catch (e) {
-    logLine("Text check failed: " + e.message, "error");
-    console.error(e);
+    if (!stale()) {
+      logLine("Text check failed: " + e.message, "error");
+      console.error(e);
+    }
   } finally {
+    endCheckRun(textCheck);
     btn.disabled = false;
   }
 }
@@ -3575,11 +3601,11 @@ if (typeof document !== "undefined" && document.getElementById("manga-run")) {
         : files.length === 1 ? files[0].name : `${files.length} files selected`;
       showFileNameMeta();
       panelEdits.clear();
-      releasePanelCheckSource();
+      dropCheckSource(panelCheck);
       panelCheck.pages = [];
       $("panel-check").hidden = true;
       textEdits.clear();
-      releaseTextCheckSource();
+      dropCheckSource(textCheck);
       textCheck.pages = [];
       $("text-check").hidden = true;
       $("text-check-btn").textContent = "Check text";
