@@ -1327,19 +1327,14 @@ function chosenFiles() {
   return mangaState.files || $("manga-file").files;
 }
 
-async function runMangaConversion() {
-  const files = chosenFiles();
-  if (!files || !files.length) {
-    logValidation("Choose a .cbz/.zip/.epub file or a set of page images first.");
-    return;
-  }
-
+/* The conversion settings from the form, or null (with a message) when one is missing or invalid. */
+function readMangaSettings() {
   // Any combination of the device folder, a portable EPUB, and Xteink's XTC/XTCH. Nothing is
   // preselected, so an empty pick is a user error rather than a default to guess at.
   const formats = selectedFormats();
   if (!formats.size) {
     logValidation("Pick at least one export format.");
-    return;
+    return null;
   }
 
   // OCR text and translations are only ever stored in panels.dat, so without the device folder
@@ -1369,11 +1364,6 @@ async function runMangaConversion() {
   // Not 100%: a stray speck in the gutter or a page number outside every panel is not content
   // worth keeping a whole page image for.
   const PANELS_ONLY_MIN_INK_COVERAGE = 0.98;
-  let pagesKeptForCoverage = 0;
-  // XTC/XTCH pages are accumulated as encoded bitmaps (one per page/panel image, same reading
-  // order as the EPUB) and assembled once at the end, since the page table needs every size.
-  const xtcPages = [], xtchPages = [];
-  const xtcPageMap = new Map();   // source page index -> position in the exported XTC sequence
   // Target resolution: RES_FULL (keep the source pixels), a device preset (a MANGA_DEVICE_TARGETS key), or
   // RES_CUSTOM with a typed width/height. Anything but full resolution downscales pages and panels
   // before detection so the device decodes fewer pixels; it never upscales. Nothing is
@@ -1381,14 +1371,14 @@ async function runMangaConversion() {
   const resChoice = validResChoice($("manga-res").value);
   if (!resChoice) {
     logValidation("Pick a target resolution — a device, a custom size, or full resolution.");
-    return;
+    return null;
   }
   let deviceTarget = null;
   if (resChoice === RES_CUSTOM) {
     deviceTarget = customResTarget();
     if (!deviceTarget) {
       logValidation(`Enter a custom width and height, each between 1 and ${RES_CUSTOM_MAX} px.`);
-      return;
+      return null;
     }
     // XTCH's two bit-planes are indexed by column in 8-row groups, so a height that isn't a
     // multiple of 8 makes the firmware read past the buffer it sized. The presets all divide by 8;
@@ -1396,7 +1386,7 @@ async function runMangaConversion() {
     if (wantXtch && deviceTarget[1] % 8 !== 0) {
       const near = Math.max(8, Math.round(deviceTarget[1] / 8) * 8);
       logValidation(`XTCH needs a page height that is a multiple of 8 — try ${near} instead of ${deviceTarget[1]}.`);
-      return;
+      return null;
     }
   } else if (resChoice !== RES_FULL) {
     deviceTarget = MANGA_DEVICE_TARGETS[resChoice];
@@ -1406,7 +1396,7 @@ async function runMangaConversion() {
   // (varying, full-size) dimensions, which has no sensible answer here -- so a device is required.
   if (anyXtc && !deviceTarget) {
     logValidation("Pick a target resolution (a device or a custom size) for XTC/XTCH — those formats need a fixed page size.");
-    return;
+    return null;
   }
   // Book type drives panel reading order, margin trimming and webtoon re-cutting.
   // Like the resolution, nothing is preselected -- reading a western comic in manga
@@ -1421,7 +1411,7 @@ async function runMangaConversion() {
   const bookType = validBookType($("manga-booktype").value);
   if (!bookType) {
     logValidation("Pick a book type — manga, western comic, or webtoon/manhwa.");
-    return;
+    return null;
   }
   // Yonkoma is Japanese too: its columns run right to left, like manga's tiers. An English or
   // otherwise left-to-right strip page is the same layout read the other way.
@@ -1440,8 +1430,24 @@ async function runMangaConversion() {
   const model = $("manga-model").value.trim() || GEMINI_DEFAULT_MODEL;
   if (!noOcr && !apiKey && !mangaState.mokuroInput) {
     logValidation("Enter a Gemini API key, or pick another text recognition.");
-    return;
+    return null;
   }
+  const panelMargin = parseInt($("manga-margin").value, 10);
+  const margin = Number.isInteger(panelMargin) ? panelMargin : 10;
+  const maxPagesRaw = parseInt($("manga-max-pages").value, 10);
+  return {
+    formats, matchaFile, engine, noOcr, usePpocr, mono, pdf, epub, matchaFolder, wantXtc, wantXtch, anyXtc,
+    panelsOnly, rotatePanels, PANELS_ONLY_MIN_INK_COVERAGE, resChoice, deviceTarget, ditherGamma, ditherStyle,
+    xtcSplit, cleanup, cleanupOn, bookType, rtl, isWebtoon, columnMajor, trimMargins, splitSpreads, yonkomaDetect,
+    apiKey, model, panelMargin, margin, maxPagesRaw
+  };
+}
+
+function saveMangaSettings(s) {
+  const {
+    formats, engine, mono, panelsOnly, rotatePanels, resChoice, deviceTarget, ditherStyle, xtcSplit, cleanup,
+    bookType, yonkomaDetect, apiKey, model
+  } = s;
   saveSetting("gemini-key", apiKey);
   saveSetting("gemini-model", model);
   saveSetting("manga-yolo", $("manga-yolo").checked ? "1" : "0");
@@ -1466,9 +1472,524 @@ async function runMangaConversion() {
     saveSetting("manga-res-h", String(deviceTarget[1]));
   }
 
-  const panelMargin = parseInt($("manga-margin").value, 10);
-  const margin = Number.isInteger(panelMargin) ? panelMargin : 10;
-  const maxPagesRaw = parseInt($("manga-max-pages").value, 10);
+}
+
+/* Converts one book and downloads its files. bookField reads a field that describes one book. */
+async function convertMangaBook(files, s, bookField) {
+  const {
+    formats, matchaFile, noOcr, usePpocr, mono, pdf, epub, matchaFolder, wantXtc, wantXtch, anyXtc, panelsOnly,
+    rotatePanels, PANELS_ONLY_MIN_INK_COVERAGE, deviceTarget, ditherGamma, ditherStyle, xtcSplit, cleanup, cleanupOn,
+    rtl, isWebtoon, columnMajor, trimMargins, splitSpreads, yonkomaDetect, apiKey, model, margin, maxPagesRaw
+  } = s;
+  let pagesKeptForCoverage = 0;
+  // XTC/XTCH pages are accumulated as encoded bitmaps (one per page/panel image, same reading
+  // order as the EPUB) and assembled once at the end, since the page table needs every size.
+  const xtcPages = [], xtchPages = [];
+  const xtcPageMap = new Map();   // source page index -> position in the exported XTC sequence
+  let collected = null;
+  try {
+    logLine("Collecting pages…");
+    collected = await collectPagesFromInput(files);
+    let pages = collected.pages;
+    // A Mokuro volume brings its own text, so Gemini is never called for it.
+    const bookNoOcr = noOcr || !!collected.mokuro;
+    if (collected.mokuro && isWebtoon) {
+      throw new Error("Webtoon re-cuts the pages, which would separate Mokuro's text from its page. Pick another book type.");
+    }
+
+    // Resolve TOC before any max-pages truncation (indices stay correct).
+    let tocEntries = collected.tocEntries;
+    if (tocEntries.length) logLine(`Found ${tocEntries.length} chapter(s) from the ${collected.tocSource}`);
+    if (splitSpreads) {
+      if (collected.mokuro) {
+        throw new Error("Splitting spreads changes the pages, which would separate Mokuro's text from its page. " +
+          "Untick \"Split two-page spreads\".");
+      }
+      const sourceCount = pages.length;
+      const split = await splitSpreadPages(pages, rtl,
+        (done, total) => setProgress(done, total, "Looking for two-page spreads…"));
+      pages = split.pages;
+      tocEntries = remapTocAfterSplit(tocEntries, split.firstOutput);
+      logLine(`Split landscape spreads: ${sourceCount} source pages became ${pages.length} pages`);
+    }
+    const tocText = bookField("manga-toc");
+    if (tocText.trim()) {
+      const parsed = parseTocText(tocText);
+      parsed.warnings.forEach((warning) => logLine("Warning: " + warning, "warn"));
+      tocEntries = parsed.entries;
+      logLine(`Using ${tocEntries.length} chapter(s) from the chapter list`);
+    }
+
+    if (isWebtoon) {
+      // Re-cutting changes how many pages there are, so a table of contents resolved
+      // above now points at the wrong ones. Dropping it beats shipping wrong chapters.
+      if (tocEntries.length) {
+        logLine("The source table of contents no longer matches after re-cutting the strip, so it is dropped.", "warn");
+        tocEntries = [];
+      }
+      logLine(`Reassembling ${pages.length} webtoon tiles and re-cutting at the artwork's gutters…`);
+      const cut = await assembleWebtoonPages(pages, deviceTarget,
+        (done, total) => setProgress(done, total, "Re-cutting the strip…"));
+      pages = cut.pages;
+      logLine(`Webtoon: ${cut.stripHeight}px strip re-cut into ${pages.length} pages of up to ` +
+        `${cut.pageH}px, ${cut.snapped} of ${cut.cuts} cuts landing in a gutter`);
+    }
+
+    // The device takes page 0 as the cover, so a chosen cover page moves to the front; the
+    // chapters before it shift back by one.
+    const coverPage = parseInt(bookField("manga-cover"), 10);
+    if (Number.isInteger(coverPage) && coverPage > 1) {
+      if (isWebtoon) {
+        logLine("Cover page is ignored for webtoons: their pages are re-cut from the strip.", "warn");
+      } else if (coverPage > pages.length) {
+        logLine(`Cover page ${coverPage} is past the last page (${pages.length}); keeping the first page.`, "warn");
+      } else {
+        const ci = coverPage - 1;
+        pages = [pages[ci], ...pages.slice(0, ci), ...pages.slice(ci + 1)];
+        tocEntries = tocEntries.map(([p, t]) => [p === ci ? 0 : p < ci ? p + 1 : p, t]);
+        logLine(`Using page ${coverPage} as the cover`);
+      }
+    }
+
+    if (Number.isInteger(maxPagesRaw) && maxPagesRaw > 0) pages = pages.slice(0, maxPagesRaw);
+    logLine(`Found ${pages.length} pages in ${collected.sourceLabel}`);
+
+    // Same detector hierarchy as the Python tool: YOLO when available,
+    // white-gutter grid heuristic as the fallback.
+    let yolo = null;
+    if ($("manga-yolo").checked) {
+      try {
+        logLine("Loading AI panel detector (first load downloads ~21 MB, then it's cached)…");
+        yolo = await loadYoloDetector();
+        logLine("AI panel detector ready");
+      } catch (e) {
+        logLine(`Could not load the AI panel detector (${e.message}); using the grid heuristic.`, "warn");
+      }
+    }
+    // A Mokuro volume brings its own text, so PP-OCR does not read it again.
+    let bookPpocr = null;
+    if (usePpocr && !collected.mokuro) {
+      logLine("Loading text recognition (first load downloads ~12 MB, then it's cached)…");
+      try {
+        bookPpocr = await loadPpocr(loadOrtRuntime);
+      } catch (e) {
+        throw new Error(`Text recognition could not load (${e.message}). Pick Skip to convert without it.`);
+      }
+      logLine("Text recognition ready");
+    }
+    const pageOpts = { trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor, yonkomaDetect,
+      ppocr: bookPpocr };
+
+    // What the user typed wins, then the book's own metadata, then a guess from the file name.
+    const fileMeta = fileNameMeta(files);
+    const metaTitle = bookField("manga-title").trim() || collected.meta.title || fileMeta.title;
+    const metaAuthor = $("manga-author").value.trim() || collected.meta.author;
+    const metaLanguage = $("manga-language").value.trim() || collected.meta.language;
+    const metaSeries = $("manga-series").value.trim() || collected.meta.series || fileMeta.series;
+    const seriesField = parseFloat(bookField("manga-series-index"));
+    const metaSeriesIndex = Number.isFinite(seriesField) ? seriesField
+      : (collected.meta.seriesIndex ?? fileMeta.seriesIndex);
+    const folder = sanitizeFolderName(metaTitle || "Manga");
+
+    // The book's own Language (Book details) is what tells the model which language to expect --
+    // there is no second picker for it, since a book that declares one in its EPUB/ComicInfo
+    // fills it in by itself and a duplicate control would only disagree with it. Webtoon
+    // panels are a single top-to-bottom column with horizontal text, so the right-to-left
+    // hint that suits a manga page is wrong for them however the book is tagged.
+    const ocrSourceLang = metaLanguage;
+    const ocrTargetLang = $("manga-ocr-out").value || "en";
+    const ocrPrompt = buildPanelOcrPrompt(ocrSourceLang, ocrTargetLang, rtl && !isWebtoon);
+    if (bookPpocr && ocrSourceLang && !["ja", "zh", "yue"].includes(normalizeLanguage(ocrSourceLang).split("-")[0])) {
+      logLine(`Built-in text recognition reads Japanese and Chinese; this book is set to "${ocrSourceLang}", ` +
+        "so its text may come out wrong. Gemini reads other languages.", "warn");
+    }
+    if (!bookNoOcr && !ocrSourceLang) {
+      logLine("No book language set, so the model is not told which one to expect. " +
+        "Filling in Language in Book details improves recognition.", "warn");
+    }
+
+    const zip = new ZipWriter();
+    const matchaVolume = matchaFile ? new MatchaWriter() : null;
+    const legacyFolder = formats.has("matcha");
+    // One book entry, written to every device output picked.
+    const addBookFile = (path, data) => {
+      if (legacyFolder) zip.addFile(`${folder}/${path}`, data);
+      if (matchaVolume) matchaVolume.addFile(path, data);
+    };
+    const idxRecords = [];
+    const datChunks = [];
+    let datOffset = 0;
+    let totalPanels = 0;
+    let totalTextBlocks = 0;
+    let pagesDone = 0;
+    // For the optional portable EPUB: one entry per manga page, each holding the
+    // full-page image followed by its (rotated) panel images. Assembled after
+    // the loop; null when the EPUB export is off.
+    const epubPages = epub ? [] : null;
+
+    for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+      if (mangaState.cancelled) {
+        logLine(`Cancelled after ${pagesDone} page(s); packaging what's done…`, "warn");
+        break;
+      }
+      const page = pages[pageIdx];
+      setProgress(pageIdx, pages.length, `Page ${pageIdx + 1} / ${pages.length}`);
+      logLine(`[${pageIdx + 1}/${pages.length}] ${page.name}`);
+
+      const prep = await preparePage(page, pageOpts);
+      const { srcBytes, ext, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba } = prep;
+      const bitmap = prep.bitmap;
+      // Panels fixed by hand in the panel check replace what the detector found.
+      const edited = panelEdits.get(page.name);
+      const boxes = edited ? scaleBoxes(edited.boxes, edited.w, edited.h, imgW, imgH) : prep.boxes;
+      if (edited) logLine(`  Using ${boxes.length} panel(s) set in the panel check.`);
+      const textFix = (bookPpocr || collected.mokuro) && textEdits.get(page.name);
+      if (textFix && textFix.trim === trimMargins) logLine("  Using the text fixed in the text check.");
+      else if (textFix) logLine("  The book type changed since the text check, so this page's text was read again.", "warn");
+
+      // Panel boxes stay in resized page space (panels.idx records the page at that
+      // size); only the crop comes from the original, so map the rect back across.
+      const panelScaleX = origW / imgW, panelScaleY = origH / imgH;
+
+      // Panels-only must not lose anything the detector missed: with no full page behind them,
+      // uncovered artwork would simply be unreachable. Measure how much of this page's ink falls
+      // inside the panels (expanded by the same crop margin that will be applied) and keep the
+      // full page whenever that falls short. The device already handles such mixed books -- a
+      // page with no crop shows as a full page -- so the result is panels where detection is
+      // good and pages where it is not, rather than silent gaps.
+      let keepPageImage = true;
+      if (panelsOnly && pageIdx !== 0) {
+        const marginedRects = boxes.map(([x1, y1, x2, y2]) =>
+          [Math.max(0, x1 - margin), Math.max(0, y1 - margin), Math.min(imgW, x2 + margin), Math.min(imgH, y2 + margin)]);
+        const coverage = panelInkCoverage(grayFromRGBA(rgba, imgW, imgH), imgW, imgH, marginedRects);
+        keepPageImage = coverage < PANELS_ONLY_MIN_INK_COVERAGE;
+        if (keepPageImage) {
+          pagesKeptForCoverage++;
+          logLine(`Page ${pageIdx + 1}: panels cover ${(coverage * 100).toFixed(1)}% of the artwork — keeping the full page so nothing is lost.`, "warn");
+        }
+      }
+
+      // Copy the page to a canonical, trivially-sortable filename. In mono mode
+      // it becomes a 1-bit Floyd-Steinberg-dithered BMP the device paints with a
+      // single fast black-and-white refresh (no 4-level gray pass). A resized
+      // JPEG/PNG page is re-encoded (source bytes no longer match); otherwise the
+      // source is copied byte-for-byte.
+      const pageBase = `page_${String(pageIdx).padStart(4, "0")}`;
+      // Panels-only drops the page image -- the device sees a page with no image and goes
+      // straight to its panels -- but only where the panels actually cover the page's content
+      // (see keepPageImage above). Page 0 is always kept: findCoverImage() picks it up as the
+      // Library/Home cover, and without it the book has none. Missing pages do not shift the
+      // rest: the device maps page index -> image by position, so index 0 resolves to the cover
+      // and any index past the ones present resolves to "" (no image).
+      if (!matchaFolder || !keepPageImage) {
+        // nothing written for this page
+      } else if (mono) {
+        addBookFile(`${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH, ditherGamma, ditherStyle));
+      } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized && !wasTrimmed && !tuned) {
+        addBookFile(`${pageBase}${ext}`, srcBytes);
+      } else if (ext === ".png" && (wasResized || wasTrimmed || tuned)) {
+        addBookFile(`${pageBase}.png`, await canvasToPngBytes(canvas));
+      } else {
+        const outExt = (ext === ".jpg" || ext === ".jpeg") ? ext : ".jpg";
+        addBookFile(`${pageBase}${outExt}`, await canvasToJpegBytes(canvas, 0.92));
+      }
+
+      // The EPUB always uses a widely-supported core media type (JPEG/PNG); the
+      // full page is never rotated (it's the overview). Reuse the source bytes
+      // when they're already JPEG/PNG and unresized, otherwise re-encode from the
+      // (possibly downscaled) canvas.
+      const epubImages = [];
+      // Panels-only leaves the full pages out of the EPUB too, so the option means the same thing
+      // in both formats -- including keeping the page wherever its panels miss content.
+      if (epub && keepPageImage) {
+        let pageBytes, pageMime;
+        if (!wasResized && !tuned && (ext === ".jpg" || ext === ".jpeg")) { pageBytes = srcBytes; pageMime = "image/jpeg"; }
+        else if (!wasResized && !tuned && ext === ".png") { pageBytes = srcBytes; pageMime = "image/png"; }
+        else if (ext === ".png") { pageBytes = await canvasToPngBytes(canvas); pageMime = "image/png"; }
+        else { pageBytes = await canvasToJpegBytes(canvas, 0.92); pageMime = "image/jpeg"; }
+        epubImages.push({ bytes: pageBytes, mime: pageMime, w: imgW, h: imgH });
+      }
+      if (anyXtc) xtcPageMap.set(pageIdx, wantXtc ? xtcPages.length : xtchPages.length);
+      if (anyXtc && keepPageImage) {
+        const v = encodeXtcVariants(canvas, wantXtc, wantXtch, deviceTarget, true, ditherGamma, ditherStyle);
+        if (v.xtc) xtcPages.push(v.xtc);
+        if (v.xtch) xtchPages.push(v.xtch);
+      }
+
+      // Which panels get cropped at all. A full-page panel normally gets no crop: the page image
+      // is already the best presentation of it. Panels-only books may have dropped that page
+      // image, so the crop is written anyway or the page would export nothing. The full-res
+      // source canvas below is allocated from this same predicate, so the two cannot disagree --
+      // they did once, and a panels-only page whose panels were *all* full-page entered the crop
+      // branch with no source canvas, throwing "drawImage ... value is not of type ...".
+      const needsCrop = (b) => !isFullPagePanel(b, imgW, imgH) || panelsOnly;
+
+      // Full-resolution page for the panel crops. A panel is shown zoomed to fill
+      // the screen, so cropping it from the already-downscaled page magnifies a
+      // fraction of an already-reduced image (softness and dither dots and all);
+      // cropping at full res and fitting each panel afterwards gives it the whole
+      // pixel budget. The AI detector already drew this page for the model to look at;
+      // otherwise it is allocated only when the page actually has a panel to crop —
+      // covers / full-page spreads skip it.
+      let sourceCanvas = prep.sourceCanvas;
+      if (!sourceCanvas && boxes.some(needsCrop)) sourceCanvas = fullResolutionCanvas(bitmap, origW, origH);
+      // bitmap stays open through the crop loop: a full-page panel has no sourceCanvas, and its
+      // OCR crop is drawn from the decoded page directly (closed after the loop).
+
+      // Crop panels (fast, local) before dispatching OCR calls concurrently.
+      const panelCrops = [];  // Uint8Array | null (null = full-page panel)
+      const panelRects = [];
+      for (let panelIdx = 0; panelIdx < boxes.length; panelIdx++) {
+        const [x1, y1, x2, y2] = boxes[panelIdx];
+        const mx1 = Math.max(0, x1 - margin);
+        const my1 = Math.max(0, y1 - margin);
+        const mx2 = Math.min(imgW, x2 + margin);
+        const my2 = Math.min(imgH, y2 + margin);
+        let cropBytes = null;  // full-colour JPEG crop for OCR (null = no crop / no OCR)
+        const fullPagePanel = isFullPagePanel(boxes[panelIdx], imgW, imgH);
+        // Map the detected rect (plus margin) into full-resolution page coordinates, then draw
+        // that region straight into a device-fitted panel canvas (one drawImage crops + scales).
+        // fitToDeviceSize fits a landscape panel against the rotated box — the size the firmware
+        // zooms it to, and dithers it at.
+        const drawMarginCrop = () => {
+          const fx1 = Math.max(0, Math.round(mx1 * panelScaleX));
+          const fy1 = Math.max(0, Math.round(my1 * panelScaleY));
+          const fx2 = Math.min(origW, Math.round(mx2 * panelScaleX));
+          const fy2 = Math.min(origH, Math.round(my2 * panelScaleY));
+          // Clamp to at least 1×1: real panels are tens of px, but guard a
+          // degenerate rounding/tiny-box case so fitToDeviceSize can't divide by
+          // zero and makeCanvas/drawImage can't throw on a 0-size crop.
+          const fw = Math.max(1, fx2 - fx1), fh = Math.max(1, fy2 - fy1);
+          const pf = fitToDeviceSize(fw, fh, deviceTarget);
+          const canvas = makeCanvas(pf.w, pf.h);
+          const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
+          // White under the draw, as sourceCanvas has: the bitmap fallback may carry transparency.
+          ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, pf.w, pf.h);
+          ctx.drawImage(sourceCanvas || bitmap, fx1, fy1, fw, fh, 0, 0, pf.w, pf.h);
+          if (tuned) cleanCrop(ctx, pf.w, pf.h, tone, cleanup.sharpen);
+          return { canvas, ctx, w: pf.w, h: pf.h };
+        };
+        if (needsCrop(boxes[panelIdx])) {
+          const { canvas: cropCanvas, ctx: cropCtx, w: pw, h: ph } = drawMarginCrop();
+          if (mono) {
+            const cropRgba = cropCtx.getImageData(0, 0, pw, ph).data;
+            if (matchaFolder) {
+              addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph, ditherGamma, ditherStyle));
+            }
+            // OCR still reads a full-colour JPEG crop: the dithered BMP would
+            // only hurt text recognition (the --mono guidance to pair with
+            // --no-ocr still applies, but OCR stays usable when both are on).
+            if (!bookNoOcr) cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
+          } else {
+            cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
+            if (matchaFolder) addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
+          }
+          // A full-page panel is normally left out of the pre-rendered books: the full page
+          // image in front of it already carries the same artwork, so the crop would only
+          // duplicate it. When panels-only dropped that page image, the crop is the page's only
+          // copy -- without it the page is simply missing from the EPUB/XTC (the device folder
+          // still gets the crop either way).
+          const cropInsteadOfPage = !fullPagePanel || !keepPageImage;
+          if (epub && cropInsteadOfPage) {
+            // Rotate wide (landscape) panels to portrait so they display as
+            // large as possible on the usual portrait reading screen; the
+            // fixed-layout reader then scales each to fullscreen. Off, the
+            // panel goes in as drawn and the reader letterboxes it.
+            let panelCanvas = cropCanvas, epw = pw, eph = ph;
+            if (rotatePanels && pw > ph) { panelCanvas = rotateCanvas90CW(cropCanvas); epw = ph; eph = pw; }
+            epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: epw, h: eph });
+          }
+          if (anyXtc && cropInsteadOfPage) {
+            const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget, rotatePanels, ditherGamma, ditherStyle);
+            if (v.xtc) xtcPages.push(v.xtc);
+            if (v.xtch) xtchPages.push(v.xtch);
+          }
+        }
+        if (!cropBytes && !bookNoOcr) {
+          // A full-page panel has no crop, but its text still needs reading: a splash page, or
+          // every page when detection finds no borders (the grid fallback without the AI model),
+          // used to come through with no text and so no word lookup at all. OCR the same margin
+          // rect a crop would have covered; the JPEG goes to Gemini only, never into the output.
+          // Matches convert_manga.py, which OCRs a temp copy of that rect.
+          cropBytes = await canvasToJpegBytes(drawMarginCrop().canvas, 0.90);
+        }
+        panelCrops.push(cropBytes);
+        panelRects.push([mx1, my1, mx2, my2]);
+      }
+      bitmap.close();
+
+      if (epub) epubPages.push({ pageIdx, images: epubImages });
+
+      let ocrResults;
+      if (!bookNoOcr) {
+        ocrResults = await mapLimit(panelCrops, Math.min(8, Math.max(1, panelCrops.length)),
+          (crop) => crop ? geminiOcrPanel(crop, apiKey, model, ocrPrompt) : Promise.resolve({ blocks: [], translation: "" }));
+      } else {
+        ocrResults = panelCrops.map(() => ({ blocks: [], translation: "" }));
+      }
+
+      const mokuroOwned = prep.pageText ? assignBlocksToPanels(prep.pageText, boxes) : null;
+      const panelsWithText = [];
+      for (let panelIdx = 0; panelIdx < boxes.length; panelIdx++) {
+        const [x1, y1, x2, y2] = boxes[panelIdx];
+        const [mx1, my1, mx2, my2] = panelRects[panelIdx];
+        const ocr = ocrResults[panelIdx];
+        const panelW = mx2 - mx1, panelH = my2 - my1;
+
+        const textBlocks = mokuroOwned ? mokuroOwned[panelIdx].slice() : [];
+        for (const b of ocr.blocks || []) {
+          const text = String(b.text ?? "").trim();
+          if (!text) continue;
+          const bbox = b.bbox_2d;
+          let tb;
+          if (Array.isArray(bbox) && bbox.length === 4) {
+            // bbox_2d is normalised 0-1000 over the image the model was actually shown,
+            // which is the MARGINED crop -- so it maps back from that rect's corner, not
+            // the panel's. Anchoring at the panel corner while scaling by the margined
+            // size mixes the two frames and slides every box down-right by the margin.
+            const [ymin, xmin, ymax, xmax] = bbox;
+            const at = (v, span) => Math.trunc((Math.min(1000, Math.max(0, Number(v) || 0)) / 1000) * span);
+            tb = [
+              mx1 + at(xmin, panelW),
+              my1 + at(ymin, panelH),
+              mx1 + at(xmax, panelW),
+              my1 + at(ymax, panelH),
+            ];
+          } else {
+            tb = [x1, y1, x2, y2];
+          }
+          const lined = blockLinesFromOcr(b, mx1, my1, panelW, panelH);
+          textBlocks.push({ box: tb, text: lined.text || text, lines: lined.lines, vertical: lined.vertical });
+        }
+        panelsWithText.push({
+          box: boxes[panelIdx], crop: [mx1, my1, mx2, my2], textBlocks, translation: ocr.translation || "",
+        });
+        totalPanels += 1;
+        totalTextBlocks += textBlocks.length;
+      }
+
+      const pageData = encodePage(panelsWithText);
+      idxRecords.push({ offset: datOffset, length: pageData.length, w: Math.min(imgW, 0xffff), h: Math.min(imgH, 0xffff) });
+      datChunks.push(pageData);
+      datOffset += pageData.length;
+      pagesDone++;
+    }
+
+    if (!pagesDone) throw new Error("No pages were processed");
+
+    addBookFile(`panels.idx`, writePanelsIdx(idxRecords));
+    const dat = new Uint8Array(datOffset);
+    let off = 0;
+    for (const chunk of datChunks) { dat.set(chunk, off); off += chunk.length; }
+    if (matchaFolder) {
+      addBookFile(`panels.dat`, dat);
+      const metaBin = writeMetaBin(metaTitle, metaAuthor, metaLanguage, metaSeries, metaSeriesIndex);
+      if (metaBin) addBookFile(`meta.bin`, metaBin);
+      if (tocEntries.length) addBookFile(`toc.idx`, writeTocIdx(tocEntries));
+    }
+
+    // Extra single-file outputs (EPUB / PDF / XTC / XTCH). They ride inside the zip when the device
+    // folder is also being exported, otherwise they are the download themselves.
+    const extras = [];
+    if (formats.has("epub") && epubPages.length) {
+      setProgress(pagesDone, pages.length, "Building EPUB…");
+      const epubBytes = await buildMangaEpub({ title: metaTitle, author: metaAuthor, epubPages, tocEntries });
+      extras.push({ name: `${folder}.epub`, bytes: epubBytes, type: "application/epub+zip" });
+      logLine(`Built ${folder}.epub (${epubPages.reduce((n, p) => n + p.images.length, 0)} images).`);
+    }
+    if (pdf && epubPages.length) {
+      setProgress(pagesDone, pages.length, "Building PDF…");
+      const pdfBytes = await buildMangaPdf({ title: metaTitle, author: metaAuthor, epubPages });
+      extras.push({ name: `${folder}.pdf`, bytes: pdfBytes, type: "application/pdf" });
+      logLine(`Built ${folder}.pdf (${epubPages.reduce((n, p) => n + p.images.length, 0)} pages).`);
+    }
+    // The chapter list indexes the EXPORTED page sequence (each page followed by its panels),
+    // not the source page numbers, so a chapter starting at source page N lands on that page's
+    // entry in xtcPageMap.
+    const xtcToc = tocEntries
+      .map(([pageIndex, chapterTitle]) => ({ title: chapterTitle, page: xtcPageMap.get(pageIndex) }))
+      .filter((c) => c.page !== undefined)
+      .sort((a, b) => a.page - b.page);
+    // One file, or parts of about `xtcSplit` pages that each start at a chapter where one is close.
+    const addXtcParts = (xpages, ext, isHq, depth) => {
+      const starts = partStarts(xpages.length, xtcSplit, xtcToc.map((c) => c.page));
+      starts.forEach((start, i) => {
+        const end = i + 1 < starts.length ? starts[i + 1] : xpages.length;
+        const many = starts.length > 1;
+        const name = many ? `${folder} - part ${i + 1}.${ext}` : `${folder}.${ext}`;
+        const toc = xtcToc.filter((c) => c.page >= start && c.page < end).map((c) => ({ ...c, page: c.page - start }));
+        const title = many ? `${metaTitle} (${i + 1}/${starts.length})` : metaTitle;
+        extras.push({ name, type: "application/octet-stream",
+          bytes: buildXtcFile(xpages.slice(start, end), { title, author: metaAuthor, language: metaLanguage, toc, isHq }) });
+        logLine(`Built ${name} (${end - start} pages, ${depth}).`);
+      });
+    };
+    if (wantXtc && xtcPages.length) addXtcParts(xtcPages, "xtc", false, "1-bit");
+    if (wantXtch && xtchPages.length) addXtcParts(xtchPages, "xtch", true, "2-bit grayscale");
+
+    setProgress(pagesDone, pages.length, "Packaging…");
+    const summary = `Done: ${pagesDone} pages, ${totalPanels} panels` +
+      (bookNoOcr && !collected.mokuro && !bookPpocr ? "" : `, ${totalTextBlocks} text blocks`) +
+      (deviceTarget ? `, ${deviceTarget[0]}×${deviceTarget[1]}` : "") +
+      (mono && matchaFolder ? ", 1-bit dithered BMP" : "") +
+      (pagesKeptForCoverage ? `, ${pagesKeptForCoverage} full page(s) kept where panels missed content` : "");
+
+    if (matchaVolume) {
+      const volume = matchaVolume.toBlob();
+      const files = [{ name: `${folder}.matcha`, blob: volume }];
+      if (legacyFolder) files.push({ name: `${folder}.zip`, blob: zip.toBlob() });
+      for (const e of extras) files.push({ name: e.name, blob: new Blob([e.bytes], { type: e.type }) });
+      logLine(`${summary} — ${formatBytes(volume.size)}`);
+      logLine(`Copy "${folder}.matcha" anywhere on the SD card (e.g. /manga/) or upload it via the device's web ` +
+        "file transfer. It needs firmware 2.0.0-rc-4 or later.");
+      if (files.length === 1) {
+        downloadBlob(volume, `${folder}.matcha`);
+      } else {
+        const outZip = new ZipWriter();
+        for (const f of files) outZip.addFile(f.name, new Uint8Array(await f.blob.arrayBuffer()));
+        logLine(`The download is a zip holding ${files.map((f) => `"${f.name}"`).join(", ")}.`);
+        downloadBlob(outZip.toBlob(), `${folder}-export.zip`);
+      }
+    } else if (matchaFolder) {
+      for (const e of extras) zip.addFile(e.name, e.bytes);
+      const blob = zip.toBlob();
+      logLine(`${summary}${extras.length ? `, + ${extras.map((e) => e.name.split(".").pop().toUpperCase()).join(" + ")}` : ""} — ${formatBytes(blob.size)}`);
+      logLine(`Unzip onto the SD card (e.g. /manga/) or upload the "${folder}" folder via the device's web file transfer.` +
+        (extras.length ? ` The ${extras.map((e) => `"${e.name}"`).join(" and ")} inside the zip ${extras.length > 1 ? "are" : "is"} for other readers.` : ""));
+      downloadBlob(blob, `${folder}.zip`);
+    } else if (extras.length === 1) {
+      // A single file needs no zip wrapper -- nothing to unpack.
+      const only = extras[0];
+      const blob = new Blob([only.bytes], { type: only.type });
+      logLine(`${summary} — ${formatBytes(blob.size)}`);
+      logLine(`Copy "${only.name}" to the reader.`);
+      downloadBlob(blob, only.name);
+    } else if (extras.length) {
+      const outZip = new ZipWriter();
+      for (const e of extras) outZip.addFile(e.name, e.bytes);
+      const blob = outZip.toBlob();
+      logLine(`${summary} — ${formatBytes(blob.size)}`);
+      logLine(`Unzip and copy ${extras.map((e) => `"${e.name}"`).join(" / ")} to the reader.`);
+      downloadBlob(blob, `${folder}.zip`);
+    } else {
+      throw new Error("Nothing to export: no pages were produced");
+    }
+    setProgress(pagesDone, pagesDone, "Complete");
+  } finally {
+    if (collected && collected.cleanup) collected.cleanup();
+  }
+}
+
+async function runMangaConversion() {
+  const files = chosenFiles();
+  if (!files || !files.length) {
+    logValidation("Choose a .cbz/.zip/.epub file or a set of page images first.");
+    return;
+  }
+
+  const s = readMangaSettings();
+  if (!s) return;
+  saveMangaSettings(s);
 
   mangaState.running = true;
   mangaState.cancelled = false;
@@ -1497,511 +2018,16 @@ async function runMangaConversion() {
     }
   }
 
-  const convertBook = async (files) => {
-    let collected = null;
-    try {
-      logLine("Collecting pages…");
-      collected = await collectPagesFromInput(files);
-      let pages = collected.pages;
-      // A Mokuro volume brings its own text, so Gemini is never called for it.
-      const bookNoOcr = noOcr || !!collected.mokuro;
-      if (collected.mokuro && isWebtoon) {
-        throw new Error("Webtoon re-cuts the pages, which would separate Mokuro's text from its page. Pick another book type.");
-      }
-
-      // Resolve TOC before any max-pages truncation (indices stay correct).
-      let tocEntries = collected.tocEntries;
-      if (tocEntries.length) logLine(`Found ${tocEntries.length} chapter(s) from the ${collected.tocSource}`);
-      if (splitSpreads) {
-        if (collected.mokuro) {
-          throw new Error("Splitting spreads changes the pages, which would separate Mokuro's text from its page. " +
-            "Untick \"Split two-page spreads\".");
-        }
-        const sourceCount = pages.length;
-        const split = await splitSpreadPages(pages, rtl,
-          (done, total) => setProgress(done, total, "Looking for two-page spreads…"));
-        pages = split.pages;
-        tocEntries = remapTocAfterSplit(tocEntries, split.firstOutput);
-        logLine(`Split landscape spreads: ${sourceCount} source pages became ${pages.length} pages`);
-      }
-      const tocText = bookField("manga-toc");
-      if (tocText.trim()) {
-        const parsed = parseTocText(tocText);
-        parsed.warnings.forEach((warning) => logLine("Warning: " + warning, "warn"));
-        tocEntries = parsed.entries;
-        logLine(`Using ${tocEntries.length} chapter(s) from the chapter list`);
-      }
-
-      if (isWebtoon) {
-        // Re-cutting changes how many pages there are, so a table of contents resolved
-        // above now points at the wrong ones. Dropping it beats shipping wrong chapters.
-        if (tocEntries.length) {
-          logLine("The source table of contents no longer matches after re-cutting the strip, so it is dropped.", "warn");
-          tocEntries = [];
-        }
-        logLine(`Reassembling ${pages.length} webtoon tiles and re-cutting at the artwork's gutters…`);
-        const cut = await assembleWebtoonPages(pages, deviceTarget,
-          (done, total) => setProgress(done, total, "Re-cutting the strip…"));
-        pages = cut.pages;
-        logLine(`Webtoon: ${cut.stripHeight}px strip re-cut into ${pages.length} pages of up to ` +
-          `${cut.pageH}px, ${cut.snapped} of ${cut.cuts} cuts landing in a gutter`);
-      }
-
-      // The device takes page 0 as the cover, so a chosen cover page moves to the front; the
-      // chapters before it shift back by one.
-      const coverPage = parseInt(bookField("manga-cover"), 10);
-      if (Number.isInteger(coverPage) && coverPage > 1) {
-        if (isWebtoon) {
-          logLine("Cover page is ignored for webtoons: their pages are re-cut from the strip.", "warn");
-        } else if (coverPage > pages.length) {
-          logLine(`Cover page ${coverPage} is past the last page (${pages.length}); keeping the first page.`, "warn");
-        } else {
-          const ci = coverPage - 1;
-          pages = [pages[ci], ...pages.slice(0, ci), ...pages.slice(ci + 1)];
-          tocEntries = tocEntries.map(([p, t]) => [p === ci ? 0 : p < ci ? p + 1 : p, t]);
-          logLine(`Using page ${coverPage} as the cover`);
-        }
-      }
-
-      if (Number.isInteger(maxPagesRaw) && maxPagesRaw > 0) pages = pages.slice(0, maxPagesRaw);
-      logLine(`Found ${pages.length} pages in ${collected.sourceLabel}`);
-
-      // Same detector hierarchy as the Python tool: YOLO when available,
-      // white-gutter grid heuristic as the fallback.
-      let yolo = null;
-      if ($("manga-yolo").checked) {
-        try {
-          logLine("Loading AI panel detector (first load downloads ~21 MB, then it's cached)…");
-          yolo = await loadYoloDetector();
-          logLine("AI panel detector ready");
-        } catch (e) {
-          logLine(`Could not load the AI panel detector (${e.message}); using the grid heuristic.`, "warn");
-        }
-      }
-      // A Mokuro volume brings its own text, so PP-OCR does not read it again.
-      let bookPpocr = null;
-      if (usePpocr && !collected.mokuro) {
-        logLine("Loading text recognition (first load downloads ~12 MB, then it's cached)…");
-        try {
-          bookPpocr = await loadPpocr(loadOrtRuntime);
-        } catch (e) {
-          throw new Error(`Text recognition could not load (${e.message}). Pick Skip to convert without it.`);
-        }
-        logLine("Text recognition ready");
-      }
-      const pageOpts = { trimMargins, deviceTarget, cleanup, cleanupOn, isWebtoon, yolo, rtl, columnMajor, yonkomaDetect,
-        ppocr: bookPpocr };
-
-      // What the user typed wins, then the book's own metadata, then a guess from the file name.
-      const fileMeta = fileNameMeta(files);
-      const metaTitle = bookField("manga-title").trim() || collected.meta.title || fileMeta.title;
-      const metaAuthor = $("manga-author").value.trim() || collected.meta.author;
-      const metaLanguage = $("manga-language").value.trim() || collected.meta.language;
-      const metaSeries = $("manga-series").value.trim() || collected.meta.series || fileMeta.series;
-      const seriesField = parseFloat(bookField("manga-series-index"));
-      const metaSeriesIndex = Number.isFinite(seriesField) ? seriesField
-        : (collected.meta.seriesIndex ?? fileMeta.seriesIndex);
-      const folder = sanitizeFolderName(metaTitle || "Manga");
-
-      // The book's own Language (Book details) is what tells the model which language to expect --
-      // there is no second picker for it, since a book that declares one in its EPUB/ComicInfo
-      // fills it in by itself and a duplicate control would only disagree with it. Webtoon
-      // panels are a single top-to-bottom column with horizontal text, so the right-to-left
-      // hint that suits a manga page is wrong for them however the book is tagged.
-      const ocrSourceLang = metaLanguage;
-      const ocrTargetLang = $("manga-ocr-out").value || "en";
-      const ocrPrompt = buildPanelOcrPrompt(ocrSourceLang, ocrTargetLang, rtl && !isWebtoon);
-      if (bookPpocr && ocrSourceLang && !["ja", "zh", "yue"].includes(normalizeLanguage(ocrSourceLang).split("-")[0])) {
-        logLine(`Built-in text recognition reads Japanese and Chinese; this book is set to "${ocrSourceLang}", ` +
-          "so its text may come out wrong. Gemini reads other languages.", "warn");
-      }
-      if (!bookNoOcr && !ocrSourceLang) {
-        logLine("No book language set, so the model is not told which one to expect. " +
-          "Filling in Language in Book details improves recognition.", "warn");
-      }
-
-      const zip = new ZipWriter();
-      const matchaVolume = matchaFile ? new MatchaWriter() : null;
-      const legacyFolder = formats.has("matcha");
-      // One book entry, written to every device output picked.
-      const addBookFile = (path, data) => {
-        if (legacyFolder) zip.addFile(`${folder}/${path}`, data);
-        if (matchaVolume) matchaVolume.addFile(path, data);
-      };
-      const idxRecords = [];
-      const datChunks = [];
-      let datOffset = 0;
-      let totalPanels = 0;
-      let totalTextBlocks = 0;
-      let pagesDone = 0;
-      // For the optional portable EPUB: one entry per manga page, each holding the
-      // full-page image followed by its (rotated) panel images. Assembled after
-      // the loop; null when the EPUB export is off.
-      const epubPages = epub ? [] : null;
-
-      for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
-        if (mangaState.cancelled) {
-          logLine(`Cancelled after ${pagesDone} page(s); packaging what's done…`, "warn");
-          break;
-        }
-        const page = pages[pageIdx];
-        setProgress(pageIdx, pages.length, `Page ${pageIdx + 1} / ${pages.length}`);
-        logLine(`[${pageIdx + 1}/${pages.length}] ${page.name}`);
-
-        const prep = await preparePage(page, pageOpts);
-        const { srcBytes, ext, wasTrimmed, origW, origH, imgW, imgH, wasResized, canvas, ctx, tone, tuned, rgba } = prep;
-        const bitmap = prep.bitmap;
-        // Panels fixed by hand in the panel check replace what the detector found.
-        const edited = panelEdits.get(page.name);
-        const boxes = edited ? scaleBoxes(edited.boxes, edited.w, edited.h, imgW, imgH) : prep.boxes;
-        if (edited) logLine(`  Using ${boxes.length} panel(s) set in the panel check.`);
-        const textFix = (bookPpocr || collected.mokuro) && textEdits.get(page.name);
-        if (textFix && textFix.trim === trimMargins) logLine("  Using the text fixed in the text check.");
-        else if (textFix) logLine("  The book type changed since the text check, so this page's text was read again.", "warn");
-
-        // Panel boxes stay in resized page space (panels.idx records the page at that
-        // size); only the crop comes from the original, so map the rect back across.
-        const panelScaleX = origW / imgW, panelScaleY = origH / imgH;
-
-        // Panels-only must not lose anything the detector missed: with no full page behind them,
-        // uncovered artwork would simply be unreachable. Measure how much of this page's ink falls
-        // inside the panels (expanded by the same crop margin that will be applied) and keep the
-        // full page whenever that falls short. The device already handles such mixed books -- a
-        // page with no crop shows as a full page -- so the result is panels where detection is
-        // good and pages where it is not, rather than silent gaps.
-        let keepPageImage = true;
-        if (panelsOnly && pageIdx !== 0) {
-          const marginedRects = boxes.map(([x1, y1, x2, y2]) =>
-            [Math.max(0, x1 - margin), Math.max(0, y1 - margin), Math.min(imgW, x2 + margin), Math.min(imgH, y2 + margin)]);
-          const coverage = panelInkCoverage(grayFromRGBA(rgba, imgW, imgH), imgW, imgH, marginedRects);
-          keepPageImage = coverage < PANELS_ONLY_MIN_INK_COVERAGE;
-          if (keepPageImage) {
-            pagesKeptForCoverage++;
-            logLine(`Page ${pageIdx + 1}: panels cover ${(coverage * 100).toFixed(1)}% of the artwork — keeping the full page so nothing is lost.`, "warn");
-          }
-        }
-
-        // Copy the page to a canonical, trivially-sortable filename. In mono mode
-        // it becomes a 1-bit Floyd-Steinberg-dithered BMP the device paints with a
-        // single fast black-and-white refresh (no 4-level gray pass). A resized
-        // JPEG/PNG page is re-encoded (source bytes no longer match); otherwise the
-        // source is copied byte-for-byte.
-        const pageBase = `page_${String(pageIdx).padStart(4, "0")}`;
-        // Panels-only drops the page image -- the device sees a page with no image and goes
-        // straight to its panels -- but only where the panels actually cover the page's content
-        // (see keepPageImage above). Page 0 is always kept: findCoverImage() picks it up as the
-        // Library/Home cover, and without it the book has none. Missing pages do not shift the
-        // rest: the device maps page index -> image by position, so index 0 resolves to the cover
-        // and any index past the ones present resolves to "" (no image).
-        if (!matchaFolder || !keepPageImage) {
-          // nothing written for this page
-        } else if (mono) {
-          addBookFile(`${pageBase}.bmp`, encodeMonoBmpFromRGBA(rgba, imgW, imgH, ditherGamma, ditherStyle));
-        } else if ([".jpg", ".jpeg", ".png"].includes(ext) && !wasResized && !wasTrimmed && !tuned) {
-          addBookFile(`${pageBase}${ext}`, srcBytes);
-        } else if (ext === ".png" && (wasResized || wasTrimmed || tuned)) {
-          addBookFile(`${pageBase}.png`, await canvasToPngBytes(canvas));
-        } else {
-          const outExt = (ext === ".jpg" || ext === ".jpeg") ? ext : ".jpg";
-          addBookFile(`${pageBase}${outExt}`, await canvasToJpegBytes(canvas, 0.92));
-        }
-
-        // The EPUB always uses a widely-supported core media type (JPEG/PNG); the
-        // full page is never rotated (it's the overview). Reuse the source bytes
-        // when they're already JPEG/PNG and unresized, otherwise re-encode from the
-        // (possibly downscaled) canvas.
-        const epubImages = [];
-        // Panels-only leaves the full pages out of the EPUB too, so the option means the same thing
-        // in both formats -- including keeping the page wherever its panels miss content.
-        if (epub && keepPageImage) {
-          let pageBytes, pageMime;
-          if (!wasResized && !tuned && (ext === ".jpg" || ext === ".jpeg")) { pageBytes = srcBytes; pageMime = "image/jpeg"; }
-          else if (!wasResized && !tuned && ext === ".png") { pageBytes = srcBytes; pageMime = "image/png"; }
-          else if (ext === ".png") { pageBytes = await canvasToPngBytes(canvas); pageMime = "image/png"; }
-          else { pageBytes = await canvasToJpegBytes(canvas, 0.92); pageMime = "image/jpeg"; }
-          epubImages.push({ bytes: pageBytes, mime: pageMime, w: imgW, h: imgH });
-        }
-        if (anyXtc) xtcPageMap.set(pageIdx, wantXtc ? xtcPages.length : xtchPages.length);
-        if (anyXtc && keepPageImage) {
-          const v = encodeXtcVariants(canvas, wantXtc, wantXtch, deviceTarget, true, ditherGamma, ditherStyle);
-          if (v.xtc) xtcPages.push(v.xtc);
-          if (v.xtch) xtchPages.push(v.xtch);
-        }
-
-        // Which panels get cropped at all. A full-page panel normally gets no crop: the page image
-        // is already the best presentation of it. Panels-only books may have dropped that page
-        // image, so the crop is written anyway or the page would export nothing. The full-res
-        // source canvas below is allocated from this same predicate, so the two cannot disagree --
-        // they did once, and a panels-only page whose panels were *all* full-page entered the crop
-        // branch with no source canvas, throwing "drawImage ... value is not of type ...".
-        const needsCrop = (b) => !isFullPagePanel(b, imgW, imgH) || panelsOnly;
-
-        // Full-resolution page for the panel crops. A panel is shown zoomed to fill
-        // the screen, so cropping it from the already-downscaled page magnifies a
-        // fraction of an already-reduced image (softness and dither dots and all);
-        // cropping at full res and fitting each panel afterwards gives it the whole
-        // pixel budget. The AI detector already drew this page for the model to look at;
-        // otherwise it is allocated only when the page actually has a panel to crop —
-        // covers / full-page spreads skip it.
-        let sourceCanvas = prep.sourceCanvas;
-        if (!sourceCanvas && boxes.some(needsCrop)) sourceCanvas = fullResolutionCanvas(bitmap, origW, origH);
-        // bitmap stays open through the crop loop: a full-page panel has no sourceCanvas, and its
-        // OCR crop is drawn from the decoded page directly (closed after the loop).
-
-        // Crop panels (fast, local) before dispatching OCR calls concurrently.
-        const panelCrops = [];  // Uint8Array | null (null = full-page panel)
-        const panelRects = [];
-        for (let panelIdx = 0; panelIdx < boxes.length; panelIdx++) {
-          const [x1, y1, x2, y2] = boxes[panelIdx];
-          const mx1 = Math.max(0, x1 - margin);
-          const my1 = Math.max(0, y1 - margin);
-          const mx2 = Math.min(imgW, x2 + margin);
-          const my2 = Math.min(imgH, y2 + margin);
-          let cropBytes = null;  // full-colour JPEG crop for OCR (null = no crop / no OCR)
-          const fullPagePanel = isFullPagePanel(boxes[panelIdx], imgW, imgH);
-          // Map the detected rect (plus margin) into full-resolution page coordinates, then draw
-          // that region straight into a device-fitted panel canvas (one drawImage crops + scales).
-          // fitToDeviceSize fits a landscape panel against the rotated box — the size the firmware
-          // zooms it to, and dithers it at.
-          const drawMarginCrop = () => {
-            const fx1 = Math.max(0, Math.round(mx1 * panelScaleX));
-            const fy1 = Math.max(0, Math.round(my1 * panelScaleY));
-            const fx2 = Math.min(origW, Math.round(mx2 * panelScaleX));
-            const fy2 = Math.min(origH, Math.round(my2 * panelScaleY));
-            // Clamp to at least 1×1: real panels are tens of px, but guard a
-            // degenerate rounding/tiny-box case so fitToDeviceSize can't divide by
-            // zero and makeCanvas/drawImage can't throw on a 0-size crop.
-            const fw = Math.max(1, fx2 - fx1), fh = Math.max(1, fy2 - fy1);
-            const pf = fitToDeviceSize(fw, fh, deviceTarget);
-            const canvas = makeCanvas(pf.w, pf.h);
-            const ctx = smoothScaling(canvas.getContext("2d", { willReadFrequently: true }));
-            // White under the draw, as sourceCanvas has: the bitmap fallback may carry transparency.
-            ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, pf.w, pf.h);
-            ctx.drawImage(sourceCanvas || bitmap, fx1, fy1, fw, fh, 0, 0, pf.w, pf.h);
-            if (tuned) cleanCrop(ctx, pf.w, pf.h, tone, cleanup.sharpen);
-            return { canvas, ctx, w: pf.w, h: pf.h };
-          };
-          if (needsCrop(boxes[panelIdx])) {
-            const { canvas: cropCanvas, ctx: cropCtx, w: pw, h: ph } = drawMarginCrop();
-            if (mono) {
-              const cropRgba = cropCtx.getImageData(0, 0, pw, ph).data;
-              if (matchaFolder) {
-                addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.bmp`, encodeMonoBmpFromRGBA(cropRgba, pw, ph, ditherGamma, ditherStyle));
-              }
-              // OCR still reads a full-colour JPEG crop: the dithered BMP would
-              // only hurt text recognition (the --mono guidance to pair with
-              // --no-ocr still applies, but OCR stays usable when both are on).
-              if (!bookNoOcr) cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
-            } else {
-              cropBytes = await canvasToJpegBytes(cropCanvas, 0.90);
-              if (matchaFolder) addBookFile(`${PANEL_CROP_SUBDIR}/p${pageIdx}_${panelIdx}.jpg`, cropBytes);
-            }
-            // A full-page panel is normally left out of the pre-rendered books: the full page
-            // image in front of it already carries the same artwork, so the crop would only
-            // duplicate it. When panels-only dropped that page image, the crop is the page's only
-            // copy -- without it the page is simply missing from the EPUB/XTC (the device folder
-            // still gets the crop either way).
-            const cropInsteadOfPage = !fullPagePanel || !keepPageImage;
-            if (epub && cropInsteadOfPage) {
-              // Rotate wide (landscape) panels to portrait so they display as
-              // large as possible on the usual portrait reading screen; the
-              // fixed-layout reader then scales each to fullscreen. Off, the
-              // panel goes in as drawn and the reader letterboxes it.
-              let panelCanvas = cropCanvas, epw = pw, eph = ph;
-              if (rotatePanels && pw > ph) { panelCanvas = rotateCanvas90CW(cropCanvas); epw = ph; eph = pw; }
-              epubImages.push({ bytes: await canvasToJpegBytes(panelCanvas, 0.90), mime: "image/jpeg", w: epw, h: eph });
-            }
-            if (anyXtc && cropInsteadOfPage) {
-              const v = encodeXtcVariants(cropCanvas, wantXtc, wantXtch, deviceTarget, rotatePanels, ditherGamma, ditherStyle);
-              if (v.xtc) xtcPages.push(v.xtc);
-              if (v.xtch) xtchPages.push(v.xtch);
-            }
-          }
-          if (!cropBytes && !bookNoOcr) {
-            // A full-page panel has no crop, but its text still needs reading: a splash page, or
-            // every page when detection finds no borders (the grid fallback without the AI model),
-            // used to come through with no text and so no word lookup at all. OCR the same margin
-            // rect a crop would have covered; the JPEG goes to Gemini only, never into the output.
-            // Matches convert_manga.py, which OCRs a temp copy of that rect.
-            cropBytes = await canvasToJpegBytes(drawMarginCrop().canvas, 0.90);
-          }
-          panelCrops.push(cropBytes);
-          panelRects.push([mx1, my1, mx2, my2]);
-        }
-        bitmap.close();
-
-        if (epub) epubPages.push({ pageIdx, images: epubImages });
-
-        let ocrResults;
-        if (!bookNoOcr) {
-          ocrResults = await mapLimit(panelCrops, Math.min(8, Math.max(1, panelCrops.length)),
-            (crop) => crop ? geminiOcrPanel(crop, apiKey, model, ocrPrompt) : Promise.resolve({ blocks: [], translation: "" }));
-        } else {
-          ocrResults = panelCrops.map(() => ({ blocks: [], translation: "" }));
-        }
-
-        const mokuroOwned = prep.pageText ? assignBlocksToPanels(prep.pageText, boxes) : null;
-        const panelsWithText = [];
-        for (let panelIdx = 0; panelIdx < boxes.length; panelIdx++) {
-          const [x1, y1, x2, y2] = boxes[panelIdx];
-          const [mx1, my1, mx2, my2] = panelRects[panelIdx];
-          const ocr = ocrResults[panelIdx];
-          const panelW = mx2 - mx1, panelH = my2 - my1;
-
-          const textBlocks = mokuroOwned ? mokuroOwned[panelIdx].slice() : [];
-          for (const b of ocr.blocks || []) {
-            const text = String(b.text ?? "").trim();
-            if (!text) continue;
-            const bbox = b.bbox_2d;
-            let tb;
-            if (Array.isArray(bbox) && bbox.length === 4) {
-              // bbox_2d is normalised 0-1000 over the image the model was actually shown,
-              // which is the MARGINED crop -- so it maps back from that rect's corner, not
-              // the panel's. Anchoring at the panel corner while scaling by the margined
-              // size mixes the two frames and slides every box down-right by the margin.
-              const [ymin, xmin, ymax, xmax] = bbox;
-              const at = (v, span) => Math.trunc((Math.min(1000, Math.max(0, Number(v) || 0)) / 1000) * span);
-              tb = [
-                mx1 + at(xmin, panelW),
-                my1 + at(ymin, panelH),
-                mx1 + at(xmax, panelW),
-                my1 + at(ymax, panelH),
-              ];
-            } else {
-              tb = [x1, y1, x2, y2];
-            }
-            const lined = blockLinesFromOcr(b, mx1, my1, panelW, panelH);
-            textBlocks.push({ box: tb, text: lined.text || text, lines: lined.lines, vertical: lined.vertical });
-          }
-          panelsWithText.push({
-            box: boxes[panelIdx], crop: [mx1, my1, mx2, my2], textBlocks, translation: ocr.translation || "",
-          });
-          totalPanels += 1;
-          totalTextBlocks += textBlocks.length;
-        }
-
-        const pageData = encodePage(panelsWithText);
-        idxRecords.push({ offset: datOffset, length: pageData.length, w: Math.min(imgW, 0xffff), h: Math.min(imgH, 0xffff) });
-        datChunks.push(pageData);
-        datOffset += pageData.length;
-        pagesDone++;
-      }
-
-      if (!pagesDone) throw new Error("No pages were processed");
-
-      addBookFile(`panels.idx`, writePanelsIdx(idxRecords));
-      const dat = new Uint8Array(datOffset);
-      let off = 0;
-      for (const chunk of datChunks) { dat.set(chunk, off); off += chunk.length; }
-      if (matchaFolder) {
-        addBookFile(`panels.dat`, dat);
-        const metaBin = writeMetaBin(metaTitle, metaAuthor, metaLanguage, metaSeries, metaSeriesIndex);
-        if (metaBin) addBookFile(`meta.bin`, metaBin);
-        if (tocEntries.length) addBookFile(`toc.idx`, writeTocIdx(tocEntries));
-      }
-
-      // Extra single-file outputs (EPUB / PDF / XTC / XTCH). They ride inside the zip when the device
-      // folder is also being exported, otherwise they are the download themselves.
-      const extras = [];
-      if (formats.has("epub") && epubPages.length) {
-        setProgress(pagesDone, pages.length, "Building EPUB…");
-        const epubBytes = await buildMangaEpub({ title: metaTitle, author: metaAuthor, epubPages, tocEntries });
-        extras.push({ name: `${folder}.epub`, bytes: epubBytes, type: "application/epub+zip" });
-        logLine(`Built ${folder}.epub (${epubPages.reduce((n, p) => n + p.images.length, 0)} images).`);
-      }
-      if (pdf && epubPages.length) {
-        setProgress(pagesDone, pages.length, "Building PDF…");
-        const pdfBytes = await buildMangaPdf({ title: metaTitle, author: metaAuthor, epubPages });
-        extras.push({ name: `${folder}.pdf`, bytes: pdfBytes, type: "application/pdf" });
-        logLine(`Built ${folder}.pdf (${epubPages.reduce((n, p) => n + p.images.length, 0)} pages).`);
-      }
-      // The chapter list indexes the EXPORTED page sequence (each page followed by its panels),
-      // not the source page numbers, so a chapter starting at source page N lands on that page's
-      // entry in xtcPageMap.
-      const xtcToc = tocEntries
-        .map(([pageIndex, chapterTitle]) => ({ title: chapterTitle, page: xtcPageMap.get(pageIndex) }))
-        .filter((c) => c.page !== undefined)
-        .sort((a, b) => a.page - b.page);
-      // One file, or parts of about `xtcSplit` pages that each start at a chapter where one is close.
-      const addXtcParts = (xpages, ext, isHq, depth) => {
-        const starts = partStarts(xpages.length, xtcSplit, xtcToc.map((c) => c.page));
-        starts.forEach((start, i) => {
-          const end = i + 1 < starts.length ? starts[i + 1] : xpages.length;
-          const many = starts.length > 1;
-          const name = many ? `${folder} - part ${i + 1}.${ext}` : `${folder}.${ext}`;
-          const toc = xtcToc.filter((c) => c.page >= start && c.page < end).map((c) => ({ ...c, page: c.page - start }));
-          const title = many ? `${metaTitle} (${i + 1}/${starts.length})` : metaTitle;
-          extras.push({ name, type: "application/octet-stream",
-            bytes: buildXtcFile(xpages.slice(start, end), { title, author: metaAuthor, language: metaLanguage, toc, isHq }) });
-          logLine(`Built ${name} (${end - start} pages, ${depth}).`);
-        });
-      };
-      if (wantXtc && xtcPages.length) addXtcParts(xtcPages, "xtc", false, "1-bit");
-      if (wantXtch && xtchPages.length) addXtcParts(xtchPages, "xtch", true, "2-bit grayscale");
-
-      setProgress(pagesDone, pages.length, "Packaging…");
-      const summary = `Done: ${pagesDone} pages, ${totalPanels} panels` +
-        (bookNoOcr && !collected.mokuro && !bookPpocr ? "" : `, ${totalTextBlocks} text blocks`) +
-        (deviceTarget ? `, ${deviceTarget[0]}×${deviceTarget[1]}` : "") +
-        (mono && matchaFolder ? ", 1-bit dithered BMP" : "") +
-        (pagesKeptForCoverage ? `, ${pagesKeptForCoverage} full page(s) kept where panels missed content` : "");
-
-      if (matchaVolume) {
-        const volume = matchaVolume.toBlob();
-        const files = [{ name: `${folder}.matcha`, blob: volume }];
-        if (legacyFolder) files.push({ name: `${folder}.zip`, blob: zip.toBlob() });
-        for (const e of extras) files.push({ name: e.name, blob: new Blob([e.bytes], { type: e.type }) });
-        logLine(`${summary} — ${formatBytes(volume.size)}`);
-        logLine(`Copy "${folder}.matcha" anywhere on the SD card (e.g. /manga/) or upload it via the device's web ` +
-          "file transfer. It needs firmware 2.0.0-rc-4 or later.");
-        if (files.length === 1) {
-          downloadBlob(volume, `${folder}.matcha`);
-        } else {
-          const outZip = new ZipWriter();
-          for (const f of files) outZip.addFile(f.name, new Uint8Array(await f.blob.arrayBuffer()));
-          logLine(`The download is a zip holding ${files.map((f) => `"${f.name}"`).join(", ")}.`);
-          downloadBlob(outZip.toBlob(), `${folder}-export.zip`);
-        }
-      } else if (matchaFolder) {
-        for (const e of extras) zip.addFile(e.name, e.bytes);
-        const blob = zip.toBlob();
-        logLine(`${summary}${extras.length ? `, + ${extras.map((e) => e.name.split(".").pop().toUpperCase()).join(" + ")}` : ""} — ${formatBytes(blob.size)}`);
-        logLine(`Unzip onto the SD card (e.g. /manga/) or upload the "${folder}" folder via the device's web file transfer.` +
-          (extras.length ? ` The ${extras.map((e) => `"${e.name}"`).join(" and ")} inside the zip ${extras.length > 1 ? "are" : "is"} for other readers.` : ""));
-        downloadBlob(blob, `${folder}.zip`);
-      } else if (extras.length === 1) {
-        // A single file needs no zip wrapper -- nothing to unpack.
-        const only = extras[0];
-        const blob = new Blob([only.bytes], { type: only.type });
-        logLine(`${summary} — ${formatBytes(blob.size)}`);
-        logLine(`Copy "${only.name}" to the reader.`);
-        downloadBlob(blob, only.name);
-      } else if (extras.length) {
-        const outZip = new ZipWriter();
-        for (const e of extras) outZip.addFile(e.name, e.bytes);
-        const blob = outZip.toBlob();
-        logLine(`${summary} — ${formatBytes(blob.size)}`);
-        logLine(`Unzip and copy ${extras.map((e) => `"${e.name}"`).join(" / ")} to the reader.`);
-        downloadBlob(blob, `${folder}.zip`);
-      } else {
-        throw new Error("Nothing to export: no pages were produced");
-      }
-      setProgress(pagesDone, pagesDone, "Complete");
-    } finally {
-      if (collected && collected.cleanup) collected.cleanup();
-    }
-  };
-
   try {
     if (!batch) {
-      await convertBook(books[0]);
+      await convertMangaBook(books[0], s, bookField);
     } else {
       let done = 0, failed = 0;
       for (let i = 0; i < books.length && !mangaState.cancelled; i++) {
         logLine(`── Book ${i + 1} of ${books.length}: ${bookLabel(books[i])}`);
         announce(`Converting book ${i + 1} of ${books.length}`);
         try {
-          await convertBook(books[i]);
+          await convertMangaBook(books[i], s, bookField);
           done++;
         } catch (e) {
           failed++;

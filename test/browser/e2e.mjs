@@ -869,6 +869,40 @@ async function testMangaMokuroTextCheck(page, base) {
   check("the other page keeps Mokuro's text", JSON.stringify(second) === '["まちがい"]', JSON.stringify(second));
 }
 
+/* Two books at once: each book's XTC holds only its own pages. */
+async function testMangaBatchXtc(page, base) {
+  console.log("manga.html end-to-end (two books at once, XTC):");
+  const books = [["manga.cbz", "manga.xtc"], ["manga_fullbleed.cbz", "manga fullbleed.xtc"]];
+  if (!books.every(([f]) => fs.existsSync(path.join(FIXTURES, f)))) {
+    console.log("  skip (fixtures missing — rerun gen_references.py)");
+    return;
+  }
+  const xtcPages = async (files) => {
+    await gotoManga(page, base);
+    await page.setInputFiles("#manga-file", files.map((f) => path.join(FIXTURES, f)));
+    await setHiddenControl(page, "#manga-ocr-engine", "none");
+    await page.uncheck("#manga-yolo");
+    await setMangaForm(page, { formats: ["xtc"], res: "x4" });
+    const got = {};
+    const saved = [];
+    const onDownload = (d) => saved.push(d.saveAs(path.join(OUT, "batch_" + d.suggestedFilename()))
+      .then(() => { got[d.suggestedFilename()] = xtcPageCount(path.join(OUT, "batch_" + d.suggestedFilename())); }));
+    page.on("download", onDownload);
+    await page.click("#manga-run");
+    await page.waitForFunction(() => !mangaState.running, null, { timeout: 300000 });
+    await page.waitForTimeout(1000);  // the last download event can arrive just after the run ends
+    page.off("download", onDownload);
+    await Promise.all(saved);
+    return got;
+  };
+  const alone = {};
+  for (const [f, out] of books) alone[out] = (await xtcPages([f]))[out];
+  const batch = await xtcPages(books.map(([f]) => f));
+  for (const [, out] of books) {
+    check(`${out} has its own ${alone[out]} pages in a batch`, batch[out] === alone[out], `got ${batch[out]}`);
+  }
+}
+
 async function testMangaPanelsOnly(page, base) {
   console.log("manga.html end-to-end (panels-only, borderless pages, XTC + EPUB):");
   const cbz = path.join(FIXTURES, "manga_fullbleed.cbz");
@@ -1197,6 +1231,7 @@ async function testRuby(page, base) {
     await testMangaYoloLayouts(page, base);
     await testMangaPdf(page, base);
     await testMangaPanelsOnly(page, base);
+    await testMangaBatchXtc(page, base);
     await testMangaFolderedCbz(page, base);
     await testMangaGeminiOcr(page, base);
     await testMangaPpocr(page, base);
