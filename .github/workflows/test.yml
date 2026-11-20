@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]   # main runs these from pages.yml, before deploying
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The references come from the firmware's Python tools.
+      - uses: actions/checkout@v4
+        with:
+          repository: eszter007/matcha-reader
+          ref: develop
+          path: matcha-reader
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Python packages
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq liblzo2-dev
+          pip install -r test/requirements.txt
+      - name: Build fixtures and references
+        run: MATCHA_READER=matcha-reader python3 test/gen_references.py
+      - run: node test/node/run.cjs
+      - run: node test/node/anki.cjs
