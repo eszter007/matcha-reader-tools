@@ -253,11 +253,3 @@ MIT — see [LICENSE](LICENSE). The PP-OCR models in `models/ppocr/` are Apache-
 [models/ppocr/README.md](models/ppocr/README.md).
 
 Icons: [Tabler Icons](https://tabler.io/icons) by Paweł Kuna, MIT License.
-
-
-## Forks
-
-If you fork these tools and host them:
-
-- Keep the Buy Me a Coffee buttons and `.github/FUNDING.yml` as they are.
-- Do not publish my imprint or privacy details.
