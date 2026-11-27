@@ -75,6 +75,11 @@
       <label for="dict-userid">Email or device ID <span class="hint">— whichever the code was registered to</span></label>
       <input type="text" id="dict-userid" autocomplete="off">
     </details>
+    <details id="dict-pitch-options">
+      <summary>Pitch accent (optional)</summary>
+      <label for="dict-pitch">Pitch accent dictionary <span class="hint">: a Yomitan pitch .zip such as NHK 2016. The lookup panel draws a line over the high syllables of each reading. Choose two files to use the second as a fallback.</span></label>
+      <input type="file" id="dict-pitch" multiple accept=".zip">
+    </details>
   </div>
 
   <div class="card" id="dict-zh-options" data-step hidden>
@@ -137,6 +142,7 @@
       <option value="vocab">Vocabulary (required)</option>
       <option value="names">Names (optional)</option>
       <option value="grammar">Grammar (optional)</option>
+      <option value="kanji" data-char-slot>Kanji (optional, one entry per character)</option>
     </select>
   </div>
 
@@ -155,10 +161,11 @@
       <summary>What goes where</summary>
       <p>Each language has its own folder: <code>/dictionaries/jp/</code> (older
       firmware: <code>/dict/</code>) for Japanese, <code>/dictionaries/zh/</code> for Chinese, <code>/dictionaries/yue/</code> for
-      books tagged Cantonese. A folder holds up to three dictionaries:</p>
+      books tagged Cantonese. A folder holds up to four dictionaries:</p>
       <pre style="font-size:0.82rem" tabindex="0" role="region" aria-label="Dictionary file layout">vocab.idx    vocab.dat    vocab.spx    vocab.title      (vocabulary — required)
 names.idx    names.dat    names.spx    names.title      (names — optional)
-grammar.idx  grammar.dat  grammar.spx  grammar.title    (grammar — optional)</pre>
+grammar.idx  grammar.dat  grammar.spx  grammar.title    (grammar — optional)
+kanji.idx    kanji.dat    kanji.spx    kanji.title      (kanji, optional; hanzi.* in Chinese)</pre>
       <p>A Chinese dictionary built with proper nouns split off writes <code>names.*</code> beside
       <code>vocab.*</code> in one go. Large dictionaries (Jitendex is about 60&nbsp;MB) take a
       minute and some memory to convert.</p>

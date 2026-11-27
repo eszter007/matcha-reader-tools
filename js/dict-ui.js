@@ -49,9 +49,25 @@ function optionalFile(id) {
   return input && input.files.length ? input.files[0] : null;
 }
 
+/* The parsed JSON of a zip's members whose names match re, in name order or in zip order. */
+async function readZipBanks(zip, re, inNameOrder = true) {
+  const decoder = new TextDecoder("utf-8");
+  const entries = zip.entries.filter((e) => re.test(e.name));
+  if (inNameOrder) entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const banks = [];
+  for (const e of entries) {
+    banks.push(JSON.parse(decoder.decode(await zip.readEntry(e))));
+    await sleep(0);
+  }
+  return banks;
+}
+
+const CHARACTER_SLOTS = ["kanji", "hanzi"];
+
 /* The Japanese converter's own inputs: Yomitan zip, jmdict-simplified JSON, MDict. Returns
- * {records, title}. */
-async function convertJapaneseFile(file, readingRecords) {
+ * {records, title}. slot is the output slot: a Yomitan kanji dictionary needs the character
+ * slot, and the vocab slot gets the Japanese cleanup. */
+async function convertJapaneseFile(file, readingRecords, slot = "vocab", lang = "ja") {
   const lower = file.name.toLowerCase();
   if (lower.endsWith(".zip")) {
     logLine(`Loading ${file.name} (Yomitan format)…`);
@@ -67,10 +83,28 @@ async function convertJapaneseFile(file, readingRecords) {
         logLine(`  Format version: ${meta.format ?? meta.version ?? "?"}`);
       } catch (e) { /* metadata is informational only */ }
     }
+    const hasKanjiBanks = zip.entries.some((e) => /^kanji_bank_\d+\.json$/.test(e.name));
+    const hasMetaBanks = zip.entries.some((e) => /^(term|kanji)_meta_bank_\d+\.json$/.test(e.name));
+    if (CHARACTER_SLOTS.includes(slot)) {
+      setProgress(0, 1, "Reading kanji banks…");
+      const kanjiBanks = await readZipBanks(zip, /^kanji_bank_\d+\.json$/);
+      const termBanks = kanjiBanks.length ? [] : await readZipBanks(zip, /^term_bank_\d+\.json$/);
+      const records = convertYomitanKanjiRecords(kanjiBanks, termBanks);
+      if (!records.length && !kanjiBanks.length && hasMetaBanks) {
+        throw new Error(`${file.name} is a frequency list, not a kanji dictionary.`);
+      }
+      if (!records.length) throw new Error(`${file.name}: no kanji entry has text the reader can show.`);
+      logLine(`Processed ${records.length} kanji entries`);
+      return { records, title };
+    }
     const bankEntries = zip.entries
       .filter((e) => /^term_bank_\d+\.json$/.test(e.name))
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    if (!bankEntries.length) throw new Error("No term_bank_N.json files found in zip — is this a Yomitan dictionary?");
+    if (!bankEntries.length) {
+      if (hasKanjiBanks) throw new Error(`${file.name} is a kanji dictionary (one entry per character). Choose the Kanji slot below.`);
+      if (hasMetaBanks) throw new Error(`${file.name} is a frequency or pitch list with no definitions, not a dictionary.`);
+      throw new Error("No term_bank_N.json files found in zip. Is this a Yomitan dictionary?");
+    }
     logLine(`  Found ${bankEntries.length} term bank files`);
     const converter = createYomitanConverter(readingRecords);
     for (let i = 0; i < bankEntries.length; i++) {
@@ -80,8 +114,10 @@ async function convertJapaneseFile(file, readingRecords) {
     }
     setProgress(0, 1, "Converting entries…");
     const result = converter.finish((done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`));
+    if (!result.records.length) throw new Error(`${file.name}: no entry has a definition the reader can show (web links only?).`);
     logLine(`Processed ${result.entryCount} Yomitan entries → ${result.records.length} index records`);
-    return { records: result.records, title };
+    const records = lang === "ja" && slot === "vocab" ? cleanJapaneseVocab(result.records) : result.records;
+    return { records, title };
   }
 
   if (lower.endsWith(".json") || lower.endsWith(".tgz") || lower.endsWith(".tar.gz")) {
@@ -136,11 +172,11 @@ async function convertJapaneseFile(file, readingRecords) {
 }
 
 /* One input of a Chinese or Cantonese conversion. Returns {records, names, title}. */
-async function convertChineseFile(file, lang, zhOpts) {
+async function convertChineseFile(file, lang, zhOpts, slot) {
   const fmt = detectDictFormat(file.name, lang);
   logLine(`${file.name}: format ${fmt}`);
   if (fmt === "yomitan" || fmt === "mdict") {
-    const r = await convertJapaneseFile(file, /*readingRecords=*/false);
+    const r = await convertJapaneseFile(file, /*readingRecords=*/false, slot, lang);
     return { records: r.records, names: [], title: r.title };
   }
   if (fmt === "jmdict") {
@@ -292,9 +328,10 @@ async function runDictConversion() {
       : null;
 
     for (const file of files) {
-      const part = chinese ? await convertChineseFile(file, lang, zhOpts)
-                           : await convertJapaneseFile(file, /*readingRecords=*/true);
-      records = records.concat(part.records);
+      const part = chinese ? await convertChineseFile(file, lang, zhOpts, outName)
+                           : await convertJapaneseFile(file, /*readingRecords=*/true, outName);
+      // Merged inputs: each entry names the dictionary it came from.
+      records = records.concat(part.title && files.length > 1 ? labelDictSource(part.records, part.title) : part.records);
       if (part.names && part.names.length) nameRecords = nameRecords.concat(part.names);
       if (part.title) titles.push(part.title);
     }
@@ -321,6 +358,19 @@ async function runDictConversion() {
       }
     }
 
+    const pitchFiles = chinese ? [] : [...($("dict-pitch") ? $("dict-pitch").files : [])];
+    if (pitchFiles.length) {
+      const pitch = new Map();
+      for (const file of pitchFiles) {
+        setProgress(0, 1, `Reading ${file.name}…`);
+        const banks = await readZipBanks(new ZipReader(await readFileBytes(file)), /^term_meta_bank_\d+\.json$/, /*inNameOrder=*/false);
+        logLine(`Pitch accents ${file.name}: ${addPitchDictionary(pitch, banks).toLocaleString()} readings`);
+      }
+      const r = applyPitch(records, pitch);
+      records = r.records;
+      logLine(`Pitch accent added to ${r.count.toLocaleString()} entries`);
+    }
+
     setProgress(0, 1, "Sorting and writing binary index…");
     await sleep(0);
     const zipOut = new ZipWriter();
@@ -343,7 +393,8 @@ async function runDictConversion() {
 const DICT_FILE_HINTS = {
   ja: 'For example <a href="https://github.com/stephenmk/Jitendex/releases" target="_blank" rel="noopener">Jitendex</a> '
     + "(vocabulary) or JMnedict (names), both as Yomitan .zip; also jmdict-simplified .json / .json.tgz "
-    + "or MDict .mdx. Several files merge into one dictionary.",
+    + "or MDict .mdx. Several files merge into one dictionary. A kanji dictionary such as KANJIDIC "
+    + "(Yomitan .zip) goes in the Kanji slot below.",
   zh: '<a href="https://www.mdbg.net/chinese/dictionary?page=cc-cedict" target="_blank" rel="noopener">CC-CEDICT</a>, '
     + 'the Taiwan Ministry of Education\'s <a href="https://github.com/g0v/moedict-data" target="_blank" rel="noopener">dict-revised.json</a> '
     + "(unpack the .xz first), a Yomitan .zip, MDict .mdx or a headword<TAB>definition .tsv. Several files "
@@ -368,6 +419,13 @@ function updateDictLanguageUi() {
   $("dict-zh-options").hidden = !own || lang === "ja";
   $("dict-slot-card").hidden = !own;
   $("dict-mdict-reg").hidden = lang !== "ja";
+  $("dict-pitch-options").hidden = lang !== "ja";
+  // One entry per character: the device calls the slot kanji in Japanese, hanzi in Chinese.
+  const charSlot = $("dict-name").querySelector("[data-char-slot]");
+  const chosen = charSlot.selected;
+  charSlot.value = lang === "ja" ? "kanji" : "hanzi";
+  charSlot.textContent = lang === "ja" ? "Kanji (optional, one entry per character)" : "Hanzi (optional, one entry per character)";
+  charSlot.selected = chosen;
   $("dict-edition-hint").hidden = own;
   $("dict-edition-hint").textContent = EDITION_HINTS[lang] || "";
   $("dict-file-hint").innerHTML = DICT_FILE_HINTS[lang].replace("<TAB>", "&lt;TAB&gt;");

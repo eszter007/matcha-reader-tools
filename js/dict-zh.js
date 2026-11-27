@@ -672,29 +672,19 @@ function keepNamesTogether(records, nameRecords, bilingualHeadwords) {
 }
 
 /* The footer title the Chinese converter settles on: the inputs' titles joined, or the first
- * when the join would not fit the device's 36-byte field. */
+ * when the join would not fit the 39 bytes the device reads. */
 function joinDictTitles(titles) {
   const unique = [];
   for (const t of titles) if (t && !unique.includes(t)) unique.push(t);
   if (!unique.length) return "";
   const joined = unique.join(" + ");
-  return zhEncoder.encode(joined).length <= 36 ? joined : unique[0];
+  return zhEncoder.encode(joined).length <= 39 ? joined : unique[0];
 }
 
-/* The bytes of <name>.title: the title cut to 36 bytes on a character boundary, plus a newline.
- * Null when there is nothing to write (convert_jmdict.py write_binary). */
+/* The bytes of <name>.title: the title cut to what the device reads (shortDictTitle in dict.js),
+ * plus a newline. Null when there is nothing to write (convert_jmdict.py write_binary). */
 function encodeDictTitle(title) {
-  let bytes = zhEncoder.encode(pyStrip(title || "")).subarray(0, 36);
-  // Drop a trailing UTF-8 sequence the cut left incomplete (Python's errors="ignore").
-  let end = bytes.length;
-  let start = end;
-  while (start > 0 && (bytes[start - 1] & 0xC0) === 0x80) start--;
-  if (start > 0) {
-    const lead = bytes[start - 1];
-    const need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
-    if (end - (start - 1) < need) end = start - 1;
-  }
-  const text = pyStrip(zhDecoder.decode(bytes.subarray(0, end)));
+  const text = shortDictTitle(title);
   if (!text) return null;
   return zhEncoder.encode(text + "\n");
 }

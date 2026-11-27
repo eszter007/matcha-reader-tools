@@ -173,6 +173,17 @@ alike, both forms of every word are indexed), `dictionaries/yue/` for Cantonese.
 | **Proper nouns to names** | `--split-names` | Capitalised CC-CEDICT entries (places, people, dynasties) go to `names.*` and show as Name entries; languages, nationalities, weekdays, months and festivals stay in the vocabulary. |
 | **Dictionary name** | `--title` | The footer label, `vocab.title`; default is the sources joined (`CC-CEDICT + MoE`). |
 
+Two options apply to every language's own files:
+
+| Control | Desktop flag | Effect |
+|---|---|---|
+| **Which dictionary is this?** | `--name vocab\|names\|grammar\|kanji\|hanzi` | The slot the files fill. *Kanji* (Japanese) or *Hanzi* (Chinese) takes a Yomitan kanji dictionary such as KANJIDIC and writes `kanji.*` or `hanzi.*`, one entry per character. |
+| **Pitch accent** (Japanese) | `--pitch` (repeatable) | A Yomitan pitch-accent `.zip` such as NHK 2016: the lookup panel draws a line over the high syllables of each reading. A second file is a fallback. Off unless a file is chosen. |
+
+When several files merge, each entry starts with a line naming the dictionary it came from, as in
+the desktop tool. The page does not convert pictures (`--images`) or write Korean StarDict
+dictionaries (`--lang ko`).
+
 ## Furigana & Pinyin
 
 Adds readings above the text of an EPUB, the way the reader shows a book's own ruby, with its
