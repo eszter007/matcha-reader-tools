@@ -18,6 +18,8 @@ global.pyStrip = binary.pyStrip;
 const zip = require("../../js/zip.js");
 const dict = require("../../js/dict.js");
 const zh = require("../../js/dict-zh.js");
+// dict-zh.js uses dict.js's globals the way the page does.
+global.shortDictTitle = dict.shortDictTitle;
 // pinyin-ruby.js uses dict-zh.js's globals the way the page does.
 global.CEDICT_LINE_RE = zh.CEDICT_LINE_RE;
 global.isProperNounPinyin = zh.isProperNounPinyin;
@@ -1178,20 +1180,23 @@ function convertChineseFixture(inputs, opts = {}) {
   for (const input of inputs) {
     const fmt = zh.detectDictFormat(input, lang);
     let title = zh.DEFAULT_DICT_TITLES[fmt] || "";
+    let part;
     if (fmt === "cedict") {
       const r = zh.convertCedict(zhText(input), zhOpts);
-      records = records.concat(r.records);
+      part = r.records;
       names = names.concat(r.names);
       for (const rec of r.records) bilingual.add(zh.headwordKey(rec.hw));
       if (input.toLowerCase().includes("canto")) title = "CC-Canto";
     } else if (fmt === "moedict") {
-      records = records.concat(zh.convertMoedict(JSON.parse(zhText(input))).records);
+      part = zh.convertMoedict(JSON.parse(zhText(input))).records;
     } else if (fmt === "tsv") {
-      records = records.concat(zh.convertTsv(zhText(input)).records);
+      part = zh.convertTsv(zhText(input)).records;
       title = input.replace(/\.[^.]+$/, "");
     } else {
       throw new Error(`fixture format ${fmt} not handled here`);
     }
+    if (title && inputs.length > 1) part = dict.labelDictSource(part, title);
+    records = records.concat(part);
     if (title) titles.push(title);
   }
   if (names.length) ({ records, names } = zh.keepNamesTogether(records, names, bilingual));
@@ -1373,11 +1378,71 @@ async function testDictYomitan() {
   for (const e of bankEntries) {
     banks.push(JSON.parse(new TextDecoder().decode(await zr.readEntry(e))));
   }
-  const { records } = dict.convertYomitanRecords(banks);
+  const records = dict.cleanJapaneseVocab(dict.convertYomitanRecords(banks).records);
   const { idx, dat } = dict.dictWriteBinary(records);
   compareFile("vocab.idx", idx, path.join(refDir, "vocab.idx"));
   compareFile("vocab.dat", dat, path.join(refDir, "vocab.dat"));
   compareFile("vocab.spx", dict.dictGenSpx(idx), path.join(refDir, "vocab.spx"));
+}
+
+/* Parsed JSON of a fixture zip's members matching re: name order, or zip order for pitch. */
+async function zipBanks(file, re, inNameOrder = true) {
+  const zr = new zip.ZipReader(new Uint8Array(fs.readFileSync(path.join(FIXTURES, file))));
+  const entries = zr.entries.filter((e) => re.test(e.name));
+  if (inNameOrder) entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const banks = [];
+  for (const e of entries) banks.push(JSON.parse(new TextDecoder().decode(await zr.readEntry(e))));
+  const index = zr.findEntry("index.json");
+  const title = index ? JSON.parse(new TextDecoder().decode(await zr.readEntry(index))).title : "";
+  return { banks, title };
+}
+
+/* The page's pipeline, as dict-ui.js runs it, on Japanese Yomitan and JMdict fixtures. */
+async function convertJapaneseFixture(inputs, { slot = "vocab", lang = "ja", pitch = [] } = {}) {
+  let records = [];
+  const titles = [];
+  for (const input of inputs) {
+    let part, title = "";
+    if (input.endsWith(".json")) {
+      part = dict.convertJmdictRecords(JSON.parse(fs.readFileSync(path.join(FIXTURES, input), "utf-8")));
+    } else if (slot === "kanji" || slot === "hanzi") {
+      const k = await zipBanks(input, /^kanji_bank_\d+\.json$/);
+      const t = k.banks.length ? { banks: [] } : await zipBanks(input, /^term_bank_\d+\.json$/);
+      part = dict.convertYomitanKanjiRecords(k.banks, t.banks);
+      title = k.title;
+    } else {
+      const t = await zipBanks(input, /^term_bank_\d+\.json$/);
+      part = dict.convertYomitanRecords(t.banks, null, lang === "ja").records;
+      if (lang === "ja" && slot === "vocab") part = dict.cleanJapaneseVocab(part);
+      title = t.title;
+    }
+    if (title && inputs.length > 1) part = dict.labelDictSource(part, title);
+    records = records.concat(part);
+    if (title) titles.push(title);
+  }
+  if (pitch.length) {
+    const map = new Map();
+    for (const file of pitch) dict.addPitchDictionary(map, (await zipBanks(file, /^term_meta_bank_\d+\.json$/, false)).banks);
+    records = dict.applyPitch(records, map).records;
+  }
+  return { records, title: zh.joinDictTitles(titles) };
+}
+
+async function testDictYomitanCleanup() {
+  console.log("dictionary converter, Yomitan cleanup, merged inputs, pitch, kanji slot (vs convert_jmdict.py):");
+  if (!fs.existsSync(path.join(FIXTURES, "ref_dict_yomitan_markup"))) {
+    console.log("  skip (no markup fixtures: run test/gen_references.py)");
+    return;
+  }
+  let r = await convertJapaneseFixture(["yomitan_markup.zip"]);
+  compareDictDir("markup", path.join(FIXTURES, "ref_dict_yomitan_markup"), "vocab", r.records, r.title);
+  r = await convertJapaneseFixture(["yomitan.zip", "yomitan_markup.zip", "jmdict.json"],
+    { pitch: ["pitch1.zip", "pitch2.zip"] });
+  compareDictDir("merged + pitch", path.join(FIXTURES, "ref_dict_ja_merged"), "vocab", r.records, r.title);
+  r = await convertJapaneseFixture(["yomitan_kanji.zip", "yomitan_kanji_terms.zip"], { slot: "kanji" });
+  compareDictDir("kanji", path.join(FIXTURES, "ref_dict_kanji"), "kanji", r.records, r.title);
+  r = await convertJapaneseFixture(["yomitan_kanji.zip"], { slot: "hanzi", lang: "zh" });
+  compareDictDir("hanzi", path.join(FIXTURES, "ref_dict_hanzi"), "hanzi", r.records, r.title);
 }
 
 async function testDictMdx() {
@@ -1832,6 +1897,7 @@ function testPpocr() {
   await testMangaYoloPost();
   await testMangaYolo();
   await testDictYomitan();
+  await testDictYomitanCleanup();
   testDictJmdict();
   await testDictMdx();
   testDictPos();

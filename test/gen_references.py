@@ -19,6 +19,11 @@ Produces under test/fixtures/:
     ref_dict_yomitan/    convert_jmdict.py output + .spx
     ref_font/            fontconvert_sdcard.py .cpfont (needs freetype-py + fontTools)
     ref_dict_jmdict/     convert_jmdict.py output + .spx
+    yomitan_markup.zip   Yomitan entries for the text cleanup (HTML, lists, tables, icons, links)
+    yomitan_kanji*.zip   Yomitan kanji dictionaries (kanji banks; single-character term banks)
+    pitch1/2.zip         Yomitan pitch-accent dictionaries
+    ref_dict_yomitan_markup/, ref_dict_ja_merged/, ref_dict_kanji/, ref_dict_hanzi/
+                         convert_jmdict.py output for those (merged inputs, --pitch, --name kanji/hanzi)
     zh/                  synthetic CC-CEDICT, CC-Canto, MoE JSON, word lists, sentence pairs
     ref_dict_zh*/        convert_jmdict.py --lang zh / yue output (+ names.*, .title files)
     ref_pinyin/          add_pinyin_ruby.py output for zh/book.epub
@@ -828,6 +833,157 @@ def make_yomitan_zip():
     print(f"yomitan zip: {path}")
 
 
+def _sc(content):
+    return {"type": "structured-content", "content": content}
+
+
+def make_yomitan_markup_zip():
+    """Synthetic Yomitan dictionary for the text cleanup convert_jmdict.py applies to every
+    dictionary: HTML left in strings, lists, tables, badges, label icons, web links, headword
+    echoes, Pixiv's related lists, and the 大辞林 data.name layout."""
+    path = os.path.join(FIXTURES, "yomitan_markup.zip")
+    related = "・".join(f"記事{i}" for i in range(15))
+    bank = [
+        # HTML and placeholders inside plain strings, several lines so they stay one sense each
+        ["愛", "あい", "", "", 3, [
+            "<ruby>愛<rt>あい</rt></ruby>する<br>心。<b>強く</b>{{w_12}}思う\n<span class=\"x\">深い</span><unencoded>",
+            "【衬衫】 【襯衫】 [3304] shirt/blouse\n【愛】 【爱】 (愛,爱)",
+            "・違い• 「猫に小判」と同じ\n[名]\n\n• いつくしむ\n〔特殊語百科辞典｛１９３１｝〕",
+            "┏[変] ►参照 ━を込める\n一[2]\n❶ 一つ目 ➁ 二つ目\n📚使い方\n見る😀\nadsbygoogle push\n"
+            "example.com/page\nこれは{{rfdef}}模板。\n{百均（ひゃっきん）:81491}\n莫連{ばくれん}",
+            "関連記事: " + related + "\n子記事: 短い・リスト",
+        ], 1, ""],
+        # monolingual headword echo that says nothing more: dropped
+        ["犬", "いぬ", "", "", 2, ["いぬ〖犬〗\n四足の動物。"], 2, ""],
+        # echo with more spellings and a tail: kept as spellings only
+        ["狗", "いぬ", "", "", 2, ["いぬ〖犬・狗〗 ［名］\n獣。"], 3, ""],
+        # plain one-line glosses: one sense, duplicates dropped
+        ["仲", "なか", "", "", 1, ["friendship", "relations", "friendship"], 4, ""],
+        # a symbol-only line, and headings joined to their text
+        ["馬", "うま", "", "", 0, [_sc([
+            {"tag": "div", "content": "大きな動物"},
+            {"tag": "div", "content": "◇"},
+            {"tag": "div", "data": {"class": "related-tags-header"}, "content": "関連記事"},
+            {"tag": "div", "content": "競馬・騎手"},
+            {"tag": "div", "data": {"class": "related-tags-header"}, "content": "• 子記事"},
+            {"tag": "div", "content": "• 一頭目"},
+            {"tag": "div", "content": "⋯⋯動物 ＞ 哺乳類"},
+            {"tag": "div", "data": {"class": "nav-header"}, "content": "ナビ"},
+        ])], 5, ""],
+        # lists: glosses, a Japanese list, nested li arrays, example list, unmarked item, pairs
+        ["駅", "えき", "", "", 0, [_sc([
+            {"tag": "ul", "content": [{"tag": "li", "content": "station"}, {"tag": "li", "content": "stop"}]},
+            {"tag": "ul", "content": [
+                {"tag": "li", "content": "駅 ▽最寄りの駅"},
+                {"tag": "li", "content": [{"tag": "a", "href": "https://example.com", "content": "link"}]},
+                {"tag": "li", "style": {"listStyleType": "none"}, "content": "停車場"},
+                "地の文",
+            ]},
+            {"tag": "ol", "content": [[{"tag": "li", "content": "一つ目の駅"}], [{"tag": "li", "content": "二つ目の駅"}]]},
+            {"tag": "ul", "data": {"class": "examples"}, "content": [{"tag": "li", "content": "駅に着く"}]},
+            {"tag": "ul", "content": [{"tag": "li", "content": "駅がある"}, {"tag": "li", "content": "There is a station."}]},
+        ])], 6, ""],
+        # tables, a badge, a details summary, images
+        ["表", "ひょう", "", "", 0, [_sc([
+            {"tag": "span", "style": {"borderStyle": "solid"}, "content": "Definitions"},
+            {"tag": "div", "content": "a chart"},
+            {"tag": "summary", "content": "show 5 examples"},
+            {"tag": "table", "content": [
+                {"tag": "tr", "content": [{"tag": "th", "content": "現在"}, {"tag": "th", "content": "過去"}]},
+                {"tag": "tr", "content": [{"tag": "th", "content": "肯定"}, {"tag": "td", "content": "書く"},
+                                         {"tag": "td", "content": "書いた"}]},
+            ]},
+            {"tag": "div", "content": [
+                {"tag": "img", "path": "img/名-rect.svg"}, {"tag": "img", "path": "img/red_（.svg"},
+                {"tag": "img", "path": "img/１-fill.svg"}, {"tag": "img", "path": "img/文法説明ラベル長い-red.svg"},
+                {"type": "image", "path": "gaiji/B92D.png"}, {"type": "image", "path": "gaiji/bs一.svg"},
+                {"type": "image", "path": "accent/a1.svg"}, {"type": "image", "path": "photo/cat.jpg", "alt": "a cat"},
+                {"type": "image", "path": "x/y.svg", "alt": "代替"},
+                {"type": "image", "path": "gaiji/k.svg", "alt": "3分の2", "data": {"class": "gaiji"}},
+                {"type": "image", "path": "noext", "title": "題"},
+            ]},
+        ])], 7, ""],
+        # 大辞林 data.name layout: senses, part-of-speech and gloss parts
+        ["見る", "みる", "v1", "", 0, [_sc([
+            {"tag": "div", "data": {"name": "見出部"}, "content": "みる【見る】"},
+            {"tag": "div", "data": {"name": "品詞G"}, "content": "（動）"},
+            {"tag": "div", "data": {"name": "語義G"}, "content": [
+                {"tag": "span", "data": {"name": "語義Gnum"}, "content": "①"},
+                {"tag": "div", "data": {"name": "語義"}, "content": ["㋐", {"tag": "span", "data": {"name": "語釈"}, "content": "目で知る。"}]},
+            ]},
+            {"tag": "div", "data": {"name": "語義G"}, "content": [
+                {"tag": "span", "data": {"name": "語釈"}, "content": "調べる。"},
+                {"tag": "span", "data": {"name": "見出相当部"}, "content": "━てみる"},
+            ]},
+        ])], 8, ""],
+        # Pixiv: the headword glued in front of the reading
+        ["学校", "学校がっこう", "", "", 0, ["学ぶ所"], 9, ""],
+        # a definition of only separators left by dropped links: no entry
+        ["空", "そら", "", "", 0, [_sc([{"tag": "a", "href": "https://x.example", "content": "x"}, " | "])], 10, ""],
+        # a lone surrogate from a JSON escape is dropped from the bytes. Kana only: the Python
+        # tool's reading records still encode strictly and stop on one.
+        ["ひとり", "ひとり", "", "", 0, ["ひとり\ud800ぼっち"], 11, ""],
+        # a picture-only sense stays unnumbered
+        ["絵", "え", "", "", 0, ["picture", _sc({"type": "image", "path": "p/a.png"}), "drawing"], 12, ""],
+    ]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("index.json", json.dumps({"title": "Markup Dictionary Test (markup.example.com)", "format": 3}))
+        # ASCII escapes, so the lone surrogate reaches the converters as JSON writes it.
+        z.writestr("term_bank_1.json", json.dumps(bank))
+    print(f"yomitan markup zip: {path}")
+
+
+def make_yomitan_kanji_zips():
+    """A Yomitan kanji dictionary (kanji_bank rows, KANJIDIC and Wiktionary styles) and one keyed
+    by single characters in term banks, for the kanji slot."""
+    kanji = [
+        ["学", "ガク", "まな.ぶ", "jouyou", ["study", "learning", "science"],
+         {"strokes": "8", "grade": "1", "jlpt": "4", "freq": "63", "skip": "2-3-5"}],
+        ["学", "", "", "", ["school"], {}],
+        ["語", "ゴ", "かた.る かた.らう", "", [
+            "＝＝＝日語＝＝＝", "ーーー讀音ーーー", "音読み: ゴ", "ーーー字源ーーー", "＝＝＝漢語＝＝＝",
+            "ーーー詞源1ーーー", "ーーー組詞ーーー", "語言", "語法", "語氣", "衍生字", "𧦝, 語",
+            "漢字分解:", "言 + 吾", "語", "http://example.com/語", "見：附录:漢字",
+        ], {"部首": "言", "総画": 14}],
+        ["旧", "キュウ", "ふる.い", "", ["旧字体", "舊は旧の旧字体である。", "", "俗字", "旧の俗字として使われる。"], {}],
+        ["空", "", "", "", ["空"], {}],
+    ]
+    path = os.path.join(FIXTURES, "yomitan_kanji.zip")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("index.json", json.dumps({"title": "Kanji Test", "format": 3}))
+        z.writestr("kanji_bank_1.json", json.dumps(kanji, ensure_ascii=False))
+    terms = [
+        ["水", "すい", "", "", 0, ["water", "<b>liquid</b>"], 1, ""],
+        ["水道", "すいどう", "", "", 0, ["water supply"], 2, ""],
+        ["a", "a", "", "", 0, ["not han"], 3, ""],
+    ]
+    path2 = os.path.join(FIXTURES, "yomitan_kanji_terms.zip")
+    with zipfile.ZipFile(path2, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("index.json", json.dumps({"title": "Term Kanji", "format": 3}))
+        z.writestr("term_bank_1.json", json.dumps(terms, ensure_ascii=False))
+    print(f"yomitan kanji zips: {path}, {path2}")
+
+
+def make_pitch_zips():
+    """Two Yomitan pitch dictionaries; the second is the fallback."""
+    first = [
+        ["猫", "pitch", {"reading": "ねこ", "pitches": [{"position": 1}]}],
+        ["食べる", "pitch", {"reading": "たべる", "pitches": [{"position": 2}, {"position": 0}]}],
+        ["それ", "pitch", {"reading": "それ", "pitches": [{"position": 0}]}],
+        ["犬", "freq", 5],
+    ]
+    second = [
+        ["猫", "pitch", {"reading": "ねこ", "pitches": [{"position": 0}]}],
+        ["走る", "pitch", {"reading": "はしる", "pitches": [{"position": 2}]}],
+        ["駅", "pitch", {"reading": "えき", "pitches": [{"position": 1}]}],
+    ]
+    for name, rows in (("pitch1.zip", first), ("pitch2.zip", second)):
+        with zipfile.ZipFile(os.path.join(FIXTURES, name), "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("index.json", json.dumps({"title": name, "format": 3}))
+            z.writestr("term_meta_bank_1.json", json.dumps(rows, ensure_ascii=False))
+    print("pitch zips: pitch1.zip, pitch2.zip")
+
+
 def make_jmdict_json():
     path = os.path.join(FIXTURES, "jmdict.json")
     data = {"words": [
@@ -1009,8 +1165,17 @@ def run_dict_references():
     script = os.path.join(FIRMWARE, "tools", "dict_convert", "convert_jmdict.py")
     spx_script = os.path.join(FIRMWARE, "scripts", "gen_dict_spx.py")
 
-    for name, args in [("ref_dict_yomitan", ["--input", os.path.join(FIXTURES, "yomitan.zip")]),
-                       ("ref_dict_jmdict", ["--input", os.path.join(FIXTURES, "jmdict.json")])]:
+    f = lambda name: os.path.join(FIXTURES, name)
+    for name, args in [("ref_dict_yomitan", ["--input", f("yomitan.zip")]),
+                       ("ref_dict_jmdict", ["--input", f("jmdict.json")]),
+                       ("ref_dict_yomitan_markup", ["--input", f("yomitan_markup.zip")]),
+                       # merged inputs: source lines, joined title, pitch with a fallback
+                       ("ref_dict_ja_merged", ["--input", f("yomitan.zip"), "--input", f("yomitan_markup.zip"),
+                                               "--input", f("jmdict.json"), "--pitch", f("pitch1.zip"),
+                                               "--pitch", f("pitch2.zip")]),
+                       ("ref_dict_kanji", ["--name", "kanji", "--input", f("yomitan_kanji.zip"),
+                                           "--input", f("yomitan_kanji_terms.zip")]),
+                       ("ref_dict_hanzi", ["--lang", "zh", "--name", "hanzi", "--input", f("yomitan_kanji.zip")])]:
         out = os.path.join(FIXTURES, name)
         shutil.rmtree(out, ignore_errors=True)
         subprocess.run([sys.executable, script, *args, "--output-dir", out], check=True)
@@ -1373,6 +1538,9 @@ if __name__ == "__main__":
     make_manga_pdf()
     run_manga_pdf_reference()
     make_yomitan_zip()
+    make_yomitan_markup_zip()
+    make_yomitan_kanji_zips()
+    make_pitch_zips()
     make_jmdict_json()
     run_font_reference()
     run_dict_references()
