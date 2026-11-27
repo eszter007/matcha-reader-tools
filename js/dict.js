@@ -320,8 +320,8 @@ function rpartition(s, sep) {
   return i < 0 ? ["", "", s] : [s.slice(0, i), sep, s.slice(i + sep.length)];
 }
 
-/* Pictures of the zip being converted, when "Keep pictures" is on: path -> {width, height, name}.
- * Filled by collectPictures() before a bank is formatted; null when pictures are off. */
+/* Pictures of the zip being converted, for a Yomitan zip that carries pictures: path -> {width, height, name}.
+ * Filled by collectPictures() before a bank is formatted; null for Korean. */
 let dictPictures = null;
 function setDictPictures(pictures) { dictPictures = pictures; }
 
@@ -1123,7 +1123,7 @@ function loadFurigana(jsonText) {
   return furigana;
 }
 
-/* ── Pictures ("Keep pictures", the Python tool's --images) ────── */
+/* ── Pictures (the Python tool's --images) ────── */
 
 const IMAGE_MAX_WIDTH = 400;
 const IMAGE_MAX_HEIGHT = 320;

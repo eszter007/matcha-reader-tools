@@ -180,7 +180,7 @@ Two options apply to every language's own files:
 | **Which dictionary is this?** | `--name vocab\|names\|grammar\|kanji\|hanzi` | The slot the files fill. *Kanji* (Japanese) or *Hanzi* (Chinese) takes a Yomitan kanji dictionary such as KANJIDIC and writes `kanji.*` or `hanzi.*`, one entry per character. |
 | **Pitch accent** (Japanese) | `--pitch` (repeatable) | A Yomitan pitch-accent `.zip` such as NHK 2016: the lookup panel draws a line over the high syllables of each reading. A second file is a fallback. Off unless a file is chosen. |
 | **Furigana** (Japanese) | `--furigana` | A JmdictFurigana `.json` or `.zip`: each kanji headword's reading line gets per-kanji furigana. Off unless a file is chosen. The page cannot download the file itself (`--furigana auto`). |
-| **Keep pictures** | `--images` | Yomitan only, off by default. Pictures become 2-bit grayscale BMPs in `images/` beside the dictionary, with the same file names, sizes and BMP headers as the desktop tool. The browser scales and dithers them itself, so the pixels differ slightly. |
+| **Pictures** | `--images` | Automatic. When a Yomitan dictionary carries pictures, they become 2-bit grayscale BMPs in `images/` beside the dictionary, with the same file names, sizes and BMP headers as the desktop tool. The browser scales and dithers them itself, so the pixels differ slightly. A large dictionary can hold thousands of pictures (デジタル大辞泉: about 15,000, 380 MB). |
 
 When several files merge, each entry starts with a line naming the dictionary it came from, as in
 the desktop tool.

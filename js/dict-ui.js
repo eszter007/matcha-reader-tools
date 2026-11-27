@@ -376,7 +376,7 @@ async function runDictConversion() {
       dictRun.furigana = loadFurigana(text);
       logLine(`Furigana ${furiganaFile.name}: ${dictRun.furigana.size.toLocaleString()} entries`);
     }
-    dictRun.pictures = !korean && $("dict-images") && $("dict-images").checked ? new Map() : null;
+    dictRun.pictures = korean ? null : new Map();
 
     for (const file of files) {
       const part = chinese ? await convertChineseFile(file, lang, zhOpts, outName)
@@ -500,7 +500,6 @@ function updateDictLanguageUi() {
   $("dict-mdict-reg").hidden = lang !== "ja";
   $("dict-pitch-options").hidden = lang !== "ja";
   $("dict-furigana-options").hidden = lang !== "ja";
-  $("dict-images-options").hidden = lang === "ko";
   // One entry per character: the device calls the slot kanji in Japanese, hanzi in Chinese.
   const charSlot = $("dict-name").querySelector("[data-char-slot]");
   const chosen = charSlot.selected;
