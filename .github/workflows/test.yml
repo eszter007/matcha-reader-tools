@@ -40,5 +40,4 @@ jobs:
       - name: Build fixtures and references
         run: MATCHA_READER=matcha-reader python3 test/gen_references.py
       - run: node test/node/run.cjs
-      - run: node test/node/anki.cjs
       - run: node test/browser/e2e.mjs

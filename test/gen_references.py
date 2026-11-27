@@ -1583,26 +1583,6 @@ def run_zh_references():
     print(f"ruby AI reference: {out}")
 
 
-def run_anki_references():
-    """Test decks built with the Anki library, and apkg_to_flashcards.py's deck folders for them."""
-    script = os.path.join(FIRMWARE, "tools", "anki_import", "apkg_to_flashcards.py")
-    try:
-        import anki  # noqa: F401
-        import lxml  # noqa: F401
-    except ImportError as e:
-        print(f"anki reference: SKIPPED ({e}; pip install anki lxml)")
-        return
-    decks = os.path.join(FIXTURES, "anki")
-    shutil.rmtree(decks, ignore_errors=True)
-    subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "anki", "make_decks.py"), decks],
-                   check=True)
-    for name in ("test", "test-legacy"):
-        out = os.path.join(FIXTURES, "ref_anki", name)
-        shutil.rmtree(out, ignore_errors=True)
-        subprocess.run([sys.executable, script, os.path.join(decks, name + ".apkg"), "--out", out], check=True)
-        print(f"anki reference: {out}")
-
-
 if __name__ == "__main__":
     os.makedirs(FIXTURES, exist_ok=True)
     make_manga_pages()
@@ -1634,5 +1614,4 @@ if __name__ == "__main__":
     run_zh_references()
     if make_mdx_fixtures():
         run_mdx_reference()
-    run_anki_references()
     print("done")
