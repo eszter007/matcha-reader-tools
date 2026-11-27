@@ -43,6 +43,7 @@
       <option value="ja">Japanese</option>
       <option value="zh">Chinese (Mandarin)</option>
       <option value="yue">Cantonese</option>
+      <option value="ko">Korean</option>
     </select>
   </div>
 
@@ -80,6 +81,15 @@
       <label for="dict-pitch">Pitch accent dictionary <span class="hint">: a Yomitan pitch .zip such as NHK 2016. The lookup panel draws a line over the high syllables of each reading. Choose two files to use the second as a fallback.</span></label>
       <input type="file" id="dict-pitch" multiple accept=".zip">
     </details>
+    <details id="dict-furigana-options">
+      <summary>Furigana on the reading line (optional)</summary>
+      <label for="dict-furigana">JmdictFurigana file <span class="hint">: <a href="https://github.com/Doublevil/JmdictFurigana/releases" target="_blank" rel="noopener">JmdictFurigana.json</a> or its .zip. The lookup panel shows each kanji's own reading above it.</span></label>
+      <input type="file" id="dict-furigana" accept=".json,.zip">
+    </details>
+    <div class="checks stacked" id="dict-images-options" style="margin-top:0.8rem">
+      <label><input type="checkbox" id="dict-images"> <span class="opt">Keep pictures</span>
+        <span class="hint">Yomitan only. Pictures some dictionaries carry (デジタル大辞泉, 広辞苑) become grayscale BMPs in an images folder beside the dictionary, shown in the lookup panel. Off by default: a large dictionary can hold thousands of pictures (デジタル大辞泉: about 15,000, 380 MB).</span></label>
+    </div>
   </div>
 
   <div class="card" id="dict-zh-options" data-step hidden>
@@ -161,7 +171,7 @@
       <summary>What goes where</summary>
       <p>Each language has its own folder: <code>/dictionaries/jp/</code> (older
       firmware: <code>/dict/</code>) for Japanese, <code>/dictionaries/zh/</code> for Chinese, <code>/dictionaries/yue/</code> for
-      books tagged Cantonese. A folder holds up to four dictionaries:</p>
+      books tagged Cantonese, <code>/dictionaries/ko/&lt;name&gt;/</code> for Korean (StarDict files). A folder holds up to four dictionaries:</p>
       <pre style="font-size:0.82rem" tabindex="0" role="region" aria-label="Dictionary file layout">vocab.idx    vocab.dat    vocab.spx    vocab.title      (vocabulary — required)
 names.idx    names.dat    names.spx    names.title      (names — optional)
 grammar.idx  grammar.dat  grammar.spx  grammar.title    (grammar — optional)

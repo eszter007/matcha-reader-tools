@@ -22,6 +22,10 @@ Produces under test/fixtures/:
     yomitan_markup.zip   Yomitan entries for the text cleanup (HTML, lists, tables, icons, links)
     yomitan_kanji*.zip   Yomitan kanji dictionaries (kanji banks; single-character term banks)
     pitch1/2.zip         Yomitan pitch-accent dictionaries
+    furigana.json, yomitan_images.zip, korean.zip
+                         JmdictFurigana rows, a Yomitan dictionary with pictures, a Korean one
+    ref_dict_furigana/, ref_dict_images/, ref_dict_ko/
+                         convert_jmdict.py --furigana, --images (with images/), --lang ko (StarDict)
     ref_dict_yomitan_markup/, ref_dict_ja_merged/, ref_dict_kanji/, ref_dict_hanzi/
                          convert_jmdict.py output for those (merged inputs, --pitch, --name kanji/hanzi)
     zh/                  synthetic CC-CEDICT, CC-Canto, MoE JSON, word lists, sentence pairs
@@ -30,6 +34,7 @@ Produces under test/fixtures/:
 """
 
 import gzip
+import io
 import json
 import os
 import random
@@ -984,6 +989,74 @@ def make_pitch_zips():
     print("pitch zips: pitch1.zip, pitch2.zip")
 
 
+def make_furigana_json():
+    """JmdictFurigana entries for words in jmdict.json and yomitan.zip."""
+    rows = [
+        {"text": "犬", "reading": "いぬ", "furigana": [{"ruby": "犬", "rt": "いぬ"}]},
+        {"text": "山", "reading": "やま", "furigana": [{"ruby": "山", "rt": "やま"}]},
+        {"text": "峰", "reading": "やま", "furigana": [{"ruby": "峰"}]},  # no rt: skipped
+        {"text": "食べる", "reading": "たべる", "furigana": [{"ruby": "食", "rt": "た"}, {"ruby": "べる"}]},
+        {"text": "木漏れ日", "reading": "こもれび", "furigana": [
+            {"ruby": "木", "rt": "こ"}, {"ruby": "漏", "rt": "も"}, {"ruby": "れ"}, {"ruby": "日", "rt": "び"}]},
+    ]
+    with open(os.path.join(FIXTURES, "furigana.json"), "w", encoding="utf-8-sig") as f:
+        json.dump(rows, f, ensure_ascii=False)
+    print("furigana json: furigana.json")
+
+
+def make_yomitan_images_zip():
+    """A Yomitan dictionary with pictures, for --images: a large one the converter shrinks, a
+    small one it keeps, a PNG drawing, a PNG gaiji glyph (too small: no picture), a missing file."""
+    def bmp(size, color):
+        out = io.BytesIO()
+        Image.new("RGB", size, color).save(out, "BMP")
+        return out.getvalue()
+
+    def png(size):
+        out = io.BytesIO()
+        img = Image.new("RGBA", size, (0, 0, 0, 0))
+        ImageDraw.Draw(img).ellipse((2, 2, size[0] - 3, size[1] - 3), fill=(40, 40, 40, 255))
+        img.save(out, "PNG")
+        return out.getvalue()
+
+    bank = [
+        ["猫", "ねこ", "", "", 0, ["a cat", _sc({"tag": "img", "path": "img/cat.bmp", "alt": "credit"}),
+                                  "a small cat"], 1, ""],
+        ["犬", "いぬ", "", "", 0, [_sc(["a dog", {"type": "image", "path": "img/dog.bmp"}])], 2, ""],
+        ["絵", "え", "", "", 0, [_sc([{"type": "image", "path": "img/drawing.png"}, "a drawing"])], 3, ""],
+        ["字", "じ", "", "", 0, [_sc(["a mark ", {"type": "image", "path": "gaiji/B92D.png"}])], 4, ""],
+        ["無", "む", "", "", 0, [_sc(["gone", {"type": "image", "path": "img/missing.jpg"}])], 5, ""],
+        ["猫2", "ねこ", "", "", 0, [_sc({"type": "image", "path": "img/cat.bmp"})], 6, ""],
+    ]
+    path = os.path.join(FIXTURES, "yomitan_images.zip")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("index.json", json.dumps({"title": "Picture Dict", "format": 3}))
+        z.writestr("term_bank_1.json", json.dumps(bank, ensure_ascii=False))
+        z.writestr("img/cat.bmp", bmp((801, 333), (200, 120, 40)))
+        z.writestr("img/dog.bmp", bmp((100, 60), (90, 90, 90)))
+        z.writestr("img/drawing.png", png((120, 150)))
+        z.writestr("gaiji/B92D.png", png((24, 24)))
+    print(f"yomitan images zip: {path}")
+
+
+def make_korean_zip():
+    """A KRDICT-style Yomitan dictionary: tags with part of speech and level, homographs, a
+    headword line with level stars, and ASCII headwords for the StarDict sort."""
+    bank = [
+        ["먹다", "먹따", "동사 초급", "", 5, ["★★★ 먹다\n음식을 입으로 넣다."], 1, ""],
+        ["먹다", "먹따", "동사", "", 2, ["귀가 들리지 않게 되다."], 2, ""],
+        ["사과", "", "명사 초급", "", 3, ["과일의 하나."], 3, ""],
+        ["Apple", "", "", "", 0, ["회사 이름."], 4, ""],
+        ["abc", "", "명사", "", 0, ["알파벳."], 5, ""],
+        ["안녕", "", "감탄사", "", 1, [_sc({"tag": "ul", "content": [{"tag": "li", "content": "hello"}]})], 6, ""],
+    ]
+    path = os.path.join(FIXTURES, "korean.zip")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("index.json", json.dumps({"title": "Korean Test", "format": 3}))
+        z.writestr("term_bank_1.json", json.dumps(bank, ensure_ascii=False))
+    print(f"korean zip: {path}")
+
+
 def make_jmdict_json():
     path = os.path.join(FIXTURES, "jmdict.json")
     data = {"words": [
@@ -1175,12 +1248,22 @@ def run_dict_references():
                                                "--pitch", f("pitch2.zip")]),
                        ("ref_dict_kanji", ["--name", "kanji", "--input", f("yomitan_kanji.zip"),
                                            "--input", f("yomitan_kanji_terms.zip")]),
-                       ("ref_dict_hanzi", ["--lang", "zh", "--name", "hanzi", "--input", f("yomitan_kanji.zip")])]:
+                       ("ref_dict_hanzi", ["--lang", "zh", "--name", "hanzi", "--input", f("yomitan_kanji.zip")]),
+                       ("ref_dict_furigana", ["--input", f("yomitan.zip"), "--input", f("jmdict.json"),
+                                              "--furigana", f("furigana.json")]),
+                       ("ref_dict_images", ["--images", "--input", f("yomitan_images.zip")])]:
         out = os.path.join(FIXTURES, name)
         shutil.rmtree(out, ignore_errors=True)
         subprocess.run([sys.executable, script, *args, "--output-dir", out], check=True)
         subprocess.run([sys.executable, spx_script, out], check=True)
         print(f"dict reference: {out}")
+
+    # Korean: a StarDict dictionary named after its folder, /dictionaries/ko/kotest/kotest.ifo.
+    out = f("ref_dict_ko")
+    shutil.rmtree(out, ignore_errors=True)
+    subprocess.run([sys.executable, script, "--lang", "ko", "--input", f("korean.zip"),
+                    "--output-dir", os.path.join(out, "kotest")], check=True)
+    print(f"dict reference: {out}")
 
 
 # ── Chinese dictionaries and pinyin ruby ─────────────────────────
@@ -1541,6 +1624,9 @@ if __name__ == "__main__":
     make_yomitan_markup_zip()
     make_yomitan_kanji_zips()
     make_pitch_zips()
+    make_furigana_json()
+    make_yomitan_images_zip()
+    make_korean_zip()
     make_jmdict_json()
     run_font_reference()
     run_dict_references()

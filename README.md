@@ -179,10 +179,16 @@ Two options apply to every language's own files:
 |---|---|---|
 | **Which dictionary is this?** | `--name vocab\|names\|grammar\|kanji\|hanzi` | The slot the files fill. *Kanji* (Japanese) or *Hanzi* (Chinese) takes a Yomitan kanji dictionary such as KANJIDIC and writes `kanji.*` or `hanzi.*`, one entry per character. |
 | **Pitch accent** (Japanese) | `--pitch` (repeatable) | A Yomitan pitch-accent `.zip` such as NHK 2016: the lookup panel draws a line over the high syllables of each reading. A second file is a fallback. Off unless a file is chosen. |
+| **Furigana** (Japanese) | `--furigana` | A JmdictFurigana `.json` or `.zip`: each kanji headword's reading line gets per-kanji furigana. Off unless a file is chosen. The page cannot download the file itself (`--furigana auto`). |
+| **Keep pictures** | `--images` | Yomitan only, off by default. Pictures become 2-bit grayscale BMPs in `images/` beside the dictionary, with the same file names, sizes and BMP headers as the desktop tool. The browser scales and dithers them itself, so the pixels differ slightly. |
 
 When several files merge, each entry starts with a line naming the dictionary it came from, as in
-the desktop tool. The page does not convert pictures (`--images`) or write Korean StarDict
-dictionaries (`--lang ko`).
+the desktop tool.
+
+**Korean** (`--lang ko`) takes a Yomitan `.zip` such as KRDICT, MDict `.mdx` or a `.tsv` and writes
+a StarDict dictionary to `dictionaries/ko/<name>/<name>.ifo`, `.idx` and `.dict`, where `<name>` is
+the first file's name. Each headword is one entry; homographs are numbered ① ②, each with its
+reading and tags on its first line (`[먹따] 〔동사 · 초급〕`).
 
 ## Furigana & Pinyin
 

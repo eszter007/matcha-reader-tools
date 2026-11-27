@@ -1195,7 +1195,7 @@ function convertChineseFixture(inputs, opts = {}) {
     } else {
       throw new Error(`fixture format ${fmt} not handled here`);
     }
-    if (title && inputs.length > 1) part = dict.labelDictSource(part, title);
+    if (title && inputs.length > 1 && lang !== "ko") part = dict.labelDictSource(part, title);
     records = records.concat(part);
     if (title) titles.push(title);
   }
@@ -1398,13 +1398,14 @@ async function zipBanks(file, re, inNameOrder = true) {
 }
 
 /* The page's pipeline, as dict-ui.js runs it, on Japanese Yomitan and JMdict fixtures. */
-async function convertJapaneseFixture(inputs, { slot = "vocab", lang = "ja", pitch = [] } = {}) {
+async function convertJapaneseFixture(inputs, { slot = "vocab", lang = "ja", pitch = [], furigana = null,
+                                               pictures = null } = {}) {
   let records = [];
   const titles = [];
   for (const input of inputs) {
     let part, title = "";
     if (input.endsWith(".json")) {
-      part = dict.convertJmdictRecords(JSON.parse(fs.readFileSync(path.join(FIXTURES, input), "utf-8")));
+      part = dict.convertJmdictRecords(JSON.parse(fs.readFileSync(path.join(FIXTURES, input), "utf-8")), null, furigana);
     } else if (slot === "kanji" || slot === "hanzi") {
       const k = await zipBanks(input, /^kanji_bank_\d+\.json$/);
       const t = k.banks.length ? { banks: [] } : await zipBanks(input, /^term_bank_\d+\.json$/);
@@ -1412,7 +1413,16 @@ async function convertJapaneseFixture(inputs, { slot = "vocab", lang = "ja", pit
       title = k.title;
     } else {
       const t = await zipBanks(input, /^term_bank_\d+\.json$/);
-      part = dict.convertYomitanRecords(t.banks, null, lang === "ja").records;
+      const converter = dict.createYomitanConverter(lang === "ja", { furigana, showTags: lang === "ko" });
+      const zr = new zip.ZipReader(new Uint8Array(fs.readFileSync(path.join(FIXTURES, input))));
+      const readPicture = (p) => { const e = zr.findEntry(p); return e ? zr.readEntry(e) : null; };
+      for (const bank of t.banks) {
+        if (pictures) await dict.collectPictures(bank, pictures, readPicture, headerSizePicture);
+        dict.setDictPictures(pictures);
+        converter.addBank(bank);
+      }
+      dict.setDictPictures(null);
+      part = converter.finish().records;
       if (lang === "ja" && slot === "vocab") part = dict.cleanJapaneseVocab(part);
       title = t.title;
     }
@@ -1426,6 +1436,53 @@ async function convertJapaneseFixture(inputs, { slot = "vocab", lang = "ja", pit
     records = dict.applyPitch(records, map).records;
   }
   return { records, title: zh.joinDictTitles(titles) };
+}
+
+/* A stand-in for the page's canvas decoder: the size from a BMP or PNG header, white pixels. */
+function headerSizePicture(bytes) {
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let width, height;
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) { width = v.getInt32(18, true); height = Math.abs(v.getInt32(22, true)); }
+  else if (bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) { width = v.getUint32(16); height = v.getUint32(20); }
+  else return null;
+  return { width, height, render: (w, h) => new Uint8Array(w * h).fill(255) };
+}
+
+async function testDictFuriganaImagesKorean() {
+  console.log("dictionary converter, furigana, pictures, Korean StarDict (vs convert_jmdict.py):");
+  if (!fs.existsSync(path.join(FIXTURES, "ref_dict_ko"))) {
+    console.log("  skip (no furigana/picture/Korean fixtures: run test/gen_references.py)");
+    return;
+  }
+  const furigana = dict.loadFurigana(fs.readFileSync(path.join(FIXTURES, "furigana.json"), "utf-8"));
+  let r = await convertJapaneseFixture(["yomitan.zip", "jmdict.json"], { furigana });
+  compareDictDir("furigana", path.join(FIXTURES, "ref_dict_furigana"), "vocab", r.records, r.title);
+
+  const pictures = new Map();
+  const refDir = path.join(FIXTURES, "ref_dict_images");
+  r = await convertJapaneseFixture(["yomitan_images.zip"], { pictures });
+  compareDictDir("pictures", refDir, "vocab", r.records, r.title);
+  const refNames = fs.readdirSync(path.join(refDir, "images")).sort();
+  const names = [...pictures.values()].map((p) => p.name).sort();
+  check("pictures: same file names", JSON.stringify(names) === JSON.stringify(refNames), `${names} vs ${refNames}`);
+  for (const p of pictures.values()) {
+    const refFile = path.join(refDir, "images", p.name);
+    if (!fs.existsSync(refFile)) continue;
+    const ref = new Uint8Array(fs.readFileSync(refFile));
+    // Header, palette and size match; the pixels come from a different scaler.
+    check(`pictures: ${p.name} header, palette and size`,
+      p.bmp.length === ref.length && bytesEqual(p.bmp.subarray(0, 70), ref.subarray(0, 70)),
+      `${p.bmp.length} vs ${ref.length}`);
+  }
+
+  r = await convertJapaneseFixture(["korean.zip"], { lang: "ko" });
+  const sd = dict.dictWriteStardict(r.records, r.title, "kotest");
+  for (const ext of ["ifo", "idx", "dict"]) {
+    compareFile(`korean kotest.${ext}`, sd[ext], path.join(FIXTURES, "ref_dict_ko", "kotest", `kotest.${ext}`));
+  }
+  // A bright picture dithers to white, a dark one to black; a mid gray mixes the levels.
+  const mid = dict.dither4(new Uint8Array(16).fill(128), 4, 4);
+  check("dither: mid gray uses two levels", new Set(mid).size === 2 && [...mid].every((l) => l === 1 || l === 2));
 }
 
 async function testDictYomitanCleanup() {
@@ -1898,6 +1955,7 @@ function testPpocr() {
   await testMangaYolo();
   await testDictYomitan();
   await testDictYomitanCleanup();
+  await testDictFuriganaImagesKorean();
   testDictJmdict();
   await testDictMdx();
   testDictPos();

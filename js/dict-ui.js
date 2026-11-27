@@ -4,7 +4,34 @@
 
 /* Where the device reads each language's converted files. Japanese .title files are only read
  * from /dictionaries/jp, not the legacy /dict. */
-const DICT_FOLDERS = { ja: "dictionaries/jp", zh: "dictionaries/zh", yue: "dictionaries/yue" };
+const DICT_FOLDERS = { ja: "dictionaries/jp", zh: "dictionaries/zh", yue: "dictionaries/yue", ko: "dictionaries/ko" };
+
+/* Per-run inputs shared by every file: JmdictFurigana (Japanese) and the converted pictures. */
+const dictRun = { furigana: null, pictures: null };
+
+/* A picture from a dictionary zip, for collectPictures: its size, and a render to w x h gray
+ * pixels on white. The browser scales it; the Python tool's Lanczos pixels are not matched. */
+async function decodePicture(bytes) {
+  const bitmap = await createImageBitmap(new Blob([bytes]));
+  return {
+    width: bitmap.width,
+    height: bitmap.height,
+    render(w, h) {
+      const canvas = new OffscreenCanvas(w, h);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, w, h);
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      const rgba = ctx.getImageData(0, 0, w, h).data;
+      const gray = new Uint8Array(w * h);
+      for (let i = 0; i < gray.length; i++) {
+        gray[i] = Math.floor((rgba[4 * i] * 299 + rgba[4 * i + 1] * 587 + rgba[4 * i + 2] * 114) / 1000);
+      }
+      return gray;
+    },
+  };
+}
 
 /* The ready-made Chinese and Cantonese editions, from sources served with the page in data/. The
  * Chinese two are the firmware release workflow's packs, all but the MoE dictionary. */
@@ -106,10 +133,14 @@ async function convertJapaneseFile(file, readingRecords, slot = "vocab", lang = 
       throw new Error("No term_bank_N.json files found in zip. Is this a Yomitan dictionary?");
     }
     logLine(`  Found ${bankEntries.length} term bank files`);
-    const converter = createYomitanConverter(readingRecords);
+    const converter = createYomitanConverter(readingRecords, { furigana: dictRun.furigana, showTags: lang === "ko" });
+    const readPicture = (path) => { const e = zip.findEntry(path); return e ? zip.readEntry(e) : null; };
     for (let i = 0; i < bankEntries.length; i++) {
       setProgress(i, bankEntries.length, `Reading term banks: ${i + 1}/${bankEntries.length}`);
-      converter.addBank(JSON.parse(decoder.decode(await zip.readEntry(bankEntries[i]))));
+      const bank = JSON.parse(decoder.decode(await zip.readEntry(bankEntries[i])));
+      if (dictRun.pictures) await collectPictures(bank, dictRun.pictures, readPicture, decodePicture);
+      setDictPictures(dictRun.pictures);
+      converter.addBank(bank);
       await sleep(0); // keep the UI alive between large JSON parses
     }
     setProgress(0, 1, "Converting entries…");
@@ -137,7 +168,8 @@ async function convertJapaneseFile(file, readingRecords, slot = "vocab", lang = 
     const data = JSON.parse(jsonText);
     jsonText = null;
     logLine(`Processing ${(data.words || []).length} JMdict entries…`);
-    const records = convertJmdictRecords(data, (done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`));
+    const records = convertJmdictRecords(data, (done, total) => setProgress(done, total, `Converting entries: ${done}/${total}`),
+                                         dictRun.furigana);
     return { records, title: "" };
   }
 
@@ -307,7 +339,8 @@ async function runDictConversion() {
     return;
   }
   const lang = dictLanguage();
-  const chinese = lang !== "ja";
+  const chinese = lang !== "ja";  // also Korean: no reading records, no furigana or pitch
+  const korean = lang === "ko";
   // vocab | names | grammar (device also accepts legacy jmdict/jmnedict)
   const outName = edition ? "vocab" : $("dict-name").value;
   const folder = DICT_FOLDERS[lang];
@@ -324,14 +357,32 @@ async function runDictConversion() {
     if (edition) setProgress(0, 1, "Loading the built-in sources…");
     const files = edition ? await Promise.all(DICT_EDITIONS[edition].inputs.map(fetchBuiltin)) : [...fileInput.files];
     const zhOpts = chinese
-      ? await readChineseOptions(edition ? await editionChineseSettings(edition) : formChineseSettings())
+      ? await readChineseOptions(edition ? await editionChineseSettings(edition)
+                                 : korean ? { title: "" } : formChineseSettings())
       : null;
+    dictRun.furigana = null;
+    const furiganaFile = chinese ? null : optionalFile("dict-furigana");
+    if (furiganaFile) {
+      setProgress(0, 1, `Reading ${furiganaFile.name}…`);
+      let text;
+      if (furiganaFile.name.toLowerCase().endsWith(".zip")) {
+        const fz = new ZipReader(await readFileBytes(furiganaFile));
+        const member = fz.entries.find((e) => e.name.endsWith(".json"));
+        if (!member) throw new Error(`${furiganaFile.name}: no .json file in the zip`);
+        text = new TextDecoder("utf-8").decode(await fz.readEntry(member));
+      } else {
+        text = await readFileText(furiganaFile);
+      }
+      dictRun.furigana = loadFurigana(text);
+      logLine(`Furigana ${furiganaFile.name}: ${dictRun.furigana.size.toLocaleString()} entries`);
+    }
+    dictRun.pictures = !korean && $("dict-images") && $("dict-images").checked ? new Map() : null;
 
     for (const file of files) {
       const part = chinese ? await convertChineseFile(file, lang, zhOpts, outName)
                            : await convertJapaneseFile(file, /*readingRecords=*/true, outName);
       // Merged inputs: each entry names the dictionary it came from.
-      records = records.concat(part.title && files.length > 1 ? labelDictSource(part.records, part.title) : part.records);
+      records = records.concat(part.title && files.length > 1 && !korean ? labelDictSource(part.records, part.title) : part.records);
       if (part.names && part.names.length) nameRecords = nameRecords.concat(part.names);
       if (part.title) titles.push(part.title);
     }
@@ -375,7 +426,29 @@ async function runDictConversion() {
     await sleep(0);
     const zipOut = new ZipWriter();
     logLine("Output:");
+    if (korean) {
+      // StarDict files in a folder of their own: /dictionaries/ko/<name>/<name>.ifo
+      const stem = files[0].name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9._-]+/g, "_") || "korean";
+      const sd = dictWriteStardict(records, title, stem);
+      for (const [ext, bytes] of [["ifo", sd.ifo], ["idx", sd.idx], ["dict", sd.dict]]) {
+        zipOut.addFile(`${folder}/${stem}/${stem}.${ext}`, bytes);
+      }
+      logLine(`  ${folder}/${stem}/${stem}.ifo/.idx/.dict: ${sd.count.toLocaleString()} entries`);
+      const blob = zipOut.toBlob();
+      logLine(`Done: ${formatBytes(blob.size)}. Unzip at the SD card root: files land in /${folder}/${stem}/.`);
+      downloadBlob(blob, `ko-${stem}-dict.zip`);
+      setProgress(1, 1, "Complete");
+      return;
+    }
     addDictOutput(zipOut, folder, outName, records, title);
+    if (dictRun.pictures && dictRun.pictures.size) {
+      let total = 0;
+      for (const p of dictRun.pictures.values()) {
+        zipOut.addFile(`${folder}/images/${p.name}`, p.bmp);
+        total += p.bmp.length;
+      }
+      logLine(`  ${folder}/images/: ${dictRun.pictures.size.toLocaleString()} pictures, ${formatBytes(total)}`);
+    }
     if (nameRecords.length) addDictOutput(zipOut, folder, "names", nameRecords, "CC-CEDICT names");
     const blob = zipOut.toBlob();
     logLine(`Done — ${formatBytes(blob.size)}. Unzip at the SD card root: files land in /${folder}/.`);
@@ -385,6 +458,9 @@ async function runDictConversion() {
     logLine("Error: " + e.message, "error");
     console.error(e);
   } finally {
+    setDictPictures(null);
+    dictRun.furigana = null;
+    dictRun.pictures = null;
     $("dict-run").disabled = false;
     wakeLock.release();
   }
@@ -399,6 +475,9 @@ const DICT_FILE_HINTS = {
     + 'the Taiwan Ministry of Education\'s <a href="https://github.com/g0v/moedict-data" target="_blank" rel="noopener">dict-revised.json</a> '
     + "(unpack the .xz first), a Yomitan .zip, MDict .mdx or a headword<TAB>definition .tsv. Several files "
     + "merge into one dictionary: a word in both shows both entries.",
+  ko: "A Yomitan .zip such as KRDICT, an MDict .mdx or a headword<TAB>definition .tsv. The reader looks "
+    + "Korean up word by word and undoes particles and endings itself. The download is a StarDict dictionary "
+    + "in a folder of its own.",
   yue: '<a href="https://cantonese.org/download.html" target="_blank" rel="noopener">CC-Canto</a> together with '
     + '<a href="https://www.mdbg.net/chinese/dictionary?page=cc-cedict" target="_blank" rel="noopener">CC-CEDICT</a>. '
     + "Several files merge into one dictionary.",
@@ -414,12 +493,14 @@ function updateDictLanguageUi() {
   const lang = dictLanguage();
   const edition = dictEdition();
   const own = !edition;
-  $("dict-edition-card").hidden = lang === "ja";
+  $("dict-edition-card").hidden = lang === "ja" || lang === "ko";
   $("dict-file-card").hidden = !own;
-  $("dict-zh-options").hidden = !own || lang === "ja";
-  $("dict-slot-card").hidden = !own;
+  $("dict-zh-options").hidden = !own || lang === "ja" || lang === "ko";
+  $("dict-slot-card").hidden = !own || lang === "ko";
   $("dict-mdict-reg").hidden = lang !== "ja";
   $("dict-pitch-options").hidden = lang !== "ja";
+  $("dict-furigana-options").hidden = lang !== "ja";
+  $("dict-images-options").hidden = lang === "ko";
   // One entry per character: the device calls the slot kanji in Japanese, hanzi in Chinese.
   const charSlot = $("dict-name").querySelector("[data-char-slot]");
   const chosen = charSlot.selected;

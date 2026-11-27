@@ -146,10 +146,11 @@ function computePriorityJmdict(entry) {
   return isCommon ? 200 : 100;
 }
 
-function formatDefinitionJmdict(entry) {
+/* furigana (Anki syntax) is appended to the reading line as ｛...｝; old firmware drops the line. */
+function formatDefinitionJmdict(entry, furigana = "") {
   const parts = [];
   const readings = (entry.kana || []).map((k) => k.text);
-  if (readings.length) parts.push("【" + readings.slice(0, 3).join("、") + "】");
+  if (readings.length) parts.push("【" + readings.slice(0, 3).join("、") + "】" + (furigana ? "｛" + furigana + "｝" : ""));
 
   const senses = entry.sense || [];
   const shown = senses.slice(0, 3);
@@ -163,8 +164,21 @@ function formatDefinitionJmdict(entry) {
   return parts.join("\n");
 }
 
-/* data: parsed jmdict-simplified JSON object. Returns records for dictWriteBinary. */
-function convertJmdictRecords(data, onProgress) {
+/* Furigana for the first kana reading that applies to kanji and has a dataset entry. */
+function furiganaForKanji(entry, kanji, furigana) {
+  for (const kana of entry.kana || []) {
+    const applies = kana.appliesToKanji || ["*"];
+    if (applies.includes("*") || applies.includes(kanji)) {
+      const anki = furigana.get(kanji + "\0" + kana.text);
+      if (anki) return anki;
+    }
+  }
+  return "";
+}
+
+/* data: parsed jmdict-simplified JSON object; furigana: loadFurigana()'s map or null. Returns
+ * records for dictWriteBinary. */
+function convertJmdictRecords(data, onProgress, furigana = null) {
   const words = data.words || [];
   const records = [];
   for (let wi = 0; wi < words.length; wi++) {
@@ -180,7 +194,9 @@ function convertJmdictRecords(data, onProgress) {
       const key = kanji.text;
       if (hwBytes.length >= HEADWORD_SIZE || seen.has(key)) continue;
       seen.add(key);
-      records.push({ hw: hwBytes, def: defBytes, priority, posFlags });
+      const anki = furigana ? furiganaForKanji(entry, kanji.text, furigana) : "";
+      const def = anki ? dictEncoder.encode(formatDefinitionJmdict(entry, anki)) : defBytes;
+      records.push({ hw: hwBytes, def, priority, posFlags });
     }
     // Kana records of an entry that also has kanji headwords are READING records:
     // text matching them is usually conjugation morphology, not the word itself.
@@ -304,14 +320,25 @@ function rpartition(s, sep) {
   return i < 0 ? ["", "", s] : [s.slice(0, i), sep, s.slice(i + sep.length)];
 }
 
+/* Pictures of the zip being converted, when "Keep pictures" is on: path -> {width, height, name}.
+ * Filled by collectPictures() before a bank is formatted; null when pictures are off. */
+let dictPictures = null;
+function setDictPictures(pictures) { dictPictures = pictures; }
+
+function pictureMarker(path, minSide = 0) {
+  const p = dictPictures && dictPictures.get(path);
+  if (!p || Math.min(p.sourceWidth, p.sourceHeight) < minSide) return "";
+  return `\n${IMAGE_MARKER}${p.width}x${p.height} ${p.name}\n`;
+}
+
 /* Text for a structured-content image. Label icons are named after their label (名-rect.svg,
  * 文法-red.svg, １-fill.svg, red_（.svg) and become that label; other images keep their alt or
- * title text. Pictures are dropped: the page does not convert them (the Python tool's --images). */
-function imageText(node) {
+ * title text. Pictures become a marker line (pictureMarker), or nothing when they are off. */
+function imageText(node, marker = pictureMarker) {
   const path = typeof node.path === "string" ? node.path : "";
   const [folder, , fname] = rpartition(path, "/");
   const [stem, dot, ext] = rpartition(fname, ".");
-  if (dot && ["jpg", "jpeg", "webp", "gif", "bmp"].includes(ext.toLowerCase())) return "";
+  if (dot && ["jpg", "jpeg", "webp", "gif", "bmp"].includes(ext.toLowerCase())) return marker(path);
   const data = isPlainObject(node.data) ? node.data : {};
   for (const value of [node.alt, node.title, data.alt]) {
     if (typeof value === "string" && pyStrip(value) && !value.includes("://")) {
@@ -326,7 +353,10 @@ function imageText(node) {
   const parts = stem.split("-");
   while (parts.length > 1 && IMAGE_STYLE_SUFFIXES.includes(parts[parts.length - 1].toLowerCase())) parts.pop();
   const label = parts.join("-");
-  if (!label || isAscii(label)) return "";  // gaiji codes (B92D, AC6E, b327) have no text; a PNG is a drawing
+  if (!label || isAscii(label)) {
+    // Gaiji codes (B92D, AC6E, b327) have no text; a larger PNG is a drawing.
+    return ext.toLowerCase() === "png" ? marker(path, 48) : "";
+  }
   if (stem.split("-").slice(1).includes("fill") && FILLED_DIGITS.has(label)) return FILLED_DIGITS.get(label);
   if (cpLen(label) <= 6) return `〔${label}〕`;
   return label;
@@ -552,9 +582,9 @@ function dropHeadwordEcho(text, headword) {
   return text.slice(0, end) + "〖" + spellings + "〗" + (tail ? " " + tail : "") + nl + after;
 }
 
-function formatDefinitionYomitan(headword, reading, definitions) {
+function formatDefinitionYomitan(headword, reading, definitions, furigana = "") {
   const parts = [];
-  if (reading && reading !== headword) parts.push(`【${reading}】`);
+  if (reading && reading !== headword) parts.push(`【${reading}】` + (furigana ? `｛${furigana}｝` : ""));
 
   function flattenListDefn(d) {
     if (typeof d === "string") {
@@ -650,8 +680,23 @@ function yomitanPriority(score) {
 /* Converts Yomitan term banks one at a time: addBank() formats each entry while its bank is
  * loaded and keeps only the strings, so a bank's parsed JSON can be dropped before the next
  * is read. finish() resolves redirects, which can point into any bank, and emits records. */
-function createYomitanConverter(readingRecords = true) {
-  // [headword, reading, priority, definition, redirect, rules, readingDefinition]
+/* Puts an entry's tags (KRDICT's part of speech and level: 감탄사 초급) on a line of their own
+ * after the reading line. */
+function withTagLine(definition, tags) {
+  const label = "〔" + pySplit(tags).join(" · ") + "〕";
+  if (definition.startsWith("【")) {
+    const cut = definition.indexOf("\n");
+    const head = cut < 0 ? definition : definition.slice(0, cut);
+    const rest = cut < 0 ? "" : definition.slice(cut + 1);
+    return `${head}\n${label}\n${lstripChars(rest, "\n")}`;
+  }
+  return `${label}\n${lstripChars(definition, "\n")}`;
+}
+
+/* opts.furigana: loadFurigana()'s map; opts.showTags: Korean, the entry's tags on their own line. */
+function createYomitanConverter(readingRecords = true, opts = {}) {
+  const furigana = opts.furigana || null;
+  // [headword, reading, priority, definition, redirect, rules, readingDefinition, tags]
   const allEntries = [];
   const canonicalDefs = new Map(); // headword → [definition, priority], for redirects
   return {
@@ -669,11 +714,13 @@ function createYomitanConverter(readingRecords = true) {
         const rules = (entry.length > 3 && typeof entry[3] === "string") ? entry[3] : "";
         const score = entry.length > 4 ? entry[4] : 0;
         const definitions = entry.length > 5 ? entry[5] : [];
+        const tags = typeof entry[2] === "string" ? entry[2] : "";
         const redirect = findRedirectTarget(definitions);
         const priority = yomitanPriority(score);
         let definition = "", readingDefinition = "";
         if (!redirect) {
-          definition = formatDefinitionYomitan(headword, reading, definitions);
+          const anki = furigana ? furigana.get(headword + "\0" + reading) || "" : "";
+          definition = formatDefinitionYomitan(headword, reading, definitions, anki);
           if (definition) {
             const prev = canonicalDefs.get(headword);
             if (prev === undefined || priority > prev[1]) canonicalDefs.set(headword, [definition, priority]);
@@ -682,7 +729,7 @@ function createYomitanConverter(readingRecords = true) {
             }
           }
         }
-        allEntries.push([headword, reading, priority, definition, redirect, rules, readingDefinition]);
+        allEntries.push([headword, reading, priority, definition, redirect, rules, readingDefinition, tags]);
       }
     },
 
@@ -690,7 +737,7 @@ function createYomitanConverter(readingRecords = true) {
       const records = [];
       let entryCount = 0;
       for (let ei = 0; ei < allEntries.length; ei++) {
-        const [headword, reading, ownPriority, ownDefinition, redirect, rules, readingDefinition] = allEntries[ei];
+        const [headword, reading, ownPriority, ownDefinition, redirect, rules, readingDefinition, tags] = allEntries[ei];
         allEntries[ei] = null;   // its strings are no longer needed once its records exist
         let definition, priority;
         if (redirect) {
@@ -700,7 +747,7 @@ function createYomitanConverter(readingRecords = true) {
           priority = target[1];
         } else {
           if (!ownDefinition) continue;
-          definition = ownDefinition;
+          definition = opts.showTags && pyStrip(tags) ? withTagLine(ownDefinition, tags) : ownDefinition;
           priority = ownPriority;
         }
 
@@ -716,10 +763,10 @@ function createYomitanConverter(readingRecords = true) {
         }
 
         if (readingDefinition) {
-          const rBytes = dictEncoder.encode(reading);
+          const rBytes = utf8Bytes(reading);
           if (rBytes.length < HEADWORD_SIZE && !seen.has(reading)) {
             // reading != headword: kana reading of a kanji headword → flag it.
-            records.push({ hw: rBytes, def: dictEncoder.encode(readingDefinition), priority, posFlags: posFlags | POS_READING, word: reading });
+            records.push({ hw: rBytes, def: utf8Bytes(readingDefinition), priority, posFlags: posFlags | POS_READING, word: reading });
           }
         }
         entryCount++;
@@ -1044,6 +1091,189 @@ function applyPitch(records, pitch) {
   return { records: out, count };
 }
 
+/* ── Furigana (JmdictFurigana) ─────────────────────────────────── */
+
+/* Anki furigana syntax (木[こ]漏[も]れ 日[び]) for JmdictFurigana segments; "" to skip. */
+function furiganaToAnki(segments) {
+  let out = "";
+  let hasRt = false;
+  for (const seg of segments || []) {
+    const ruby = seg.ruby ?? "";
+    const rt = seg.rt;
+    if (rt) {
+      // Anki takes the base as everything back to the previous space or "]".
+      if (out && !out.endsWith("]")) out += " ";
+      out += `${ruby}[${rt}]`;
+      hasRt = true;
+    } else {
+      out += ruby;
+    }
+  }
+  return !hasRt || out.includes("｝") ? "" : out;
+}
+
+/* A JmdictFurigana .json (its text) to a Map of "text\0reading" -> Anki furigana. */
+function loadFurigana(jsonText) {
+  const data = JSON.parse(jsonText.replace(/^﻿/, ""));
+  const furigana = new Map();
+  for (const item of data) {
+    const anki = furiganaToAnki(item.furigana);
+    if (anki) furigana.set((item.text ?? "") + "\0" + (item.reading ?? ""), anki);
+  }
+  return furigana;
+}
+
+/* ── Pictures ("Keep pictures", the Python tool's --images) ────── */
+
+const IMAGE_MAX_WIDTH = 400;
+const IMAGE_MAX_HEIGHT = 320;
+
+/* The size Pillow's Image.thumbnail gives a width x height picture inside the panel's box. */
+function thumbnailSize(width, height) {
+  const x = IMAGE_MAX_WIDTH, y = IMAGE_MAX_HEIGHT;
+  if (x >= width && y >= height) return [width, height];
+  const aspect = width / height;
+  const roundAspect = (n, key) => {
+    const lo = Math.floor(n), hi = Math.ceil(n);
+    return Math.max(key(hi) < key(lo) ? hi : lo, 1);
+  };
+  if (x / y >= aspect) return [roundAspect(y * aspect, (n) => Math.abs(aspect - n / y)), y];
+  return [x, roundAspect(x / aspect, (n) => (n === 0 ? 0 : Math.abs(aspect - x / n)))];
+}
+
+/* Gray pixels (0-255, row by row) to the four levels 0/85/170/255 with Floyd-Steinberg error
+ * diffusion. Returns the level index (0-3) of each pixel. */
+function dither4(gray, width, height) {
+  const err = new Float32Array(gray);
+  const out = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      const level = Math.max(0, Math.min(3, Math.round(err[i] / 85)));
+      out[i] = level;
+      const e = err[i] - level * 85;
+      if (x + 1 < width) err[i + 1] += e * 7 / 16;
+      if (y + 1 < height) {
+        if (x > 0) err[i + width - 1] += e * 3 / 16;
+        err[i + width] += e * 5 / 16;
+        if (x + 1 < width) err[i + width + 1] += e / 16;
+      }
+    }
+  }
+  return out;
+}
+
+/* Level indices as a 2-bit palette BMP, the depth the reader draws straight from the card. */
+function bmp2bit(levels, width, height) {
+  const rowBytes = Math.floor((width * 2 + 31) / 32) * 4;
+  const dataOffset = 14 + 40 + 16;
+  const w = new ByteWriter(dataOffset + rowBytes * height);
+  w.bytes(dictEncoder.encode("BM"));
+  w.u32(dataOffset + rowBytes * height); w.u16(0); w.u16(0); w.u32(dataOffset);
+  w.u32(40); w.u32(width); w.u32(height); w.u16(1); w.u16(2); w.u32(0); w.u32(rowBytes * height);
+  w.u32(2835); w.u32(2835); w.u32(4); w.u32(4);
+  for (const v of [0, 85, 170, 255]) w.bytes(new Uint8Array([v, v, v, 0]));
+  for (let y = height - 1; y >= 0; y--) {  // bottom-up
+    const row = new Uint8Array(rowBytes);
+    for (let x = 0; x < width; x++) row[x >> 2] |= levels[y * width + x] << (6 - 2 * (x & 3));
+    w.bytes(row);
+  }
+  return w.toUint8Array();
+}
+
+async function sha1Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-1", dictEncoder.encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/* Converts the pictures a bank's entries show (only what formatDefinitionYomitan reads: the first
+ * six definitions) and adds them to pictures (path -> {width, height, name, bmp}). readEntry(path)
+ * gives a zip member's bytes or null; decode(bytes, path) gives {width, height, render(w, h)} or
+ * null, where render returns the picture on white as w*h gray bytes. */
+async function collectPictures(entries, pictures, readEntry, decode) {
+  const wanted = new Map();
+  const visit = (node) => {
+    if (Array.isArray(node)) { for (const x of node) visit(x); return; }
+    if (!isPlainObject(node) || node.type === "text") return;
+    if (node.type === "image" || node.tag === "img") {
+      imageText(node, (path, minSide = 0) => { if (!wanted.has(path)) wanted.set(path, minSide); return ""; });
+      return;
+    }
+    visit(node.content);
+  };
+  for (const entry of entries) {
+    if (!Array.isArray(entry) || entry.length < 6 || !entry[0] || typeof entry[0] !== "string") continue;
+    if (Array.isArray(entry[5])) visit(entry[5].slice(0, 6));
+  }
+  for (const [path, minSide] of wanted) {
+    if (pictures.has(path)) continue;
+    let image = null;
+    try {
+      const bytes = await readEntry(path);
+      image = bytes && await decode(bytes, path);
+    } catch (e) { image = null; }
+    if (!image || Math.min(image.width, image.height) < minSide) continue;  // a gaiji glyph, not a picture
+    const [w, h] = thumbnailSize(image.width, image.height);
+    const bmp = bmp2bit(dither4(await image.render(w, h), w, h), w, h);
+    pictures.set(path, { width: w, height: h, sourceWidth: image.width, sourceHeight: image.height,
+                         name: (await sha1Hex(path)).slice(0, 16) + ".bmp", bmp });
+  }
+}
+
+/* ── Korean: StarDict output ───────────────────────────────────── */
+
+/* Records as a StarDict dictionary (.ifo/.idx/.dict, plain text), for the languages the reader
+ * looks up word by word. One entry per headword: homographs (먹다 "eat", 먹다 "go deaf") are
+ * numbered ① ② and each opens with its reading and tags on one line ("[먹따] 〔동사〕"). The index
+ * is sorted as the reader compares keys: ASCII case-insensitively, byte by byte. stem names the
+ * files. Returns {ifo, idx, dict, count}. */
+function dictWriteStardict(records, title, stem) {
+  const merged = new Map();  // headword key -> {hw, blocks, priority}
+  for (const r of records) {
+    let text = dictDecoder.decode(r.def);
+    let reading = "";
+    const m = /^【([^】]*)】(｛[^｝]*｝)?(｟[^｠]*｠)?\n*/.exec(text);
+    if (m) { reading = "[" + m[1] + "]"; text = text.slice(m[0].length); }
+    const lines = rstripChars(lstripChars(text, "\n"), "\n").split("\n");
+    let tags = lines.length && lines[0].startsWith("〔") ? pyStrip(lines.shift()) : "";
+    const word = dictDecoder.decode(r.hw);
+    // The headword line repeats the key; keep only its level stars (★★★ 먹다 -> ★★★).
+    if (lines.length && pyStrip(lines[0].split("★").join("")) === word) {
+      const stars = pyStrip(lines.shift().split(word).join(""));
+      tags = pyStrip(tags + " " + stars);
+    }
+    const head = [reading, tags].filter((x) => x).join(" ");
+    const block = pyStrip((head ? [head] : []).concat(lines).join("\n"));
+    const key = new TextDecoder("latin1").decode(r.hw);
+    if (!merged.has(key)) merged.set(key, { hw: r.hw, blocks: [], priority: r.priority });
+    merged.get(key).blocks.push(block);
+  }
+  // The reader's StarDict view drops blank lines, so homographs are numbered to stay apart.
+  const numbered = (blocks) => (blocks.length < 2 ? blocks
+    : blocks.map((b, i) => (i < 20 ? String.fromCharCode(0x2460 + i) + " " + b : b)));
+  const entries = [...merged.values()].map((e, i) => ({
+    hw: e.hw, body: dictEncoder.encode(numbered(e.blocks).join("\n")), priority: e.priority, i,
+    key: e.hw.map((b) => (b >= 65 && b <= 90 ? b + 32 : b)),
+  }));
+  entries.sort((a, b) => compareBytes(a.key, b.key) || b.priority - a.priority || a.i - b.i);
+  const dict = new ByteWriter(1 << 16);
+  const idx = new ByteWriter(1 << 12);
+  let offset = 0;
+  for (const e of entries) {
+    dict.bytes(e.body);
+    idx.bytes(e.hw); idx.u8(0);
+    idx.bytes(new Uint8Array([offset >>> 24, (offset >>> 16) & 255, (offset >>> 8) & 255, offset & 255]));
+    const n = e.body.length;
+    idx.bytes(new Uint8Array([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]));
+    offset += n;
+  }
+  const idxBytes = idx.toUint8Array();
+  const ifo = dictEncoder.encode("StarDict's dict ifo file\nversion=2.4.2\n"
+    + `bookname=${title || stem}\nwordcount=${entries.length}\n`
+    + `idxfilesize=${idxBytes.length}\nsametypesequence=m\n`);
+  return { ifo, idx: idxBytes, dict: dict.toUint8Array(), count: entries.length };
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     dictWriteBinary, dictGenSpx,
@@ -1053,5 +1283,7 @@ if (typeof module !== "undefined") {
     posFlagsFromTags, posFlagsJmdict,
     cleanMarkup, dropHeadwordEcho, shortenRelated, cleanJapaneseVocab, shortDictTitle, labelDictSource,
     formatKanjiEntry, convertYomitanKanjiRecords, addPitchDictionary, applyPitch, SOURCE_MARKER,
+    loadFurigana, furiganaToAnki, collectPictures, thumbnailSize, bmp2bit, dither4, dictWriteStardict,
+    withTagLine, setDictPictures,
   };
 }
