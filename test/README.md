@@ -52,7 +52,6 @@ the references were rebuilt from `develop`.
 
 ```sh
 node test/node/run.cjs        # pure functions vs the Python tools
-node test/node/anki.cjs       # anki-core.js vs tools/anki_import/apkg_to_flashcards.py
 node test/browser/e2e.mjs     # the real pages, driven in Chromium
 ```
 
